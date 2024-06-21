@@ -1,60 +1,19 @@
-import os
-import time
+import io
 import json
+import time
 import net
 import net.http
-import io
+import vweb.tests.vweb_test_server
 
-const (
-	sport           = 12380
-	exit_after_time = 12000 // milliseconds
-	vexe            = os.getenv('VEXE')
-	vweb_logfile    = os.getenv('VWEB_LOGFILE')
-	vroot           = os.dir(vexe)
-	serverexe       = os.join_path(os.cache_dir(), 'vweb_test_server.exe')
-	tcp_r_timeout   = 30 * time.second
-	tcp_w_timeout   = 30 * time.second
-)
+const sport = 12380
+const localserver = '127.0.0.1:${sport}'
+const exit_after_time = 12 * time.second
 
-// setup of vweb webserver
-fn testsuite_begin() {
-	os.chdir(vroot) or {}
-	if os.exists(serverexe) {
-		os.rm(serverexe) or {}
-	}
-}
-
-fn test_a_simple_vweb_app_can_be_compiled() {
-	// did_server_compile := os.system('$vexe -g -o $serverexe vlib/vweb/tests/vweb_test_server.v')
-	// TODO: find out why it does not compile with -usecache and -g
-	did_server_compile := os.system('$vexe -o $serverexe vlib/vweb/tests/vweb_test_server.v')
-	assert did_server_compile == 0
-	assert os.exists(serverexe)
-}
+const tcp_r_timeout = 30 * time.second
+const tcp_w_timeout = 30 * time.second
 
 fn test_a_simple_vweb_app_runs_in_the_background() {
-	mut suffix := ''
-	$if !windows {
-		suffix = ' > /dev/null &'
-	}
-	if vweb_logfile != '' {
-		suffix = ' 2>> $vweb_logfile >> $vweb_logfile &'
-	}
-	server_exec_cmd := '$serverexe $sport $exit_after_time $suffix'
-	$if debug_net_socket_client ? {
-		eprintln('running:\n$server_exec_cmd')
-	}
-	$if windows {
-		go os.system(server_exec_cmd)
-	} $else {
-		res := os.system(server_exec_cmd)
-		assert res == 0
-	}
-	$if macos {
-		time.sleep(1000 * time.millisecond)
-	} $else {
-		time.sleep(100 * time.millisecond)
-	}
+	vweb_test_server.start_in_background(sport, exit_after_time)!
 }
 
 // web client tests follow
@@ -67,7 +26,7 @@ fn assert_common_headers(received string) {
 
 fn test_a_simple_tcp_client_can_connect_to_the_vweb_server() {
 	received := simple_tcp_client(path: '/') or {
-		assert err.msg == ''
+		assert err.msg() == ''
 		return
 	}
 	assert_common_headers(received)
@@ -78,7 +37,7 @@ fn test_a_simple_tcp_client_can_connect_to_the_vweb_server() {
 
 fn test_a_simple_tcp_client_simple_route() {
 	received := simple_tcp_client(path: '/simple') or {
-		assert err.msg == ''
+		assert err.msg() == ''
 		return
 	}
 	assert_common_headers(received)
@@ -91,7 +50,7 @@ fn test_a_simple_tcp_client_zero_content_length() {
 	// tests that sending a content-length header of 0 doesn't hang on a read timeout
 	watch := time.new_stopwatch(auto_start: true)
 	simple_tcp_client(path: '/', headers: 'Content-Length: 0\r\n\r\n') or {
-		assert err.msg == ''
+		assert err.msg() == ''
 		return
 	}
 	assert watch.elapsed() < 1 * time.second
@@ -99,7 +58,7 @@ fn test_a_simple_tcp_client_zero_content_length() {
 
 fn test_a_simple_tcp_client_html_page() {
 	received := simple_tcp_client(path: '/html_page') or {
-		assert err.msg == ''
+		assert err.msg() == ''
 		return
 	}
 	assert_common_headers(received)
@@ -108,66 +67,68 @@ fn test_a_simple_tcp_client_html_page() {
 }
 
 // net.http client based tests follow:
-fn assert_common_http_headers(x http.Response) ? {
+fn assert_common_http_headers(x http.Response) ! {
 	assert x.status() == .ok
-	assert x.header.get(.server) ? == 'VWeb'
-	assert x.header.get(.content_length) ?.int() > 0
-	assert x.header.get(.connection) ? == 'close'
+	assert x.header.get(.server)! == 'VWeb'
+	assert x.header.get(.content_length)!.int() > 0
+	assert x.header.get(.connection)! == 'close'
 }
 
-fn test_http_client_index() ? {
-	x := http.get('http://127.0.0.1:$sport/') or { panic(err) }
-	assert_common_http_headers(x) ?
-	assert x.header.get(.content_type) ? == 'text/plain'
-	assert x.text == 'Welcome to VWeb'
+fn test_http_client_index() {
+	x := http.get('http://${localserver}/') or { panic(err) }
+	assert_common_http_headers(x)!
+	assert x.header.get(.content_type)! == 'text/plain'
+	assert x.body == 'Welcome to VWeb'
 }
 
-fn test_http_client_404() ? {
+fn test_http_client_404() {
+	server := 'http://${localserver}'
 	url_404_list := [
-		'http://127.0.0.1:$sport/zxcnbnm',
-		'http://127.0.0.1:$sport/JHKAJA',
-		'http://127.0.0.1:$sport/unknown',
+		'/zxcnbnm',
+		'/JHKAJA',
+		'/unknown',
 	]
 	for url in url_404_list {
-		res := http.get(url) or { panic(err) }
+		res := http.get('${server}${url}') or { panic(err) }
 		assert res.status() == .not_found
+		assert res.body == '404 on "${url}"'
 	}
 }
 
-fn test_http_client_simple() ? {
-	x := http.get('http://127.0.0.1:$sport/simple') or { panic(err) }
-	assert_common_http_headers(x) ?
-	assert x.header.get(.content_type) ? == 'text/plain'
-	assert x.text == 'A simple result'
+fn test_http_client_simple() {
+	x := http.get('http://${localserver}/simple') or { panic(err) }
+	assert_common_http_headers(x)!
+	assert x.header.get(.content_type)! == 'text/plain'
+	assert x.body == 'A simple result'
 }
 
-fn test_http_client_html_page() ? {
-	x := http.get('http://127.0.0.1:$sport/html_page') or { panic(err) }
-	assert_common_http_headers(x) ?
-	assert x.header.get(.content_type) ? == 'text/html'
-	assert x.text == '<h1>ok</h1>'
+fn test_http_client_html_page() {
+	x := http.get('http://${localserver}/html_page') or { panic(err) }
+	assert_common_http_headers(x)!
+	assert x.header.get(.content_type)! == 'text/html'
+	assert x.body == '<h1>ok</h1>'
 }
 
-fn test_http_client_settings_page() ? {
-	x := http.get('http://127.0.0.1:$sport/bilbo/settings') or { panic(err) }
-	assert_common_http_headers(x) ?
-	assert x.text == 'username: bilbo'
+fn test_http_client_settings_page() {
+	x := http.get('http://${localserver}/bilbo/settings') or { panic(err) }
+	assert_common_http_headers(x)!
+	assert x.body == 'username: bilbo'
 	//
-	y := http.get('http://127.0.0.1:$sport/kent/settings') or { panic(err) }
-	assert_common_http_headers(y) ?
-	assert y.text == 'username: kent'
+	y := http.get('http://${localserver}/kent/settings') or { panic(err) }
+	assert_common_http_headers(y)!
+	assert y.body == 'username: kent'
 }
 
-fn test_http_client_user_repo_settings_page() ? {
-	x := http.get('http://127.0.0.1:$sport/bilbo/gostamp/settings') or { panic(err) }
-	assert_common_http_headers(x) ?
-	assert x.text == 'username: bilbo | repository: gostamp'
+fn test_http_client_user_repo_settings_page() {
+	x := http.get('http://${localserver}/bilbo/gostamp/settings') or { panic(err) }
+	assert_common_http_headers(x)!
+	assert x.body == 'username: bilbo | repository: gostamp'
 	//
-	y := http.get('http://127.0.0.1:$sport/kent/golang/settings') or { panic(err) }
-	assert_common_http_headers(y) ?
-	assert y.text == 'username: kent | repository: golang'
+	y := http.get('http://${localserver}/kent/golang/settings') or { panic(err) }
+	assert_common_http_headers(y)!
+	assert y.body == 'username: kent | repository: golang'
 	//
-	z := http.get('http://127.0.0.1:$sport/missing/golang/settings') or { panic(err) }
+	z := http.get('http://${localserver}/missing/golang/settings') or { panic(err) }
 	assert z.status() == .not_found
 }
 
@@ -176,81 +137,115 @@ struct User {
 	age  int
 }
 
-fn test_http_client_json_post() ? {
+fn test_http_client_json_post() {
 	ouser := User{
 		name: 'Bilbo'
 		age: 123
 	}
 	json_for_ouser := json.encode(ouser)
-	mut x := http.post_json('http://127.0.0.1:$sport/json_echo', json_for_ouser) or { panic(err) }
+	mut x := http.post_json('http://${localserver}/json_echo', json_for_ouser) or { panic(err) }
 	$if debug_net_socket_client ? {
-		eprintln('/json_echo endpoint response: $x')
+		eprintln('/json_echo endpoint response: ${x}')
 	}
-	assert x.header.get(.content_type) ? == 'application/json'
-	assert x.text == json_for_ouser
-	nuser := json.decode(User, x.text) or { User{} }
-	assert '$ouser' == '$nuser'
+	assert x.header.get(.content_type)! == 'application/json'
+	assert x.body == json_for_ouser
+	nuser := json.decode(User, x.body) or { User{} }
+	assert '${ouser}' == '${nuser}'
 	//
-	x = http.post_json('http://127.0.0.1:$sport/json', json_for_ouser) or { panic(err) }
+	x = http.post_json('http://${localserver}/json', json_for_ouser) or { panic(err) }
 	$if debug_net_socket_client ? {
-		eprintln('/json endpoint response: $x')
+		eprintln('/json endpoint response: ${x}')
 	}
-	assert x.header.get(.content_type) ? == 'application/json'
-	assert x.text == json_for_ouser
-	nuser2 := json.decode(User, x.text) or { User{} }
-	assert '$ouser' == '$nuser2'
+	assert x.header.get(.content_type)! == 'application/json'
+	assert x.body == json_for_ouser
+	nuser2 := json.decode(User, x.body) or { User{} }
+	assert '${ouser}' == '${nuser2}'
 }
 
-fn test_http_client_multipart_form_data() ? {
-	boundary := '6844a625b1f0b299'
-	name := 'foo'
-	ct := 'multipart/form-data; boundary=------------------------$boundary'
-	contents := 'baz buzz'
-	data := "--------------------------$boundary
-Content-Disposition: form-data; name=\"$name\"
-
-$contents
---------------------------$boundary--
-"
-	mut x := http.fetch(
-		url: 'http://127.0.0.1:$sport/form_echo'
-		method: .post
-		header: http.new_header(
-			key: .content_type
-			value: ct
-		)
-		data: data
-	) ?
-	$if debug_net_socket_client ? {
-		eprintln('/form_echo endpoint response: $x')
+fn test_http_client_multipart_form_data() {
+	mut form_config := http.PostMultipartFormConfig{
+		form: {
+			'foo': 'baz buzz'
+		}
 	}
-	assert x.text == contents
+
+	mut x := http.post_multipart_form('http://${localserver}/form_echo', form_config)!
+
+	$if debug_net_socket_client ? {
+		eprintln('/form_echo endpoint response: ${x}')
+	}
+	assert x.body == form_config.form['foo']
+
+	mut files := []http.FileData{}
+	files << http.FileData{
+		filename: 'vweb'
+		content_type: 'text'
+		data: '"vweb test"'
+	}
+
+	mut form_config_files := http.PostMultipartFormConfig{
+		files: {
+			'file': files
+		}
+	}
+
+	x = http.post_multipart_form('http://${localserver}/file_echo', form_config_files)!
+	$if debug_net_socket_client ? {
+		eprintln('/form_echo endpoint response: ${x}')
+	}
+	assert x.body == files[0].data
+}
+
+fn test_login_with_multipart_form_data_send_by_fetch() {
+	mut form_config := http.PostMultipartFormConfig{
+		form: {
+			'username': 'myusername'
+			'password': 'mypassword123'
+		}
+	}
+	x := http.post_multipart_form('http://${localserver}/login', form_config)!
+	assert x.status_code == 200
+	assert x.status_msg == 'OK'
+	assert x.body == 'username: xmyusernamex | password: xmypassword123x'
+}
+
+fn test_host() {
+	mut req := http.Request{
+		url: 'http://${localserver}/with_host'
+		method: .get
+	}
+
+	mut x := req.do()!
+	assert x.status() == .not_found
+
+	req.add_header(.host, 'example.com')
+	x = req.do()!
+	assert x.status() == .ok
 }
 
 fn test_http_client_shutdown_does_not_work_without_a_cookie() {
-	x := http.get('http://127.0.0.1:$sport/shutdown') or {
-		assert err.msg == ''
+	x := http.get('http://${localserver}/shutdown') or {
+		assert err.msg() == ''
 		return
 	}
 	assert x.status() == .not_found
-	assert x.text == '404 Not Found'
 }
 
 fn testsuite_end() {
 	// This test is guaranteed to be called last.
 	// It sends a request to the server to shutdown.
 	x := http.fetch(
-		url: 'http://127.0.0.1:$sport/shutdown'
+		url: 'http://${localserver}/shutdown'
 		method: .get
 		cookies: {
 			'skey': 'superman'
 		}
 	) or {
-		assert err.msg == ''
+		assert err.msg() == ''
 		return
 	}
 	assert x.status() == .ok
-	assert x.text == 'good bye'
+	assert x.body == 'good bye'
 }
 
 // utility code:
@@ -263,12 +258,13 @@ struct SimpleTcpClientConfig {
 	content string
 }
 
-fn simple_tcp_client(config SimpleTcpClientConfig) ?string {
-	mut client := &net.TcpConn(0)
+fn simple_tcp_client(config SimpleTcpClientConfig) !string {
+	mut client := &net.TcpConn(unsafe { nil })
 	mut tries := 0
 	for tries < config.retries {
 		tries++
-		client = net.dial_tcp('127.0.0.1:$sport') or {
+		eprintln('> client retries: ${tries}')
+		client = net.dial_tcp(localserver) or {
 			if tries > config.retries {
 				return err
 			}
@@ -277,24 +273,41 @@ fn simple_tcp_client(config SimpleTcpClientConfig) ?string {
 		}
 		break
 	}
+	if client == unsafe { nil } {
+		eprintln('could not create a tcp client connection to ${localserver} after ${config.retries} retries')
+		exit(1)
+	}
 	client.set_read_timeout(tcp_r_timeout)
 	client.set_write_timeout(tcp_w_timeout)
 	defer {
 		client.close() or {}
 	}
-	message := 'GET $config.path HTTP/1.1
-Host: $config.host
-User-Agent: $config.agent
+	message := 'GET ${config.path} HTTP/1.1
+Host: ${config.host}
+User-Agent: ${config.agent}
 Accept: */*
-$config.headers
-$config.content'
+${config.headers}
+${config.content}'
 	$if debug_net_socket_client ? {
-		eprintln('sending:\n$message')
+		eprintln('sending:\n${message}')
 	}
-	client.write(message.bytes()) ?
-	read := io.read_all(reader: client) ?
+	client.write(message.bytes())!
+	read := io.read_all(reader: client)!
 	$if debug_net_socket_client ? {
-		eprintln('received:\n$read')
+		eprintln('received:\n${read}')
 	}
 	return read.bytestr()
+}
+
+// for issue 20476
+// phenomenon: parsing url error when querypath is `//`
+fn test_empty_querypath() {
+	mut x := http.get('http://${localserver}') or { panic(err) }
+	assert x.body == 'Welcome to VWeb'
+	x = http.get('http://${localserver}/') or { panic(err) }
+	assert x.body == 'Welcome to VWeb'
+	x = http.get('http://${localserver}//') or { panic(err) }
+	assert x.body == 'Welcome to VWeb'
+	x = http.get('http://${localserver}///') or { panic(err) }
+	assert x.body == 'Welcome to VWeb'
 }

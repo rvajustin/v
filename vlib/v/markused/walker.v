@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module markused
 
@@ -9,12 +9,13 @@ import v.pref
 
 pub struct Walker {
 pub mut:
-	table        &ast.Table
+	table        &ast.Table = unsafe { nil }
 	used_fns     map[string]bool // used_fns['println'] == true
 	used_consts  map[string]bool // used_consts['os.args'] == true
 	used_globals map[string]bool
+	used_structs map[string]bool
 	n_asserts    int
-	pref         &pref.Preferences
+	pref         &pref.Preferences = unsafe { nil }
 mut:
 	files       []&ast.File
 	all_fns     map[string]ast.FnDecl
@@ -24,14 +25,14 @@ mut:
 
 pub fn (mut w Walker) mark_fn_as_used(fkey string) {
 	$if trace_skip_unused_marked ? {
-		eprintln('    fn > |$fkey|')
+		eprintln('    fn > |${fkey}|')
 	}
 	w.used_fns[fkey] = true
 }
 
 pub fn (mut w Walker) mark_const_as_used(ckey string) {
 	$if trace_skip_unused_marked ? {
-		eprintln('    const > |$ckey|')
+		eprintln('    const > |${ckey}|')
 	}
 	if w.used_consts[ckey] {
 		return
@@ -43,7 +44,7 @@ pub fn (mut w Walker) mark_const_as_used(ckey string) {
 
 pub fn (mut w Walker) mark_global_as_used(ckey string) {
 	$if trace_skip_unused_marked ? {
-		eprintln('  global > |$ckey|')
+		eprintln('  global > |${ckey}|')
 	}
 	if w.used_globals[ckey] {
 		return
@@ -57,9 +58,9 @@ pub fn (mut w Walker) mark_root_fns(all_fn_root_names []string) {
 	for fn_name in all_fn_root_names {
 		if fn_name !in w.used_fns {
 			$if trace_skip_unused_roots ? {
-				println('>>>> $fn_name uses: ')
+				println('>>>> ${fn_name} uses: ')
 			}
-			w.fn_decl(mut w.all_fns[fn_name])
+			unsafe { w.fn_decl(mut w.all_fns[fn_name]) }
 		}
 	}
 }
@@ -72,17 +73,46 @@ pub fn (mut w Walker) mark_exported_fns() {
 	}
 }
 
-pub fn (mut w Walker) stmt(node ast.Stmt) {
+pub fn (mut w Walker) mark_markused_fns() {
+	for _, mut func in w.all_fns {
+		if func.is_markused {
+			w.fn_decl(mut func)
+		}
+	}
+}
+
+pub fn (mut w Walker) mark_markused_consts() {
+	for ckey, mut constfield in w.all_consts {
+		if constfield.is_markused {
+			w.mark_const_as_used(ckey)
+		}
+	}
+}
+
+pub fn (mut w Walker) mark_markused_globals() {
+	for gkey, mut globalfield in w.all_globals {
+		if globalfield.is_markused || globalfield.is_exported {
+			w.mark_global_as_used(gkey)
+		}
+	}
+}
+
+pub fn (mut w Walker) stmt(node_ ast.Stmt) {
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.EmptyStmt {}
+		ast.DebuggerStmt {}
 		ast.AsmStmt {
 			w.asm_io(node.output)
 			w.asm_io(node.input)
 		}
 		ast.AssertStmt {
 			if node.is_used {
-				w.expr(node.expr)
 				w.n_asserts++
+				w.expr(node.expr)
+				if node.extra !is ast.EmptyExpr {
+					w.expr(node.extra)
+				}
 			}
 		}
 		ast.AssignStmt {
@@ -92,7 +122,7 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 		ast.Block {
 			w.stmts(node.stmts)
 		}
-		ast.CompFor {
+		ast.ComptimeFor {
 			w.stmts(node.stmts)
 		}
 		ast.ConstDecl {
@@ -117,10 +147,15 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 				w.table.used_maps++
 			}
 			if node.kind == .struct_ {
+				if node.cond_type == 0 {
+					return
+				}
 				// the .next() method of the struct will be used for iteration:
-				cond_type_sym := w.table.get_type_symbol(node.cond_type)
+				cond_type_sym := w.table.sym(node.cond_type)
 				if next_fn := cond_type_sym.find_method('next') {
-					w.fn_decl(mut &ast.FnDecl(next_fn.source_fn))
+					unsafe {
+						w.fn_decl(mut &ast.FnDecl(next_fn.source_fn))
+					}
 				}
 			}
 		}
@@ -158,6 +193,7 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 		ast.HashStmt {}
 		ast.Import {}
 		ast.InterfaceDecl {}
+		ast.SemicolonStmt {}
 		ast.Module {}
 		ast.TypeDecl {}
 		ast.NodeError {}
@@ -188,19 +224,21 @@ fn (mut w Walker) exprs(exprs []ast.Expr) {
 	}
 }
 
-fn (mut w Walker) expr(node ast.Expr) {
+fn (mut w Walker) expr(node_ ast.Expr) {
+	mut node := unsafe { node_ }
 	match mut node {
 		ast.EmptyExpr {
-			// TODO make sure this doesn't happen
+			// TODO: make sure this doesn't happen
 			// panic('Walker: EmptyExpr')
 		}
+		ast.ComptimeType {}
 		ast.AnonFn {
 			w.fn_decl(mut node.decl)
 		}
 		ast.ArrayInit {
 			w.expr(node.len_expr)
 			w.expr(node.cap_expr)
-			w.expr(node.default_expr)
+			w.expr(node.init_expr)
 			w.exprs(node.exprs)
 		}
 		ast.Assoc {
@@ -237,7 +275,7 @@ fn (mut w Walker) expr(node ast.Expr) {
 			w.fn_by_name('eprint')
 			w.fn_by_name('eprintln')
 		}
-		ast.GoExpr {
+		ast.SpawnExpr {
 			w.expr(node.call_expr)
 			if w.pref.os == .windows {
 				w.fn_by_name('panic_lasterr')
@@ -247,11 +285,17 @@ fn (mut w Walker) expr(node ast.Expr) {
 				w.fn_by_name('panic_error_number')
 			}
 		}
+		ast.GoExpr {
+			w.expr(node.call_expr)
+		}
 		ast.IndexExpr {
 			w.expr(node.left)
 			w.expr(node.index)
 			w.or_block(node.or_expr)
-			sym := w.table.get_final_type_symbol(node.left_type)
+			if node.left_type == 0 {
+				return
+			}
+			sym := w.table.final_sym(node.left_type)
 			if sym.kind == .map {
 				w.table.used_maps++
 			}
@@ -263,13 +307,18 @@ fn (mut w Walker) expr(node ast.Expr) {
 			if node.left_type == 0 {
 				return
 			}
-			sym := w.table.get_type_symbol(node.left_type)
+			sym := w.table.sym(node.left_type)
 			if sym.kind == .struct_ {
 				if opmethod := sym.find_method(node.op.str()) {
-					w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
+					unsafe {
+						w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
+					}
 				}
 			}
-			right_sym := w.table.get_type_symbol(node.right_type)
+			if node.right_type == 0 {
+				return
+			}
+			right_sym := w.table.sym(node.right_type)
 			if node.op in [.not_in, .key_in] && right_sym.kind == .map {
 				w.table.used_maps++
 			}
@@ -301,6 +350,9 @@ fn (mut w Walker) expr(node ast.Expr) {
 				}
 			}
 		}
+		ast.LambdaExpr {
+			w.expr(node.func)
+		}
 		ast.Likely {
 			w.expr(node.expr)
 		}
@@ -317,6 +369,7 @@ fn (mut w Walker) expr(node ast.Expr) {
 			}
 		}
 		ast.None {}
+		ast.Nil {}
 		ast.ParExpr {
 			w.expr(node.expr)
 		}
@@ -342,6 +395,11 @@ fn (mut w Walker) expr(node ast.Expr) {
 		}
 		ast.SelectorExpr {
 			w.expr(node.expr)
+			if node.expr_type != 0 {
+				if method := w.table.find_method(w.table.sym(node.expr_type), node.field_name) {
+					w.fn_by_name(method.fkey())
+				}
+			}
 		}
 		ast.SqlExpr {
 			w.expr(node.db_expr)
@@ -351,27 +409,19 @@ fn (mut w Walker) expr(node ast.Expr) {
 			w.expr(node.where_expr)
 		}
 		ast.StructInit {
-			sym := w.table.get_type_symbol(node.typ)
+			if node.typ == 0 {
+				return
+			}
+			sym := w.table.sym(node.typ)
 			if sym.kind == .struct_ {
 				info := sym.info as ast.Struct
-				for ifield in info.fields {
-					if ifield.has_default_expr {
-						w.expr(ifield.default_expr)
-					}
-					fsym := w.table.get_type_symbol(ifield.typ)
-					if fsym.kind == .map {
-						w.table.used_maps++
-					}
-				}
+				w.a_struct_info(sym.name, info)
 			}
 			if node.has_update_expr {
 				w.expr(node.update_expr)
 			}
-			for sif in node.fields {
+			for sif in node.init_fields {
 				w.expr(sif.expr)
-			}
-			for sie in node.embeds {
-				w.expr(sie.expr)
 			}
 		}
 		ast.TypeOf {
@@ -413,6 +463,27 @@ fn (mut w Walker) expr(node ast.Expr) {
 	}
 }
 
+pub fn (mut w Walker) a_struct_info(sname string, info ast.Struct) {
+	if sname in w.used_structs {
+		return
+	}
+	w.used_structs[sname] = true
+	for ifield in info.fields {
+		if ifield.has_default_expr {
+			w.expr(ifield.default_expr)
+		}
+		if ifield.typ != 0 {
+			fsym := w.table.sym(ifield.typ)
+			if fsym.kind == .map {
+				w.table.used_maps++
+			}
+			if fsym.kind == .struct_ {
+				w.a_struct_info(fsym.name, fsym.struct_info())
+			}
+		}
+	}
+}
+
 pub fn (mut w Walker) fn_decl(mut node ast.FnDecl) {
 	if node.language == .c {
 		return
@@ -446,9 +517,16 @@ pub fn (mut w Walker) call_expr(mut node ast.CallExpr) {
 		return
 	}
 	w.mark_fn_as_used(fn_name)
+	if node.is_method && node.receiver_type.has_flag(.generic) && node.receiver_concrete_type != 0
+		&& !node.receiver_concrete_type.has_flag(.generic) {
+		// if receiver is generic, then cgen requires `node.receiver_type` to be T.
+		// We therefore need to get the concrete type from `node.receiver_concrete_type`.
+		fkey := '${int(node.receiver_concrete_type)}.${node.name}'
+		w.used_fns[fkey] = true
+	}
 	stmt := w.all_fns[fn_name] or { return }
 	if stmt.name == node.name {
-		if !node.is_method || (node.receiver_type == stmt.receiver.typ) {
+		if !node.is_method || node.receiver_type == stmt.receiver.typ {
 			w.stmts(stmt.stmts)
 		}
 	}

@@ -2,26 +2,38 @@ name: toml CI
 
 on:
   push:
-    paths-ignore:
-      - "**.md"
+    paths:
+      - 'vlib/**'
+      - '**/toml_ci.yml'
+      - '!**.md'
   pull_request:
-    paths-ignore:
-      - "**.md"
+    paths:
+      - 'vlib/**'
+      - '**/toml_ci.yml'
+      - '!**.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   toml-module-pass-external-test-suites:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 121
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+      - name: Build V
+        run: make -j4 && ./v symlink
+      - name: Install dependencies
+        run: |
+          v retry -- sudo apt update
+          v retry -- sudo apt install --quiet -y jq libgc-dev
 
-    - uses: actions/checkout@v2
-    - name: Build V
-      run: make -j2 && ./v -cc gcc -o v cmd/v
+      - name: Show JQ Version
+        run: jq --version
 
-    - name: Clone BurntSushi/toml-test
-      run: |
-        cd vlib/toml/tests/testdata
-        git clone --depth 1 https://github.com/BurntSushi/toml-test.git burntsushi/toml-test
+      - name: Download more TOML testsuits
+        run: .github/workflows/download_full_toml_test_suites.sh
 
-    - name: Run tests
-      run: ./v -stats test vlib/toml
+      - name: Run TOML tests
+        run: VTEST_TOML_DO_YAML_CONVERSION=1 VTEST_TOML_DO_LARGE_FILES=1 ./v test vlib/toml

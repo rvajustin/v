@@ -3,16 +3,14 @@ import rand.splitmix64
 import rand.musl
 import rand.mt19937
 
-const (
-	rnd_count = 40
-	seeds     = [[u32(42), 0], [u32(256), 0]]
-)
+const rnd_count = 40
+const seeds = [[u32(42), 0], [u32(256), 0]]
 
 fn get_n_random_ints(seed_data []u32, n int) []int {
 	mut values := []int{cap: n}
 	rand.seed(seed_data)
 	for _ in 0 .. n {
-		values << rand.intn(n)
+		values << rand.intn(n) or { panic("Couldn't obtain int") }
 	}
 	return values
 }
@@ -29,7 +27,7 @@ fn test_rand_reproducibility() {
 fn test_rand_u32n() {
 	max := u32(16384)
 	for _ in 0 .. rnd_count {
-		value := rand.u32n(max)
+		value := rand.u32n(max) or { panic("Couldn't obtain u32") }
 		assert value >= 0
 		assert value < max
 	}
@@ -38,7 +36,7 @@ fn test_rand_u32n() {
 fn test_rand_u64n() {
 	max := u64(379091181005)
 	for _ in 0 .. rnd_count {
-		value := rand.u64n(max)
+		value := rand.u64n(max) or { panic("Couldn't obtain u64") }
 		assert value >= 0
 		assert value < max
 	}
@@ -48,7 +46,7 @@ fn test_rand_u32_in_range() {
 	max := u32(484468466)
 	min := u32(316846)
 	for _ in 0 .. rnd_count {
-		value := rand.u32_in_range(min, max)
+		value := rand.u32_in_range(min, max) or { panic("Couldn't obtain u32 in range") }
 		assert value >= min
 		assert value < max
 	}
@@ -58,7 +56,7 @@ fn test_rand_u64_in_range() {
 	max := u64(216468454685163)
 	min := u64(6848646868)
 	for _ in 0 .. rnd_count {
-		value := rand.u64_in_range(min, max)
+		value := rand.u64_in_range(min, max) or { panic("Couldn't obtain u64 in range") }
 		assert value >= min
 		assert value < max
 	}
@@ -67,7 +65,7 @@ fn test_rand_u64_in_range() {
 fn test_rand_intn() {
 	max := 2525642
 	for _ in 0 .. rnd_count {
-		value := rand.intn(max)
+		value := rand.intn(max) or { panic("Couldn't obtain int") }
 		assert value >= 0
 		assert value < max
 	}
@@ -76,7 +74,7 @@ fn test_rand_intn() {
 fn test_rand_i64n() {
 	max := i64(3246727724653636)
 	for _ in 0 .. rnd_count {
-		value := rand.i64n(max)
+		value := rand.i64n(max) or { panic("Couldn't obtain i64") }
 		assert value >= 0
 		assert value < max
 	}
@@ -86,7 +84,7 @@ fn test_rand_int_in_range() {
 	min := -4252
 	max := 23054962
 	for _ in 0 .. rnd_count {
-		value := rand.int_in_range(min, max)
+		value := rand.int_in_range(min, max) or { panic("Couldn't obtain int in range") }
 		assert value >= min
 		assert value < max
 	}
@@ -96,7 +94,7 @@ fn test_rand_i64_in_range() {
 	min := i64(-24095)
 	max := i64(324058)
 	for _ in 0 .. rnd_count {
-		value := rand.i64_in_range(min, max)
+		value := rand.i64_in_range(min, max) or { panic("Couldn't obtain i64 in range") }
 		assert value >= min
 		assert value < max
 	}
@@ -144,7 +142,7 @@ fn test_rand_f64() {
 fn test_rand_f32n() {
 	max := f32(357.0)
 	for _ in 0 .. rnd_count {
-		value := rand.f32n(max)
+		value := rand.f32n(max) or { panic("Couldn't obtain f32") }
 		assert value >= 0.0
 		assert value < max
 	}
@@ -153,7 +151,7 @@ fn test_rand_f32n() {
 fn test_rand_f64n() {
 	max := f64(1.52e6)
 	for _ in 0 .. rnd_count {
-		value := rand.f64n(max)
+		value := rand.f64n(max) or { panic("Couldn't obtain f64") }
 		assert value >= 0.0
 		assert value < max
 	}
@@ -163,7 +161,7 @@ fn test_rand_f32_in_range() {
 	min := f32(-24.0)
 	max := f32(125.0)
 	for _ in 0 .. rnd_count {
-		value := rand.f32_in_range(min, max)
+		value := rand.f32_in_range(min, max) or { panic("Couldn't obtain f32 in range") }
 		assert value >= min
 		assert value < max
 	}
@@ -173,16 +171,16 @@ fn test_rand_f64_in_range() {
 	min := f64(-548.7)
 	max := f64(5015.2)
 	for _ in 0 .. rnd_count {
-		value := rand.f64_in_range(min, max)
+		value := rand.f64_in_range(min, max) or { panic("Couldn't obtain f64 in range") }
 		assert value >= min
 		assert value < max
 	}
 }
 
-fn test_rand_byte() {
-	mut all := []byte{}
+fn test_rand_u8() {
+	mut all := []u8{}
 	for _ in 0 .. 256 {
-		x := rand.byte()
+		x := rand.u8()
 		assert x >= 0
 		assert x <= 255
 		all << x
@@ -192,9 +190,32 @@ fn test_rand_byte() {
 	assert all[0] != all[128]
 }
 
-const (
-	string_count = 25
-)
+fn test_rand_u16() {
+	mut all := []u16{}
+	mut same_as_previous := 0
+	mut previous := u16(0)
+	for _ in 0 .. 65536 {
+		x := rand.u16()
+		assert x >= 0
+		assert x <= 65535
+		all << x
+		if previous == x {
+			same_as_previous++
+			// dump(previous)
+			// dump(x)
+		}
+		previous = x
+	}
+	assert same_as_previous < 1000
+	all.sort(a < b)
+	assert all[0] != all[65535]
+	assert all[0] != all[32768]
+	// dump( all[0] )
+	// dump( all[65535] )
+	// dump( all[32768] )
+}
+
+const string_count = 25
 
 fn test_rand_string_from_set() {
 	sets := [
@@ -204,7 +225,7 @@ fn test_rand_string_from_set() {
 	]
 	for charset in sets {
 		for _ in 0 .. string_count {
-			len := rand.intn(rnd_count)
+			len := rand.intn(rnd_count) or { panic("Couldn't obtain int") }
 			str := rand.string_from_set(charset, len)
 			assert str.len == len
 			for character in str {
@@ -215,19 +236,44 @@ fn test_rand_string_from_set() {
 	}
 }
 
+fn test_rand_fill_buffer_from_set() {
+	rand.seed([u32(0), 1])
+	outputs := [
+		[u8(52), 48, 55, 57, 50, 49, 53, 49, 53, 53],
+		[u8(57), 51, 56, 53, 56, 55, 56, 52, 56, 51],
+		[u8(57), 54, 52, 53, 57, 56, 57, 57, 48, 57],
+		[u8(57), 54, 50, 50, 52, 57, 53, 55, 50, 57],
+		[u8(51), 48, 55, 54, 49, 55, 53, 54, 52, 57],
+		[u8(57), 50, 48, 50, 48, 49, 52, 54, 50, 48],
+		[u8(55), 54, 51, 48, 51, 54, 49, 55, 56, 52],
+		[u8(52), 56, 52, 54, 50, 50, 50, 56, 54, 53],
+		[u8(53), 53, 55, 52, 51, 54, 55, 56, 51, 51],
+		[u8(52), 50, 51, 57, 54, 52, 50, 48, 49, 53],
+		[u8(49), 51, 54, 57, 55, 51, 48, 51, 51, 50],
+		[u8(56), 54, 50, 54, 51, 54, 49, 55, 57, 49],
+	]
+	for output in outputs {
+		mut buf := []u8{len: 10}
+		rand.fill_buffer_from_set('0123456789', mut buf)
+		assert buf == output
+	}
+}
+
 fn test_rand_string() {
 	rand.seed([u32(0), 1])
 	outputs := [
-		'rzJfVBJgvAyCNpEdXIteDQezg',
-		'AJOeswgoelDOCfcrSUWzVPjeL',
-		'NQfKauQqsXYXSUMFPGnXXPJIn',
-		'vfBGUKbpLoBMQVYXfkvRplWih',
-		'aYHLjMJqvUJmJJHGxEnrEmQGl',
-		'rBJXkQZcembAteaRFoxXmECJo',
-		'HYVLfHmDOCTlSbiSzHrsAIaBH',
-		'zgOiwyISjLSdLGhLzJsSKHVBi',
-		'UiAtobWXGcHsEtgzuNatxfkoI',
-		'NisnYlffJgFEcIdcgzWcGjnHy',
+		'oIfPOHLBZTlvGhYtCMolfssbZ',
+		'yHFGzDYeWIRldsBzMtkDhzQqF',
+		'vwoeerAKsEZiludKtRKoCoiuE',
+		'EQAaJDRZkvKTKNLkEPhWeEKFX',
+		'rDIhxzIbDUIusiTuzLHRslfzu',
+		'KCUoAEugYvUwzXcKRrAiwMzXH',
+		'NIOXerfCpEwbfhLmbbWKjoxbL',
+		'baJWQWarRRRmXCvMKcEjxQBpk',
+		'CkVLxbJEPhviBTohEVBnMAFHZ',
+		'ZdnGGhYShqzwnDXqHncLgLcdo',
+		'zRiSLsgnApmvtlIVrQQaBzOJD',
+		'VeeBcztImGquJnzEsXCdUaUed',
 	]
 	for output in outputs {
 		assert rand.string(25) == output
@@ -237,16 +283,20 @@ fn test_rand_string() {
 fn test_rand_hex() {
 	rand.seed([u32(0), 1])
 	outputs := [
-		'fc30e495deee09e008e15ffc3',
-		'4320efa837788397fb59b28f4',
-		'4995210abf33b6765c240ce62',
-		'f3d20dbe0a8aa6b9c88cd1f6f',
-		'8d7d58b256ab00213dd519cf7',
-		'fa2251284bc20a21eff48127c',
-		'5fef90cdc0c37143117599092',
-		'2a6170531c76dfb50c54126bc',
-		'a686dfd536042d1c1a9afdaf4',
-		'7f12013f6e1177e2d63726de3',
+		'847b633d9f9765c1a84d38035',
+		'efdef342641958db89cfdb4e1',
+		'704ee34204d29e9e99aca0ae0',
+		'0c8e1fd5472f65fc4b9668adf',
+		'3349538378c2023ef7f14dfbe',
+		'ae4080a0cb4cbb0693c68037b',
+		'90e3a7be588b3dfeb3663c97f',
+		'f25a82eb559ab6f0288bd8590',
+		'649f579cb93e9f414d9f40539',
+		'553a210a52bcbfbafb0783850',
+		'3daef80b45ef518d30c6db6db',
+		'56a187106e6e5fb88761024a5',
+		'b5cd8b7a24054d7dc66e62f88',
+		'306eed0c4207d8db185f04afd',
 	]
 	for output in outputs {
 		assert rand.hex(25) == output
@@ -256,16 +306,15 @@ fn test_rand_hex() {
 fn test_rand_ascii() {
 	rand.seed([u32(0), 1])
 	outputs := [
-		"2Z:&PeD'V;9=mn\$C>yKg'DIr%",
-		'Ub7ix,}>I=&#2QJki{%FHKv&K',
-		'1WStRylMO|p.R~qqRtr&AOEsd',
-		'yka<GPZ&m+r0^Zi!ShB*1dU~W',
-		'uDA?.zU2X,<DkKT#_-halW\\ki',
-		'fsx!@uRc?re/fSPXj`Y&\\BU}p',
-		'fI_qM"):2;CUno!<dX:Yv*FX$',
-		'FnA(Fr|D`WZVWEzp<k)O;auub',
-		"QRkxH!kjXh&/j{)uSe&{D'v?|",
-		"_CyaU\$z':#}At*v2|xDu6w=;1",
+		r"KqdNI|*bDh42kn'z-}}nhmKd~",
+		r'IZ4wVRC-Q3@TviD>G4#Z(2}s4',
+		r"l7'1Ute)i?4Efo$sX^sOk;s%m",
+		r"3}3s^l(PeNY>I8&'a>$)AW14*",
+		r'V.a^b>GN"\\9e-Vs"&.vS0"F_',
+		r"U-;S}OY+e>Ca>p'UD|7{}?6`x",
+		r'$/EN5*2w@/KdN~pU||c=*yn6|',
+		r'FsLkK{gFrPn)>EVW53uJLa<8?',
+		r'1#PB<"P}pLtY@F}^\TfNyCDB$',
 	]
 	for output in outputs {
 		assert rand.ascii(25) == output
@@ -275,17 +324,17 @@ fn test_rand_ascii() {
 fn ensure_same_output(mut rng rand.PRNG) {
 	for _ in 0 .. 100 {
 		assert rand.int() == rng.int()
-		assert rand.intn(45) == rng.intn(45)
+		assert rand.intn(45) or { 0 } == rng.intn(45) or { 0 }
 		assert rand.u64() == rng.u64()
 		assert rand.f64() == rng.f64()
-		assert rand.u32n(25) == rng.u32n(25)
+		assert rand.u32n(25) or { 0 } == rng.u32n(25) or { 0 }
 	}
 }
 
 fn test_new_global_rng() {
 	old := rand.get_current_rng()
 
-	// MuslRNG	
+	// MuslRNG
 	mut rng1a := musl.MuslRNG{}
 	mut rng1b := musl.MuslRNG{}
 	seed1 := [u32(1234)]
@@ -316,4 +365,136 @@ fn test_new_global_rng() {
 	ensure_same_output(mut rng3b)
 
 	rand.set_rng(old)
+}
+
+fn test_shuffle() {
+	mut arrays := [][]int{}
+	arrays << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+	arrays << [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+	for seed in seeds {
+		a := get_n_random_ints(seed, 10)
+		arrays << a
+	}
+	mut digits := []map[int]int{len: 10}
+	for digit in 0 .. 10 {
+		digits[digit] = {}
+		for idx in 0 .. 10 {
+			digits[digit][idx] = 0
+		}
+	}
+	for mut a in arrays {
+		o := a.clone()
+		for _ in 0 .. 100 {
+			rand.shuffle(mut a) or { panic('shuffle failed') }
+			assert *a != o
+			for idx in 0 .. 10 {
+				digits[idx][a[idx]]++
+			}
+		}
+	}
+	for digit in 1 .. 10 {
+		assert digits[0] != digits[digit]
+	}
+	for digit in 0 .. 10 {
+		for idx in 0 .. 10 {
+			assert digits[digit][idx] >= 10
+		}
+		// eprintln('digits[$digit]: ${digits[digit]}')
+	}
+}
+
+fn test_shuffle_partial() {
+	mut a := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+	mut b := a.clone()
+
+	rand.shuffle(mut a, start: 4)!
+	assert a[..4] == b[..4]
+
+	a = b.clone()
+	rand.shuffle(mut a, start: 3, end: 7)!
+	assert a[..3] == b[..3]
+	assert a[7..] == b[7..]
+}
+
+fn test_shuffle_clone() {
+	original := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+	mut a := original.clone()
+	mut results := [][]int{}
+	for _ in 0 .. 10 {
+		results << rand.shuffle_clone(a) or { panic('shuffle failed') }
+	}
+	assert original == a
+	for idx in 1 .. 10 {
+		assert results[idx].len == 10
+		assert results[idx] != results[0]
+		assert results[idx] != original
+	}
+}
+
+fn test_choose() {
+	lengths := [1, 3, 4, 5, 6, 7]
+	a := ['one', 'two', 'three', 'four', 'five', 'six', 'seven']
+	for length in lengths {
+		b := rand.choose(a, length)!
+		assert b.len == length
+		for element in b {
+			assert element in a
+			// make sure every element occurs once
+			mut count := 0
+			for e in b {
+				if e == element {
+					count++
+				}
+			}
+			assert count == 1
+		}
+	}
+}
+
+fn test_sample() {
+	k := 20
+	a := ['heads', 'tails']
+	b := rand.sample(a, k)
+	assert b.len == k
+	for element in b {
+		assert element in a
+	}
+}
+
+fn test_element1() {
+	a := ['one', 'two', 'four', 'five', 'six', 'seven']
+	for _ in 0 .. 30 {
+		e := rand.element(a)!
+		assert e in a
+		assert 'three' != e
+	}
+}
+
+fn test_element2() {
+	for _ in 0 .. 30 {
+		e := rand.element([1, 2, 5, 6, 7, 8])!
+		assert e in [1, 2, 5, 6, 7, 8]
+		assert 3 != e
+		assert 4 != e
+	}
+}
+
+fn test_proper_masking() {
+	under32 := []int{len: 10, init: index * 0 + rand.intn(1073741823)!}
+	assert under32 != [0].repeat(10)
+
+	over32 := []int{len: 10, init: index * 0 + rand.intn(1073741824)!}
+	assert over32 != [0].repeat(10)
+
+	under64 := []i64{len: 10, init: index * 0 + rand.i64n(i64(4611686018427387903))!}
+	assert under64 != [i64(0)].repeat(10)
+
+	over64 := []i64{len: 10, init: index * 0 + rand.i64n(i64(4611686018427387904))!}
+	assert over64 != [i64(0)].repeat(10)
+
+	almost_full32 := []int{len: 10, init: index * 0 + rand.intn(2147483647)!}
+	assert almost_full32 != [0].repeat(10)
+
+	almost_full64 := []i64{len: 10, init: index * 0 + rand.i64n(i64(9223372036854775807))!}
+	assert almost_full64 != [i64(0)].repeat(10)
 }

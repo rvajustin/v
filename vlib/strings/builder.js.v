@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module strings
@@ -6,23 +6,31 @@ module strings
 /*
 pub struct Builder {
 mut:
-	buf []byte
+	buf []u8
 pub mut:
 	len          int
 	initial_size int = 1
 }*/
 
-pub type Builder = []byte
+pub type Builder = []u8
 
 pub fn new_builder(initial_size int) Builder {
-	return []byte{cap: initial_size}
+	return []u8{cap: initial_size}
 }
 
-pub fn (mut b Builder) write_b(data byte) {
+pub fn (mut b Builder) write_byte(data u8) {
 	b << data
 }
 
-pub fn (mut b Builder) write(data []byte) ?int {
+pub fn (mut b Builder) clear() {
+	b = []u8{cap: b.cap}
+}
+
+pub fn (mut b Builder) write_u8(data u8) {
+	b << data
+}
+
+pub fn (mut b Builder) write(data []u8) ?int {
 	if data.len == 0 {
 		return 0
 	}
@@ -30,14 +38,14 @@ pub fn (mut b Builder) write(data []byte) ?int {
 	return data.len
 }
 
-pub fn (b &Builder) byte_at(n int) byte {
+pub fn (b &Builder) byte_at(n int) u8 {
 	unsafe {
 		return b[n]
 	}
 }
 
 pub fn (mut b Builder) write_string(s string) {
-	if s.len == 0 {
+	if s == '' {
 		return
 	}
 
@@ -47,7 +55,7 @@ pub fn (mut b Builder) write_string(s string) {
 }
 
 pub fn (mut b Builder) writeln(s string) {
-	if s.len > 0 {
+	if s != '' {
 		b.write_string(s)
 	}
 
@@ -65,7 +73,7 @@ pub fn (mut b Builder) str() string {
 
 pub fn (mut b Builder) cut_last(n int) string {
 	cut_pos := b.len - n
-	x := b[cut_pos..]
+	x := unsafe { b[cut_pos..] }
 	res := x.bytestr()
 	b.trim(cut_pos)
 	return res
@@ -92,7 +100,7 @@ pub fn (mut b Builder) cut_to(pos int) string {
 
 pub fn (mut b Builder) write_runes(runes []rune) {
 	for r in runes {
-		res := string(r)
+		res := r.str()
 		#res.str = String.fromCharCode(r.val)
 		b << res.bytes()
 	}
@@ -105,17 +113,17 @@ pub fn (mut b Builder) after(n int) string {
 		return ''
 	}
 
-	x := b.slice(n, b.len)
+	x := unsafe { b[n..b.len] }
 	return x.bytestr()
 }
 
 // last_n(5) returns 'world'
 // buf == 'hello world'
-pub fn (b &Builder) last_n(n int) string {
+pub fn (mut b Builder) last_n(n int) string {
 	if n >= b.len {
 		return ''
 	}
 
-	x := b.slice(b.len - n, b.len)
+	x := unsafe { b[b.len - n..b.len] }
 	return x.bytestr()
 }

@@ -3,11 +3,9 @@ module cli
 import term
 import strings
 
-const (
-	base_indent_len            = 2
-	min_description_indent_len = 20
-	spacing                    = 2
-)
+const base_indent_len = 2
+const min_description_indent_len = 20
+const spacing = 2
 
 fn help_flag(with_abbrev bool) Flag {
 	sabbrev := if with_abbrev { 'h' } else { '' }
@@ -28,35 +26,26 @@ fn help_cmd() Command {
 	}
 }
 
-fn print_help_for_command(help_cmd Command) ? {
-	if help_cmd.args.len > 0 {
-		mut cmd := help_cmd.parent
-		for arg in help_cmd.args {
-			mut found := false
-			for sub_cmd in cmd.commands {
-				if sub_cmd.name == arg {
-					cmd = unsafe { &sub_cmd }
-					found = true
-					break
-				}
-			}
-			if !found {
-				args := help_cmd.args.join(' ')
-				println('Invalid command: $args')
+// print_help_for_command outputs the help message of `help_cmd`.
+pub fn print_help_for_command(cmd Command) ! {
+	if cmd.args.len > 0 {
+		for sub_cmd in cmd.commands {
+			if sub_cmd.name == cmd.args[0] {
+				cmd_ := unsafe { &sub_cmd }
+				print(cmd_.help_message())
 				return
 			}
 		}
-		print(cmd.help_message())
-	} else {
-		if help_cmd.parent != 0 {
-			print(help_cmd.parent.help_message())
-		}
+		print('Invalid command: ${cmd.args.join(' ')}')
+	} else if cmd.parent != unsafe { nil } {
+		print(cmd.parent.help_message())
 	}
 }
 
-fn (cmd Command) help_message() string {
+// help_message returns a generated help message as a `string` for the `Command`.
+pub fn (cmd Command) help_message() string {
 	mut help := ''
-	help += 'Usage: $cmd.full_name()'
+	help += 'Usage: ${cmd.full_name()}'
 	if cmd.flags.len > 0 {
 		help += ' [flags]'
 	}
@@ -64,15 +53,15 @@ fn (cmd Command) help_message() string {
 		help += ' [commands]'
 	}
 	if cmd.usage.len > 0 {
-		help += ' $cmd.usage'
+		help += ' ${cmd.usage}'
 	} else {
 		for i in 0 .. cmd.required_args {
-			help += ' <arg$i>'
+			help += ' <arg${i}>'
 		}
 	}
 	help += '\n'
 	if cmd.description != '' {
-		help += '\n$cmd.description\n'
+		help += '\n${cmd.description}\n'
 	}
 	mut abbrev_len := 0
 	mut name_len := cli.min_description_indent_len
@@ -104,10 +93,10 @@ fn (cmd Command) help_message() string {
 			prefix := if cmd.posix_mode { '--' } else { '-' }
 			if flag.abbrev != '' {
 				abbrev_indent := ' '.repeat(abbrev_len - flag.abbrev.len - 1) // - 1 for '-' in front
-				flag_name = '-$flag.abbrev$abbrev_indent$prefix$flag.name'
+				flag_name = '-${flag.abbrev}${abbrev_indent}${prefix}${flag.name}'
 			} else {
 				abbrev_indent := ' '.repeat(abbrev_len)
-				flag_name = '$abbrev_indent$prefix$flag.name'
+				flag_name = '${abbrev_indent}${prefix}${flag.name}'
 			}
 			mut required := ''
 			if flag.required {
@@ -115,7 +104,7 @@ fn (cmd Command) help_message() string {
 			}
 			base_indent := ' '.repeat(cli.base_indent_len)
 			description_indent := ' '.repeat(name_len - flag_name.len)
-			help += '$base_indent$flag_name$description_indent' +
+			help += '${base_indent}${flag_name}${description_indent}' +
 				pretty_description(flag.description + required, cli.base_indent_len + name_len) +
 				'\n'
 		}
@@ -125,7 +114,7 @@ fn (cmd Command) help_message() string {
 		for command in cmd.commands {
 			base_indent := ' '.repeat(cli.base_indent_len)
 			description_indent := ' '.repeat(name_len - command.name.len)
-			help += '$base_indent$command.name$description_indent' +
+			help += '${base_indent}${command.name}${description_indent}' +
 				pretty_description(command.description, name_len) + '\n'
 		}
 	}
@@ -146,13 +135,13 @@ fn pretty_description(s string, indent_len int) string {
 	mut acc := strings.new_builder(((s.len / chars_per_line) + 1) * (width + 1))
 	for k, line in s.split('\n') {
 		if k != 0 {
-			acc.write_string('\n$indent')
+			acc.write_string('\n${indent}')
 		}
 		mut i := chars_per_line - 2
 		mut j := 0
 		for ; i < line.len; i += chars_per_line - 2 {
-			for line[i] != ` ` {
-				i--
+			for j > 0 && line[j] != ` ` {
+				j--
 			}
 			// indent was already done the first iteration
 			if j != 0 {

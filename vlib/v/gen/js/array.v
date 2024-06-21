@@ -3,25 +3,23 @@ module js
 import v.ast
 import strings
 
-const (
-	special_array_methods = [
-		'sort',
-		'insert',
-		'prepend',
-		'index',
-		'contains',
-	]
-)
+const special_array_methods = [
+	'sort',
+	'insert',
+	'prepend',
+	'index',
+	'contains',
+]
 
 fn (mut g JsGen) gen_array_index_method(left_type ast.Type) string {
 	unwrap_left_type := g.unwrap_generic(left_type)
-	mut left_sym := g.table.get_type_symbol(unwrap_left_type)
+	mut left_sym := g.table.sym(unwrap_left_type)
 	mut left_type_str := g.typ(unwrap_left_type).trim('*')
 	fn_name := '${left_type_str}_index'
 
 	if !left_sym.has_method('index') {
 		info := left_sym.info as ast.Array
-		elem_sym := g.table.get_type_symbol(info.elem_type)
+		elem_sym := g.table.sym(info.elem_type)
 		if elem_sym.kind == .function {
 			left_type_str = 'Array_voidptr'
 		}
@@ -79,7 +77,7 @@ fn (mut g JsGen) gen_array_method_call(it ast.CallExpr) {
 		}
 		'insert' {
 			g.write('array_')
-			arg2_sym := g.table.get_type_symbol(node.args[1].typ)
+			arg2_sym := g.table.sym(node.args[1].typ)
 			is_arg2_array := arg2_sym.kind == .array && node.args[1].typ == node.left_type
 			if is_arg2_array {
 				g.write('insert_many(')
@@ -108,7 +106,7 @@ fn (mut g JsGen) gen_array_method_call(it ast.CallExpr) {
 		}
 		'prepend' {
 			g.write('array_')
-			arg_sym := g.table.get_type_symbol(node.args[0].typ)
+			arg_sym := g.table.sym(node.args[0].typ)
 			is_arg_array := arg_sym.kind == .array && node.args[0].typ == node.left_type
 			if is_arg_array {
 				g.write('prepend_many(')
@@ -165,13 +163,13 @@ fn (mut g JsGen) gen_array_contains_method(left_type ast.Type) string {
 	if unwrap_left_type.share() == .shared_t {
 		unwrap_left_type = unwrap_left_type.clear_flag(.shared_f)
 	}
-	mut left_sym := g.table.get_type_symbol(unwrap_left_type)
-	left_final_sym := g.table.get_final_type_symbol(unwrap_left_type)
+	mut left_sym := g.table.sym(unwrap_left_type)
+	left_final_sym := g.table.final_sym(unwrap_left_type)
 	mut left_type_str := g.typ(unwrap_left_type).replace('*', '')
 	fn_name := '${left_type_str}_contains'
 	if !left_sym.has_method('contains') {
 		left_info := left_final_sym.info as ast.Array
-		elem_sym := g.table.get_type_symbol(left_info.elem_type)
+		elem_sym := g.table.sym(left_info.elem_type)
 		if elem_sym.kind == .function {
 			left_type_str = 'Array_voidptr'
 		}
@@ -214,7 +212,7 @@ fn (mut g JsGen) gen_array_contains_method(left_type ast.Type) string {
 }
 
 fn (mut g JsGen) gen_array_sort(node ast.CallExpr) {
-	rec_sym := g.table.get_type_symbol(node.receiver_type)
+	rec_sym := g.table.sym(node.receiver_type)
 	if rec_sym.kind != .array {
 		println(node.name)
 		verror('.sort() is an array method')
@@ -269,13 +267,13 @@ fn (mut g JsGen) gen_array_sort(node ast.CallExpr) {
 
 	g.definitions.writeln('function ${compare_fn}(a,b) {')
 	c_condition := if comparison_type.sym.has_method('<') {
-		'${g.typ(comparison_type.typ)}__lt($left_expr, $right_expr)'
+		'${g.typ(comparison_type.typ)}__lt(${left_expr}, ${right_expr})'
 	} else if comparison_type.unaliased_sym.has_method('<') {
-		'${g.typ(comparison_type.unaliased)}__lt($left_expr, $right_expr)'
+		'${g.typ(comparison_type.unaliased)}__lt(${left_expr}, ${right_expr})'
 	} else {
 		'${left_expr}.valueOf() < ${right_expr}.valueOf()'
 	}
-	g.definitions.writeln('\tif ($c_condition) return -1;')
+	g.definitions.writeln('\tif (${c_condition}) return -1;')
 	g.definitions.writeln('\telse return 1;')
 	g.definitions.writeln('}\n')
 
@@ -287,5 +285,5 @@ fn (mut g JsGen) gen_array_sort_call(node ast.CallExpr, compare_fn string) {
 	g.write('v_sort(')
 	g.expr(node.left)
 	g.gen_deref_ptr(node.left_type)
-	g.write(',$compare_fn)')
+	g.write(',${compare_fn})')
 }

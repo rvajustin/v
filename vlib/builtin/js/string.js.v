@@ -17,7 +17,7 @@ pub fn (s string) runes() []rune {
 }
 
 pub fn (s string) slice(a int, b int) string {
-	return string(s.str.slice(a, b))
+	return string(s.str.slice(JS.Number(a), JS.Number(b)))
 }
 
 pub fn (s string) substr(start int, end int) string {
@@ -25,16 +25,16 @@ pub fn (s string) substr(start int, end int) string {
 }
 
 pub fn (s string) after(dot string) string {
-	return string(s.str.slice(s.str.lastIndexOf(dot.str) + 1, int(s.str.length)))
+	return string(s.str.slice(JS.Number(int(s.str.lastIndexOf(dot.str)) + 1), s.str.length))
 }
 
-pub fn (s string) after_char(dot byte) string {
+pub fn (s string) after_char(dot u8) string {
 	// TODO: Implement after byte
 	return s
 }
 
 pub fn (s string) all_after(dot string) string {
-	pos := if dot.len == 0 { -1 } else { s.str.indexOf(dot.str) }
+	pos := if dot.len == 0 { -1 } else { int(s.str.indexOf(dot.str)) }
 	if pos == -1 {
 		return s.clone()
 	}
@@ -43,7 +43,7 @@ pub fn (s string) all_after(dot string) string {
 
 // why does this exist?
 pub fn (s string) all_after_last(dot string) string {
-	pos := if dot.len == 0 { -1 } else { s.str.lastIndexOf(dot.str) }
+	pos := if dot.len == 0 { -1 } else { int(s.str.lastIndexOf(dot.str)) }
 	if pos == -1 {
 		return s.clone()
 	}
@@ -51,7 +51,7 @@ pub fn (s string) all_after_last(dot string) string {
 }
 
 pub fn (s string) all_before(dot string) string {
-	pos := if dot.len == 0 { -1 } else { s.str.indexOf(dot.str) }
+	pos := if dot.len == 0 { -1 } else { int(s.str.indexOf(dot.str)) }
 	if pos == -1 {
 		return s.clone()
 	}
@@ -60,7 +60,7 @@ pub fn (s string) all_before(dot string) string {
 }
 
 pub fn (s string) all_before_last(dot string) string {
-	pos := if dot.len == 0 { -1 } else { s.str.lastIndexOf(dot.str) }
+	pos := if dot.len == 0 { -1 } else { int(s.str.lastIndexOf(dot.str)) }
 	if pos == -1 {
 		return s.clone()
 	}
@@ -72,41 +72,116 @@ pub fn (s string) bool() bool {
 }
 
 pub fn (s string) split(dot string) []string {
-	mut arr := s.str.split(dot.str).map(string(it))
-	#arr = new array(new array_buffer({arr,index_start: new int(0),len: new int(arr.length)}))
+	tmparr := s.str.split(dot.str).map(fn (it JS.Any) JS.Any {
+		res := ''
+		#res.str = it
+
+		return res
+	})
+	_ := tmparr
+	mut arr := []string{}
+	#arr = new array(new array_buffer({arr: tmparr,index_start: new int(0),len: new int(tmparr.length)}))
 
 	return arr
 }
 
-pub fn (s string) bytes() []byte {
+pub fn (s string) split_any(delim string) []string {
+	if delim.len == 0 {
+		return s.split(delim)
+	}
+
+	mut pattern := delim
+
+	// we use a regex with a bracket expression to match any of the characters in delim
+	// so we need to prevent the caller from escaping the regex
+	// to do this we escape any `]`, and remove all `\` while adding an escaped `\\`
+	// back if the original string contained any
+	if pattern.contains('\\') {
+		pattern = pattern.replace('\\', '')
+		pattern = '${pattern}\\\\'
+	}
+	pattern = pattern.replace(']', '\\]')
+
+	mut regexp := JS.RegExp{}
+	#regexp = new RegExp('[' + pattern.str + ']', 'g')
+
+	tmparr := s.str.split(regexp).map(fn (it JS.Any) JS.Any {
+		res := ''
+		#res.str = it
+
+		return res
+	})
+	_ := tmparr
+
+	mut arr := []string{}
+	#arr = new array(new array_buffer({arr: tmparr,index_start: new int(0),len: new int(tmparr.length)}))
+
+	// FIXME: ugly hack to handle edge case where the last character in the string is
+	// one of the delimiters to match V behavior
+	#if (s.len > 0 && pattern.str.includes(s.str[s.len - 1])) {
+	arr.pop()
+	#}
+
+	return arr
+}
+
+pub fn (s string) bytes() []u8 {
 	sep := ''
-	mut arr := s.str.split(sep.str).map(it.charCodeAt(0))
-	#arr = new array(new array_buffer({arr,index_start: new int(0),len: new int(arr.length)}))
+	tmparr := s.str.split(sep.str).map(fn (it JS.Any) JS.Any {
+		return JS.Any(u8(JS.String(it).charCodeAt(JS.Number(0))))
+	})
+	_ := tmparr
+	mut arr := []u8{}
+	#arr = new array(new array_buffer({arr: tmparr,index_start: new int(0),len: new int(tmparr.length)}))
 
 	return arr
 }
 
 pub fn (s string) capitalize() string {
-	part := string(s.str.slice(1, int(s.str.length)))
-	return string(s.str.charAt(0).toUpperCase().concat(part.str))
+	part := string(s.str.slice(JS.Number(1), s.str.length))
+	return string(s.str.charAt(JS.Number(0)).toUpperCase().concat(part.str))
 }
 
 pub fn (s string) clone() string {
 	return string(s.str)
 }
 
+// contains returns `true` if the string contains `substr`.
+// See also: [`string.index`](#string.index)
 pub fn (s string) contains(substr string) bool {
-	return s.str.includes(substr.str)
+	return bool(s.str.includes(substr.str))
 }
 
+// contains_any returns `true` if the string contains any chars in `chars`.
 pub fn (s string) contains_any(chars string) bool {
 	sep := ''
-	for x in chars.str.split(sep.str) {
-		if s.str.includes(x) {
+	res := chars.str.split(sep.str)
+	for i in 0 .. int(res.length) {
+		if bool(s.str.includes(JS.String(res.at(JS.Number(i))))) {
 			return true
 		}
 	}
 	return false
+}
+
+// contains_only returns `true`, if the string contains only the characters in `chars`.
+pub fn (s string) contains_only(chars string) bool {
+	if chars.len == 0 {
+		return false
+	}
+	for ch in s {
+		mut res := 0
+		for c in chars {
+			if ch == c {
+				res++
+				break
+			}
+		}
+		if res == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 pub fn (s string) contains_any_substr(chars []string) bool {
@@ -114,7 +189,7 @@ pub fn (s string) contains_any_substr(chars []string) bool {
 		return true
 	}
 	for x in chars {
-		if s.str.includes(x.str) {
+		if bool(s.str.includes(x.str)) {
 			return true
 		}
 	}
@@ -124,7 +199,12 @@ pub fn (s string) contains_any_substr(chars []string) bool {
 pub fn (s string) count(substr string) int {
 	// TODO: "error: `[]JS.String` is not a struct" when returning arr.length or arr.len
 	arr := s.str.split(substr.str)
-	return native_str_arr_len(arr)
+	len := int(arr.length)
+	if len == 0 {
+		return 0
+	} else {
+		return len - 1
+	}
 }
 
 pub fn (s string) ends_with(p string) bool {
@@ -135,7 +215,7 @@ pub fn (s string) ends_with(p string) bool {
 }
 
 pub fn (s string) starts_with(p string) bool {
-	return s.str.startsWith(p.str)
+	return bool(s.str.startsWith(p.str))
 }
 
 pub fn (s string) fields() []string {
@@ -170,7 +250,7 @@ pub fn (s string) fields() []string {
 }
 
 pub fn (s string) find_between(start string, end string) string {
-	return string(s.str.slice(s.str.indexOf(start.str) + 1, s.str.indexOf(end.str)))
+	return string(s.str.slice(JS.Number(int(s.str.indexOf(start.str)) + 1), s.str.indexOf(end.str)))
 }
 
 // unnecessary in the JS backend, implemented for api parity.
@@ -188,61 +268,66 @@ pub fn (s string) hash() int {
 
 // int returns the value of the string as an integer `'1'.int() == 1`.
 pub fn (s string) int() int {
-	return int(JS.parseInt(s))
+	res := int(0)
+	#if (typeof(s) == "string") { res.val = parseInt(s) }
+	#else { res.val = parseInt(s.str) }
+
+	return res
 }
 
 // i64 returns the value of the string as i64 `'1'.i64() == i64(1)`.
 pub fn (s string) i64() i64 {
-	return i64(JS.parseInt(s))
+	return i64(JS.parseInt(s.str))
 }
 
 // i8 returns the value of the string as i8 `'1'.i8() == i8(1)`.
 pub fn (s string) i8() i8 {
-	return i8(JS.parseInt(s))
+	return i8(JS.parseInt(s.str))
 }
 
 // i16 returns the value of the string as i16 `'1'.i16() == i16(1)`.
 pub fn (s string) i16() i16 {
-	return i16(JS.parseInt(s))
+	return i16(JS.parseInt(s.str))
 }
 
 // f32 returns the value of the string as f32 `'1.0'.f32() == f32(1)`.
 pub fn (s string) f32() f32 {
 	// return C.atof(&char(s.str))
-	return f32(JS.parseFloat(s))
+	return f32(JS.parseFloat(s.str))
 }
 
 // f64 returns the value of the string as f64 `'1.0'.f64() == f64(1)`.
 pub fn (s string) f64() f64 {
-	return f64(JS.parseFloat(s))
+	return f64(JS.parseFloat(s.str))
 }
 
 // u16 returns the value of the string as u16 `'1'.u16() == u16(1)`.
 pub fn (s string) u16() u16 {
-	return u16(JS.parseInt(s))
+	return u16(JS.parseInt(s.str))
 }
 
 // u32 returns the value of the string as u32 `'1'.u32() == u32(1)`.
 pub fn (s string) u32() u32 {
-	return u32(JS.parseInt(s))
+	return u32(JS.parseInt(s.str))
 }
 
 // u64 returns the value of the string as u64 `'1'.u64() == u64(1)`.
 pub fn (s string) u64() u64 {
-	return u64(JS.parseInt(s))
+	return u64(JS.parseInt(s.str))
 }
 
-pub fn (s string) byte() u64 {
-	res := byte(0)
-	#res.val = byte(JS.parseInt(s))
+pub fn (s string) u8() u64 {
+	res := u8(0)
+	#res.val = u8(JS.parseInt(s.str))
 
 	return res
 }
 
 // trim_right strips any of the characters given in `cutset` from the right of the string.
 // Example: assert ' Hello V d'.trim_right(' d') == ' Hello V'
+@[direct_array_access]
 pub fn (s string) trim_right(cutset string) string {
-	if s.len < 1 || cutset.len < 1 {
+	if s == '' || cutset == '' {
 		return s.clone()
 	}
 
@@ -270,9 +355,9 @@ pub fn (s string) trim_right(cutset string) string {
 
 // trim_left strips any of the characters given in `cutset` from the left of the string.
 // Example: assert 'd Hello V developer'.trim_left(' d') == 'Hello V developer'
-[direct_array_access]
+@[direct_array_access]
 pub fn (s string) trim_left(cutset string) string {
-	if s.len < 1 || cutset.len < 1 {
+	if s == '' || cutset == '' {
 		return s.clone()
 	}
 	mut pos := 0
@@ -292,18 +377,18 @@ pub fn (s string) trim_left(cutset string) string {
 	return s[pos..]
 }
 
-// trim_prefix strips `str` from the start of the string.
-// Example: assert 'WorldHello V'.trim_prefix('World') == 'Hello V'
-pub fn (s string) trim_prefix(str string) string {
+// trim_string_left strips `str` from the start of the string.
+// Example: assert 'WorldHello V'.trim_string_left('World') == 'Hello V'
+pub fn (s string) trim_string_left(str string) string {
 	if s.starts_with(str) {
 		return s[str.len..]
 	}
 	return s.clone()
 }
 
-// trim_suffix strips `str` from the end of the string.
-// Example: assert 'Hello VWorld'.trim_suffix('World') == 'Hello V'
-pub fn (s string) trim_suffix(str string) string {
+// trim_string_right strips `str` from the end of the string.
+// Example: assert 'Hello VWorld'.trim_string_right('World') == 'Hello V'
+pub fn (s string) trim_string_right(str string) string {
 	if s.ends_with(str) {
 		return s[..s.len - str.len]
 	}
@@ -351,10 +436,10 @@ fn compare_lower_strings(a &string, b &string) int {
 }
 
 // at returns the byte at index `idx`.
-// Example: assert 'ABC'.at(1) == byte(`B`)
-fn (s string) at(idx int) byte {
-	mut result := byte(0)
-	#result = new byte(s.str.charCodeAt(result))
+// Example: assert 'ABC'.at(1) == u8(`B`)
+fn (s string) at(idx int) u8 {
+	mut result := u8(0)
+	#result = new u8(s.str.charCodeAt(result))
 
 	return result
 }
@@ -388,12 +473,12 @@ pub fn (mut s []string) sort() {
 	s.sort_with_compare(compare_strings)
 }
 
-// sort_ignore_case sorts the string array using case insesitive comparing.
+// sort_ignore_case sorts the string array using case insensitive comparing.
 pub fn (mut s []string) sort_ignore_case() {
 	s.sort_with_compare(compare_lower_strings)
 }
 
-// sort_by_len sorts the the string array by each string's `.len` length.
+// sort_by_len sorts the string array by each string's `.len` length.
 pub fn (mut s []string) sort_by_len() {
 	s.sort_with_compare(compare_strings_by_len)
 }
@@ -410,7 +495,7 @@ pub fn (s string) repeat(count int) string {
 	return result
 }
 
-// TODO(playX): Use this iterator instead of using .split('').map(c => byte(c))
+// TODO(playX): Use this iterator instead of using .split('').map(c => u8(c))
 #function string_iterator(string) { this.stringIteratorFieldIndex = 0; this.stringIteratorIteratedString = string.str; }
 #string_iterator.prototype.next = function next() {
 #var done = true;
@@ -425,9 +510,9 @@ pub fn (s string) repeat(count int) string {
 #done = false;
 #var first = string.charCodeAt(position);
 #if (first < 0xD800 || first > 0xDBFF || position + 1 === length)
-#value = new byte(string[position]);
+#value = new u8(string[position]);
 #else {
-#value = new byte(string[position]+string[position+1])
+#value = new u8(string[position]+string[position+1])
 #}
 #this.stringIteratorFieldIndex = position + value.length;
 #}
@@ -440,7 +525,7 @@ pub fn (s string) repeat(count int) string {
 
 // TODO: Make these functions actually work.
 // strip_margin allows multi-line strings to be formatted in a way that removes white-space
-// before a delimeter. by default `|` is used.
+// before a delimiter. By default `|` is used.
 // Note: the delimiter has to be a byte at this time. That means surrounding
 // the value in ``.
 //
@@ -457,8 +542,8 @@ pub fn (s string) strip_margin() string {
 }
 
 // strip_margin_custom does the same as `strip_margin` but will use `del` as delimiter instead of `|`
-[direct_array_access]
-pub fn (s string) strip_margin_custom(del byte) string {
+@[direct_array_access]
+pub fn (s string) strip_margin_custom(del u8) string {
 	mut sep := del
 	if sep.is_space() {
 		eprintln('Warning: `strip_margin` cannot use white-space as a delimiter')
@@ -467,7 +552,7 @@ pub fn (s string) strip_margin_custom(del byte) string {
 	}
 	// don't know how much space the resulting string will be, but the max it
 	// can be is this big
-	mut ret := []byte{}
+	mut ret := []u8{}
 	#ret = new array()
 
 	mut count := 0
@@ -513,7 +598,7 @@ pub fn (s string) strip_margin_custom(del byte) string {
 // It returns the first Nth parts. When N=0, return all the splits.
 // The last returned element has the remainder of the string, even if
 // the remainder contains more `delim` substrings.
-[direct_array_access]
+@[direct_array_access]
 pub fn (s string) split_nth(delim string, nth int) []string {
 	mut res := []string{}
 	mut i := 0
@@ -558,7 +643,7 @@ pub fn (s string) split_nth(delim string, nth int) []string {
 		}
 		else {
 			mut start := 0
-			// Take the left part for each delimiter occurence
+			// Take the left part for each delimiter occurrence
 			for i <= s.len {
 				is_delim := i + delim.len <= s.len && s[i..i + delim.len] == delim
 				if is_delim {
@@ -588,9 +673,9 @@ struct RepIndex {
 	val_idx int
 }
 
-// replace_each replaces all occurences of the string pairs given in `vals`.
+// replace_each replaces all occurrences of the string pairs given in `vals`.
 // Example: assert 'ABCD'.replace_each(['B','C/','C','D','D','C']) == 'AC/DC'
-[direct_array_access]
+@[direct_array_access]
 pub fn (s string) replace_each(vals []string) string {
 	if s.len == 0 || vals.len == 0 {
 		return s.clone()
@@ -685,8 +770,8 @@ pub fn (s string) replace_each(vals []string) string {
 	return b
 }
 
-// last_index returns the position of the last occurence of the input string.
-fn (s string) last_index_(p string) int {
+// last_index returns the position of the last occurrence of the input string.
+fn (s string) index_last_(p string) int {
 	if p.len > s.len || p.len == 0 {
 		return -1
 	}
@@ -704,13 +789,40 @@ fn (s string) last_index_(p string) int {
 	return -1
 }
 
-// last_index returns the position of the last occurence of the input string.
-pub fn (s string) last_index(p string) ?int {
-	idx := s.last_index_(p)
+// index_last returns the position of the first character of the *last* occurrence of the `needle` string in `s`.
+@[deprecated: 'use `.last_index(needle string)` instead']
+pub fn (s string) index_last(needle string) ?int {
+	return s.last_index(needle)
+}
+
+// last_index returns the position of the first character of the *last* occurrence of the `needle` string in `s`.
+@[inline]
+pub fn (s string) last_index(needle string) ?int {
+	idx := s.index_last_(needle)
 	if idx == -1 {
 		return none
 	}
 	return idx
+}
+
+// index_u8_last returns the index of the *last* occurrence of the byte `c` (if found) in the string.
+// It returns -1, if `c` is not found.
+@[deprecated: 'use `.last_index_u8(c u8)` instead']
+@[deprecated_after: '2024-06-30']
+@[inline]
+pub fn (s string) index_u8_last(c u8) int {
+	return s.last_index_u8(c)
+}
+
+// last_index_u8 returns the index of the last occurrence of byte `c` if it was found in the string.
+@[direct_array_access]
+pub fn (s string) last_index_u8(c u8) int {
+	for i := s.len - 1; i >= 0; i-- {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 pub fn (s string) trim_space() string {
@@ -755,7 +867,7 @@ pub fn (s string) split_into_lines() []string {
 	if s.len == 0 {
 		return res
 	}
-	#res.arr.arr = s.str.split("\n")
+	#res.arr.arr = s.str.split(/\r?\n|\r/)
 	#if (res.arr.arr[res.arr.arr.length-1] == "") res.arr.arr.pop();
 	#res.arr.len = new int(res.arr.arr.length);
 	#res.arr.cap = new int(res.arr.arr.length);
@@ -763,7 +875,7 @@ pub fn (s string) split_into_lines() []string {
 	return res
 }
 
-// replace_once replaces the first occurence of `rep` with the string passed in `with`.
+// replace_once replaces the first occurrence of `rep` with the string passed in `with`.
 pub fn (s string) replace_once(rep string, with_ string) string {
 	s2 := ''
 	#s2.val = s.str.replace(rep.str,with_.str)
@@ -817,9 +929,11 @@ pub fn (s string) is_title() bool {
 	return true
 }
 
-// is_capital returns `true` if the first character in the string is a capital letter.
+// is_capital returns `true`, if the first character in the string `s`,
+// is a capital letter, and the rest are NOT.
 // Example: assert 'Hello'.is_capital() == true
-[direct_array_access]
+// Example: assert 'HelloWorld'.is_capital() == false
+@[direct_array_access]
 pub fn (s string) is_capital() bool {
 	if s.len == 0 || !(s[0] >= `A` && s[0] <= `Z`) {
 		return false
@@ -828,6 +942,18 @@ pub fn (s string) is_capital() bool {
 		if s[i] >= `A` && s[i] <= `Z` {
 			return false
 		}
+	}
+	return true
+}
+
+// starts_with_capital returns `true`, if the first character in the string `s`,
+// is a capital letter, even if the rest are not.
+// Example: assert 'Hello'.starts_with_capital() == true
+// Example: assert 'Hello. World.'.starts_with_capital() == true
+@[direct_array_access]
+pub fn (s string) starts_with_capital() bool {
+	if s.len == 0 || !(s[0] >= `A` && s[0] <= `Z`) {
+		return false
 	}
 	return true
 }
@@ -858,7 +984,7 @@ pub fn (s string) reverse() string {
 }
 
 pub fn (s string) trim(cutset string) string {
-	if s.len < 1 || cutset.len < 1 {
+	if s == '' || cutset == '' {
 		return s.clone()
 	}
 	mut pos_left := 0
@@ -916,4 +1042,31 @@ pub fn (_rune string) utf32_code() int {
 	#res.val = s.str.charCodeAt()
 
 	return res
+}
+
+pub fn tos(jsstr JS.String) string {
+	res := ''
+	#res.str = jsstr
+
+	return res
+}
+
+pub fn (s string) compare(a string) int {
+	min_len := if s.len < a.len { s.len } else { a.len }
+	for i in 0 .. min_len {
+		if s[i] < a[i] {
+			return -1
+		}
+		if s[i] > a[i] {
+			return 1
+		}
+	}
+
+	if s.len < a.len {
+		return -1
+	}
+	if s.len > a.len {
+		return 1
+	}
+	return 0
 }

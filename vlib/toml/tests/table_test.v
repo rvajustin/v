@@ -1,7 +1,6 @@
 import toml
 
-const (
-	toml_table_text = 'inline = {a.b = 42}
+const toml_table_text = 'inline = {a.b = 42}
 
 many.dots.here.dot.dot.dot = {a.b.c = 1, a.b.d = 2}
 
@@ -24,10 +23,9 @@ T = {a.b=1}
 [[arr]]
 t = {a.b=2}
 T = {a.b=2}'
-)
 
 fn test_tables() {
-	mut toml_doc := toml.parse(toml_table_text) or { panic(err) }
+	mut toml_doc := toml.parse_text(toml_table_text) or { panic(err) }
 
 	mut value := toml_doc.value('inline.a.b')
 	assert value.int() == 42
@@ -61,27 +59,31 @@ fn test_tables() {
 
 	mut m := toml_doc.value('tbl') as map[string]toml.Any
 
-	value = m.value('a.b.c.d.e') or { panic(err) }
+	value = m.value('a.b.c.d.e')
 	assert value.int() == 1
 
-	value = m.value('x.a.b.c.d.e') or { panic(err) }
+	value = m.value('x.a.b.c.d.e')
 	assert value.int() == 1
 
 	arr := toml_doc.value('arr') as []toml.Any
 
+	for i := 0; i < arr.len; i++ {
+		entry := (arr[i] as map[string]toml.Any)
+		value = entry.value('t.a.b')
+		assert value.int() == i + 1
+		value = entry.value('T.a.b')
+		assert value.int() == i + 1
+	}
+
 	arr0 := arr[0] as map[string]toml.Any
-	value = arr0.value('t.a.b') or { panic(err) }
+	value = arr0.value('t.a.b')
+	assert value.int() == 1
+	value = arr0.value('T.a.b')
 	assert value.int() == 1
 
 	arr1 := arr[1] as map[string]toml.Any
-	value = arr1.value('T.a.b') or { panic(err) }
-	assert value.int() == 1
-
-	arr2 := arr[2] as map[string]toml.Any
-	value = arr2.value('t.a.b') or { panic(err) }
+	value = arr1.value('t.a.b')
 	assert value.int() == 2
-
-	arr3 := arr[3] as map[string]toml.Any
-	value = arr3.value('T.a.b') or { panic(err) }
+	value = arr1.value('T.a.b')
 	assert value.int() == 2
 }

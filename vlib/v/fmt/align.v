@@ -1,9 +1,9 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module fmt
 
-import math.mathutil
+import v.mathutil
 
 const struct_field_align_threshold = 8
 
@@ -14,8 +14,9 @@ mut:
 	max_type_len int
 }
 
-[params]
+@[params]
 struct AddInfoConfig {
+pub:
 	use_threshold bool
 }
 
@@ -27,7 +28,7 @@ fn (mut infos []AlignInfo) add_new_info(len int, type_len int, line int) {
 	}
 }
 
-[direct_array_access]
+@[direct_array_access]
 fn (mut infos []AlignInfo) add_info(len int, type_len int, line int, cfg AddInfoConfig) {
 	if infos.len == 0 {
 		infos.add_new_info(len, type_len, line)

@@ -1,27 +1,27 @@
 import net.ftp
 
-fn test_ftp_cleint() {
+fn test_ftp_client() {
 	$if !network ? {
 		return
 	}
-	// NB: this function makes network calls to external servers,
+	// Note: this function makes network calls to external servers,
 	// that is why it is not a very good idea to run it in CI.
 	// If you want to run it manually, use:
 	// `v -d network vlib/net/ftp/ftp_test.v`
 	ftp_client_test_inside() or { panic(err) }
 }
 
-fn ftp_client_test_inside() ? {
+fn ftp_client_test_inside() ! {
 	mut zftp := ftp.new()
 	// eprintln(zftp)
 	defer {
 		zftp.close() or { panic(err) }
 	}
-	connect_result := zftp.connect('ftp.redhat.com') ?
+	connect_result := zftp.connect('ftp.redhat.com:21')!
 	assert connect_result
-	login_result := zftp.login('ftp', 'ftp') ?
+	login_result := zftp.login('ftp', 'ftp')!
 	assert login_result
-	pwd := zftp.pwd() ?
+	pwd := zftp.pwd()!
 	assert pwd.len > 0
 	zftp.cd('/') or {
 		assert false

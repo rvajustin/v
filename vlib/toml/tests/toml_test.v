@@ -1,5 +1,6 @@
 import os
 import toml
+import toml.to
 
 const toml_text = os.read_file(
 	os.real_path(os.join_path(os.dir(@FILE), 'testdata', os.file_name(@FILE).all_before_last('.'))) +
@@ -8,8 +9,8 @@ const toml_text = os.read_file(
 fn test_toml() {
 	// File containing the complete text from the example in the official TOML project README.md:
 	// https://github.com/toml-lang/toml/blob/3b11f6921da7b6f5db37af039aa021fee450c091/README.md#Example
-	toml_doc := toml.parse(toml_text) or { panic(err) }
-	toml_json := toml_doc.to_json()
+	toml_doc := toml.parse_text(toml_text) or { panic(err) }
+	toml_json := to.json(toml_doc)
 
 	// NOTE Kept for easier debugging:
 	// dump(toml_doc.ast)
@@ -24,18 +25,13 @@ fn test_toml() {
 	assert title == toml.Any('TOML Example')
 	assert title as string == 'TOML Example'
 
-	owner := toml_doc.value('owner') as map[string]toml.Any
-	any_name := owner.value('name') or { panic(err) }
-	assert any_name.string() == 'Tom Preston-Werner'
-
 	database := toml_doc.value('database') as map[string]toml.Any
 	db_serv := database['server'] or {
 		panic('could not access "server" index in "database" variable')
 	}
 	assert db_serv as string == '192.168.1.1'
 
-	// TODO BUG depending on WHAT directory the tests is run from, this one assert sometimes fail?!?!
-	// assert toml_doc.value('owner.name') as string == 'Tom Preston-Werner'
+	assert toml_doc.value('owner.name') as string == 'Tom Preston-Werner'
 
 	assert toml_doc.value('database.server') as string == '192.168.1.1'
 
@@ -72,7 +68,7 @@ fn test_toml() {
 }
 
 fn test_toml_file() {
-	out_path := os.join_path(os.temp_dir(), 'v_toml_tests')
+	out_path := os.join_path(os.vtmp_dir(), 'toml_tests')
 	test_file := os.join_path(out_path, 'toml_example.toml')
 	os.mkdir_all(out_path) or { assert false }
 	defer {
@@ -81,7 +77,7 @@ fn test_toml_file() {
 	os.write_file(test_file, toml_text) or { assert false }
 	toml_doc := toml.parse_file(test_file) or { panic(err) }
 
-	toml_json := toml_doc.to_json()
+	toml_json := to.json(toml_doc)
 
 	// NOTE Kept for easier debugging:
 	// dump(toml_doc.ast)
@@ -95,15 +91,15 @@ fn test_toml_file() {
 
 fn test_toml_parse_text() {
 	toml_doc := toml.parse_text(toml_text) or { panic(err) }
-	toml_json := toml_doc.to_json()
+	toml_json := to.json(toml_doc)
 	assert toml_json == os.read_file(
 		os.real_path(os.join_path(os.dir(@FILE), 'testdata', os.file_name(@FILE).all_before_last('.'))) +
 		'.out') or { panic(err) }
 }
 
 fn test_toml_parse() {
-	toml_doc := toml.parse(toml_text) or { panic(err) }
-	toml_json := toml_doc.to_json()
+	toml_doc := toml.parse_text(toml_text) or { panic(err) }
+	toml_json := to.json(toml_doc)
 	assert toml_json == os.read_file(
 		os.real_path(os.join_path(os.dir(@FILE), 'testdata', os.file_name(@FILE).all_before_last('.'))) +
 		'.out') or { panic(err) }

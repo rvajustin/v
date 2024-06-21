@@ -18,10 +18,10 @@ fn test_shared_array() {
 		foo['q'] = 20
 	}
 	mut sem := sync.new_semaphore()
-	go incr(shared foo, 'p', mut sem)
-	go incr(shared foo, 'q', mut sem)
-	go incr(shared foo, 'p', mut sem)
-	go incr(shared foo, 'q', mut sem)
+	spawn incr(shared foo, 'p', mut sem)
+	spawn incr(shared foo, 'q', mut sem)
+	spawn incr(shared foo, 'p', mut sem)
+	spawn incr(shared foo, 'q', mut sem)
 	for _ in 0 .. 50000 {
 		lock foo {
 			foo['p'] -= 2
@@ -154,4 +154,18 @@ fn test_shared_map_iteration() {
 	assert n0 == 1
 	assert n1 == 1
 	assert n2 == 1
+}
+
+fn test_shared_map_in() {
+	shared m := {
+		'qwe': 12.75
+		'rtz': -0.125
+		'k':   17
+	}
+	rlock m {
+		assert 'qwe' in m
+		assert 'rtz' in m
+		assert 'k' in m
+		assert 'zxc' !in m
+	}
 }

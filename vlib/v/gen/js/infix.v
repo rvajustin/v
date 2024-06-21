@@ -5,27 +5,28 @@ import v.ast
 
 fn (mut g JsGen) gen_plain_infix_expr(node ast.InfixExpr) {
 	it := node
-	l_sym := g.table.get_final_type_symbol(it.left_type)
-	r_sym := g.table.get_final_type_symbol(it.right_type)
+	l_sym := g.table.final_sym(it.left_type)
+	r_sym := g.table.final_sym(it.right_type)
 	greater_typ := g.greater_typ(it.left_type, it.right_type)
 	cast_ty := if greater_typ == it.left_type { l_sym.cname } else { r_sym.cname }
 	g.write('new ${g.js_name(cast_ty)}( ')
 	g.cast_stack << greater_typ
-	if (l_sym.kind == .i64 || l_sym.kind == .u64) || (r_sym.kind == .i64 || r_sym.kind == .u64) {
+	if !g.pref.output_es5 && ((l_sym.kind == .i64 || l_sym.kind == .u64)
+		|| (r_sym.kind == .i64 || r_sym.kind == .u64)) {
 		g.write('BigInt(')
 		g.expr(node.left)
 		g.gen_deref_ptr(node.left_type)
-		g.write('.val)')
-		g.write(' $node.op.str() ')
+		g.write('.valueOf())')
+		g.write(' ${node.op.str()} ')
 		g.write('BigInt(')
 		g.expr(node.right)
 		g.gen_deref_ptr(node.left_type)
-		g.write('.val)')
+		g.write('.valueOf())')
 	} else {
 		g.expr(node.left)
 		g.gen_deref_ptr(node.left_type)
 		g.write('.valueOf()')
-		g.write(' $node.op.str() ')
+		g.write(' ${node.op.str()} ')
 		g.expr(node.right)
 		g.gen_deref_ptr(node.left_type)
 		g.write('.valueOf()')
@@ -38,7 +39,7 @@ fn (mut g JsGen) gen_plain_infix_expr(node ast.InfixExpr) {
 fn (mut g JsGen) infix_expr_arithmetic_op(node ast.InfixExpr) {
 	left := g.unwrap(node.left_type)
 	right := g.unwrap(node.right_type)
-	method := g.table.type_find_method(left.sym, node.op.str()) or {
+	method := g.table.find_method(left.sym, node.op.str()) or {
 		g.gen_plain_infix_expr(node)
 		return
 	}
@@ -74,7 +75,7 @@ fn (mut g JsGen) op_arg(expr ast.Expr, expected ast.Type, got ast.Type) {
 fn (mut g JsGen) infix_expr_eq_op(node ast.InfixExpr) {
 	left := g.unwrap(node.left_type)
 	right := g.unwrap(node.right_type)
-	has_operator_overloading := g.table.type_has_method(left.sym, '==')
+	has_operator_overloading := g.table.has_method(left.sym, '==')
 	g.write('new bool(')
 	if (left.typ.is_ptr() && right.typ.is_int()) || (right.typ.is_ptr() && left.typ.is_int()) {
 		g.gen_plain_infix_expr(node)
@@ -198,7 +199,7 @@ fn (mut g JsGen) infix_expr_eq_op(node ast.InfixExpr) {
 	} else {
 		g.expr(node.left)
 		g.gen_deref_ptr(node.left_type)
-		g.write('.valueOf() $node.op.str() ')
+		g.write('.valueOf() ${node.op.str()} ')
 		g.expr(node.right)
 		g.gen_deref_ptr(node.right_type)
 		g.write('.valueOf()')
@@ -209,7 +210,7 @@ fn (mut g JsGen) infix_expr_eq_op(node ast.InfixExpr) {
 fn (mut g JsGen) infix_expr_cmp_op(node ast.InfixExpr) {
 	left := g.unwrap(node.left_type)
 	right := g.unwrap(node.right_type)
-	has_operator_overloading := g.table.type_has_method(left.sym, '<')
+	has_operator_overloading := g.table.has_method(left.sym, '<')
 	g.write('new bool(')
 	if left.sym.kind == right.sym.kind && has_operator_overloading {
 		if node.op in [.le, .ge] {
@@ -238,7 +239,7 @@ fn (mut g JsGen) infix_expr_cmp_op(node ast.InfixExpr) {
 	} else {
 		g.expr(node.left)
 		g.gen_deref_ptr(node.left_type)
-		g.write('.valueOf() $node.op.str() ')
+		g.write('.valueOf() ${node.op.str()} ')
 		g.expr(node.right)
 		g.gen_deref_ptr(node.right_type)
 		g.write('.valueOf()')
@@ -281,7 +282,7 @@ fn (mut g JsGen) infix_in_not_in_op(node ast.InfixExpr) {
 	if node.op == .not_in {
 		g.write('!')
 	}
-	if r_sym.unaliased_sym.kind == .array {
+	if r_sym.unaliased_sym.kind in [.array, .array_fixed] {
 		fn_name := g.gen_array_contains_method(node.right_type)
 		g.write('(${fn_name}(')
 		g.expr(node.right)
@@ -297,7 +298,7 @@ fn (mut g JsGen) infix_in_not_in_op(node ast.InfixExpr) {
 	} else if r_sym.unaliased_sym.kind == .map {
 		g.expr(node.right)
 		g.gen_deref_ptr(node.right_type)
-		g.write('.map.has(')
+		g.write('.has(')
 		g.expr(node.left)
 		/*
 		if l_sym.sym.kind == .string {
@@ -337,7 +338,7 @@ fn (mut g JsGen) infix_in_not_in_op(node ast.InfixExpr) {
 
 fn (mut g JsGen) infix_is_not_is_op(node ast.InfixExpr) {
 	g.expr(node.left)
-	rsym := g.table.get_type_symbol(g.unwrap(node.right_type).typ)
+	rsym := g.table.sym(g.unwrap(node.right_type).typ)
 
 	g.gen_deref_ptr(node.left_type)
 	g.write(' instanceof ')

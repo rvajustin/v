@@ -14,8 +14,8 @@ struct array_buffer {
 
 fn (mut a array_buffer) make_copy() {
 	if a.index_start != 0 || a.has_slice {
-		mut new_arr := JS.makeEmtpyJSArray()
-		for mut i in 0 .. a.len {
+		mut new_arr := JS.makeEmptyJSArray()
+		for i in 0 .. a.len {
 			#new_arr.push(a.val.get(i))
 
 			mut x := i
@@ -31,7 +31,7 @@ fn (mut a array_buffer) make_copy() {
 #array_buffer.prototype.make_copy = function() { return array_buffer_make_copy(this) }
 // TODO(playX): Should this be implemented fully in JS, use generics or just voidptr?
 fn (a array_buffer) get(ix int) voidptr {
-	mut res := voidptr(0)
+	mut res := unsafe { nil }
 	#res = a.arr[a.index_start.val + ix.val];
 
 	return res
@@ -105,10 +105,10 @@ pub fn (mut a array) trim(index int) {
 #return result;
 #}
 
-[unsafe]
+@[unsafe]
 pub fn (a array) repeat_to_depth(count int, depth int) array {
 	if count < 0 {
-		panic('array.repeat: count is negative: $count')
+		panic('array.repeat: count is negative: ${count}')
 	}
 	mut arr := empty_array()
 
@@ -128,14 +128,14 @@ pub fn (a array) repeat_to_depth(count int, depth int) array {
 
 // last returns the last element of the array.
 pub fn (a array) last() voidptr {
-	mut res := voidptr(0)
+	mut res := unsafe { nil }
 	#res = a.arr.get(new int(a.len-1));
 
 	return res
 }
 
 fn (a array) get(ix int) voidptr {
-	mut result := voidptr(0)
+	mut result := unsafe { nil }
 	#result = a.arr.get(ix)
 
 	return result
@@ -147,11 +147,11 @@ pub fn (a array) repeat(count int) array {
 	}
 }
 
-#function makeEmptyArray() { return new array(new array_buffer({})); }
-#function makeEmtpyJSArray() { return new Array(); }
+#function makeEmptyArray() { return new array(new array_buffer({ arr: [], len: new int(0), index_start: new int(0), cap: new int(0) })); }
+#function makeEmptyJSArray() { return new Array(); }
 
 fn JS.makeEmptyArray() array
-fn JS.makeEmtpyJSArray() JS.Array
+fn JS.makeEmptyJSArray() JS.Array
 fn empty_array() array {
 	return JS.makeEmptyArray()
 }
@@ -222,13 +222,13 @@ fn v_filter(arr array, callback fn (voidptr) bool) array {
 }
 
 fn v_map(arr array, callback fn (voidptr) voidptr) array {
-	mut maped := empty_array()
+	mut mapped := empty_array()
 
 	for i := 0; i < arr.arr.len; i++ {
-		maped.push(callback(arr.arr.get(i)))
+		mapped.push(callback(arr.arr.get(i)))
 	}
 
-	return maped
+	return mapped
 }
 
 struct array_iterator {
@@ -297,7 +297,7 @@ pub fn (mut a array) prepend(val voidptr) {
 }
 
 // prepend_many prepends another array to this array.
-[unsafe]
+@[unsafe]
 pub fn (mut a array) prepend_many(val voidptr, size int) {
 	unsafe { a.insert_many(0, val, size) }
 }
@@ -335,7 +335,7 @@ pub fn (a array) reduce(iter fn (int, int) int, accum_start int) int {
 }
 
 pub fn (mut a array) pop() voidptr {
-	mut res := voidptr(0)
+	mut res := unsafe { nil }
 	#a.val.arr.make_copy()
 	#res = a.val.arr.arr.pop()
 	#a.val.arr.len.val -= 1
@@ -344,7 +344,7 @@ pub fn (mut a array) pop() voidptr {
 }
 
 pub fn (a array) first() voidptr {
-	mut res := voidptr(0)
+	mut res := unsafe { nil }
 	#res = a.arr.get(new int(0))
 
 	return res
@@ -369,11 +369,11 @@ pub fn (mut a array) delete_last() {
 	#a.val.arr.arr.pop();
 }
 
-[unsafe]
+@[unsafe]
 pub fn (a &array) free() {
 }
 
-// todo: once (a []byte) will work rewrite this
+// todo: once (a []u8) will work rewrite this
 pub fn (a array) bytestr() string {
 	res := ''
 	#for (let i = 0;i < a.arr.len.valueOf();i++) res.str += String.fromCharCode(a.arr.get(new int(i)))
@@ -396,4 +396,223 @@ pub fn (a []string) str() string {
 	sb.write_string(']')
 	res := sb.str()
 	return res
+}
+
+pub fn (a array) to_js_array() JS.Array {
+	tmp := JS.Array.prototype.constructor()
+	for i in 0 .. a.len {
+		tmp.push(a.arr.get(i))
+	}
+	return tmp
+}
+
+pub fn (a array) to_number_array() JS.Array {
+	tmp := JS.Array.prototype.constructor()
+	for i in 0 .. a.len {
+		elem := a.arr.get(i)
+		_ := elem
+		#tmp.push(Number(elem.valueOf()));
+	}
+	return tmp
+}
+
+type EveryFn = fn (JS.Number, JS.Number) JS.Boolean
+
+type BigEveryFn = fn (JS.BigInt, JS.Number) JS.Boolean
+
+pub interface JS.TypedArray {
+mut:
+	byteLength JS.Number
+	byteOffset JS.Number
+	length     JS.Number
+}
+
+pub interface JS.Uint8Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.Uint16Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.Uint32Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.BigUint64Array {
+	JS.TypedArray
+	at(index JS.Number) JS.BigInt
+	every(JS.BigEveryFn) JS.Boolean
+}
+
+pub interface JS.Int8Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.Int16Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.Int32Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.BigInt64Array {
+	JS.TypedArray
+	at(index JS.Number) JS.BigInt
+	every(JS.BigEveryFn) JS.Boolean
+}
+
+pub interface JS.Float32Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub interface JS.Float64Array {
+	JS.TypedArray
+	at(index JS.Number) JS.Number
+	every(JS.EveryFn) JS.Boolean
+}
+
+pub fn uint8_array(arr []u8) JS.Uint8Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut uint_arr := JS.Uint8Array{}
+	#uint_arr = new Uint8Array(tmp)
+
+	return uint_arr
+}
+
+pub fn uint16_array(arr []u16) JS.Uint16Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut uint_arr := JS.Uint16Array{}
+	#uint_arr = new Uint16Array(tmp)
+
+	return uint_arr
+}
+
+pub fn uint32_array(arr []u32) JS.Uint32Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut uint_arr := JS.Uint32Array{}
+	#uint_arr = new Uint32Array(tmp)
+
+	return uint_arr
+}
+
+pub fn int8_array(arr []i8) JS.Int8Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut int_arr := JS.Int8Array{}
+	#int_arr = new Int8Array(tmp)
+
+	return int_arr
+}
+
+pub fn int16_array(arr []i16) JS.Int16Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut int_arr := JS.Int16Array{}
+	#int_arr = new Int16Array(tmp)
+
+	return int_arr
+}
+
+pub fn int32_array(arr []int) JS.Int32Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut int_arr := JS.Int32Array{}
+	#int_arr = new Int32Array(tmp)
+
+	return int_arr
+}
+
+pub fn int64_array(arr []i64) JS.BigInt64Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut int_arr := JS.BigInt64Array{}
+	#int_arr = new BigInt64Array(tmp)
+
+	return int_arr
+}
+
+pub fn uint64_array(arr []u64) JS.BigUint64Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut int_arr := JS.BigUint64Array{}
+	#int_arr = new BigUint64Array(tmp)
+
+	return int_arr
+}
+
+pub fn float32_array(arr []f32) JS.Float32Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut float_arr := JS.Float32Array{}
+	#float_arr = new Float32Array(tmp)
+
+	return float_arr
+}
+
+pub fn float64_array(arr []f64) JS.Float64Array {
+	#let tmp = new Array();
+
+	for elem in arr {
+		_ := elem
+		#tmp.push(elem.val)
+	}
+	mut float_arr := JS.Float64Array{}
+	#float_arr = new Float64Array(tmp)
+
+	return float_arr
 }

@@ -5,7 +5,7 @@ module strconv
 /*
 f32/f64 to string utilities
 
-Copyright (c) 2019-2021 Dario Deledda. All rights reserved.
+Copyright (c) 2019-2024 Dario Deledda. All rights reserved.
 Use of this source code is governed by an MIT license
 that can be found in the LICENSE file.
 
@@ -25,8 +25,10 @@ f64 to string with string format
 */
 
 // TODO: Investigate precision issues
-// f32_to_str_l return a string with the f32 converted in a string in decimal notation
-[manualfree]
+// f32_to_str_l returns `f` as a `string` in decimal notation with a maximum of 6 digits after the dot.
+//
+// Example: assert strconv.f32_to_str_l(34.1234567) == '34.12346'
+@[manualfree]
 pub fn f32_to_str_l(f f32) string {
 	s := f32_to_str(f, 6)
 	res := fxx_to_str_l_parse(s)
@@ -34,15 +36,22 @@ pub fn f32_to_str_l(f f32) string {
 	return res
 }
 
-[manualfree]
-pub fn f32_to_str_l_no_dot(f f32) string {
+// f32_to_str_l_with_dot returns `f` as a `string` in decimal notation with a maximum of 6 digits after the dot.
+// If the decimal digits after the dot are zero, a '.0' is appended for clarity.
+//
+// Example: assert strconv.f32_to_str_l_with_dot(34.) == '34.0'
+@[manualfree]
+pub fn f32_to_str_l_with_dot(f f32) string {
 	s := f32_to_str(f, 6)
-	res := fxx_to_str_l_parse_no_dot(s)
+	res := fxx_to_str_l_parse_with_dot(s)
 	unsafe { s.free() }
 	return res
 }
 
-[manualfree]
+// f64_to_str_l returns `f` as a `string` in decimal notation with a maximum of 18 digits after the dot.
+//
+// Example: assert strconv.f64_to_str_l(123.1234567891011121) == '123.12345678910111'
+@[manualfree]
 pub fn f64_to_str_l(f f64) string {
 	s := f64_to_str(f, 18)
 	res := fxx_to_str_l_parse(s)
@@ -50,16 +59,23 @@ pub fn f64_to_str_l(f f64) string {
 	return res
 }
 
-[manualfree]
-pub fn f64_to_str_l_no_dot(f f64) string {
+// f64_to_str_l_with_dot returns `f` as a `string` in decimal notation with a maximum of 18 digits after the dot.
+// If the decimal digits after the dot are zero, a '.0' is appended for clarity.
+//
+// Example: assert strconv.f64_to_str_l_with_dot (34.) == '34.0'
+@[manualfree]
+pub fn f64_to_str_l_with_dot(f f64) string {
 	s := f64_to_str(f, 18)
-	res := fxx_to_str_l_parse_no_dot(s)
+	res := fxx_to_str_l_parse_with_dot(s)
 	unsafe { s.free() }
 	return res
 }
 
-// f64_to_str_l return a string with the f64 converted in a string in decimal notation
-[manualfree]
+// fxx_to_str_l_parse returns a `string` in decimal notation converted from a
+// floating-point `string` in scientific notation.
+//
+// Example: assert strconv.fxx_to_str_l_parse('34.22e+00') == '34.22'
+@[direct_array_access; manualfree]
 pub fn fxx_to_str_l_parse(s string) string {
 	// check for +inf -inf Nan
 	if s.len > 2 && (s[0] == `n` || s[1] == `i`) {
@@ -68,7 +84,7 @@ pub fn fxx_to_str_l_parse(s string) string {
 
 	m_sgn_flag := false
 	mut sgn := 1
-	mut b := [26]byte{}
+	mut b := [26]u8{}
 	mut d_pos := 1
 	mut i := 0
 	mut i1 := 0
@@ -119,7 +135,7 @@ pub fn fxx_to_str_l_parse(s string) string {
 	}
 
 	// allocate exp+32 chars for the return string
-	mut res := []byte{len: exp + 32, init: 0}
+	mut res := []u8{len: exp + 32, init: 0}
 	mut r_i := 0 // result string buffer index
 
 	// println("s:${sgn} b:${b[0]} es:${exp_sgn} exp:${exp}")
@@ -171,19 +187,30 @@ pub fn fxx_to_str_l_parse(s string) string {
 			i++
 		}
 	}
-	/*
-	// remove the dot form the numbers like 2.
-	if r_i > 1 && res[r_i-1] == `.` {
-		r_i--
+
+	// Add a zero after the dot from the numbers like 2.
+	if r_i > 1 && res[r_i - 1] == `.` {
+		res[r_i] = `0`
+		r_i++
+	} else if `.` !in res {
+		// If there is no dot, add it with a zero
+		res[r_i] = `.`
+		r_i++
+		res[r_i] = `0`
+		r_i++
 	}
-	*/
+
 	res[r_i] = 0
 	return unsafe { tos(res.data, r_i) }
 }
 
-// f64_to_str_l return a string with the f64 converted in a string in decimal notation
-[manualfree]
-pub fn fxx_to_str_l_parse_no_dot(s string) string {
+// fxx_to_str_l_parse_with_dot returns a `string` in decimal notation converted from a
+// floating-point `string` in scientific notation.
+// If the decimal digits after the dot are zero, a '.0' is appended for clarity.
+//
+// Example: assert strconv.fxx_to_str_l_parse_with_dot ('34.e+01') == '340.0'
+@[direct_array_access; manualfree]
+pub fn fxx_to_str_l_parse_with_dot(s string) string {
 	// check for +inf -inf Nan
 	if s.len > 2 && (s[0] == `n` || s[1] == `i`) {
 		return s.clone()
@@ -191,7 +218,7 @@ pub fn fxx_to_str_l_parse_no_dot(s string) string {
 
 	m_sgn_flag := false
 	mut sgn := 1
-	mut b := [26]byte{}
+	mut b := [26]u8{}
 	mut d_pos := 1
 	mut i := 0
 	mut i1 := 0
@@ -242,7 +269,7 @@ pub fn fxx_to_str_l_parse_no_dot(s string) string {
 	}
 
 	// allocate exp+32 chars for the return string
-	mut res := []byte{len: exp + 32, init: 0}
+	mut res := []u8{len: exp + 32, init: 0}
 	mut r_i := 0 // result string buffer index
 
 	// println("s:${sgn} b:${b[0]} es:${exp_sgn} exp:${exp}")
@@ -295,90 +322,18 @@ pub fn fxx_to_str_l_parse_no_dot(s string) string {
 		}
 	}
 
-	// remove the dot form the numbers like 2.
+	// Add a zero after the dot from the numbers like 2.
 	if r_i > 1 && res[r_i - 1] == `.` {
-		r_i--
+		res[r_i] = `0`
+		r_i++
+	} else if `.` !in res {
+		// If there is no dot, add it with a zero
+		res[r_i] = `.`
+		r_i++
+		res[r_i] = `0`
+		r_i++
 	}
 
 	res[r_i] = 0
 	return unsafe { tos(res.data, r_i) }
-}
-
-// dec_digits return the number of decimal digit of an u64
-pub fn dec_digits(n u64) int {
-	if n <= 9_999_999_999 { // 1-10
-		if n <= 99_999 { // 5
-			if n <= 99 { // 2
-				if n <= 9 { // 1
-					return 1
-				} else {
-					return 2
-				}
-			} else {
-				if n <= 999 { // 3
-					return 3
-				} else {
-					if n <= 9999 { // 4
-						return 4
-					} else {
-						return 5
-					}
-				}
-			}
-		} else {
-			if n <= 9_999_999 { // 7
-				if n <= 999_999 { // 6
-					return 6
-				} else {
-					return 7
-				}
-			} else {
-				if n <= 99_999_999 { // 8
-					return 8
-				} else {
-					if n <= 999_999_999 { // 9
-						return 9
-					}
-					return 10
-				}
-			}
-		}
-	} else {
-		if n <= 999_999_999_999_999 { // 5
-			if n <= 999_999_999_999 { // 2
-				if n <= 99_999_999_999 { // 1
-					return 11
-				} else {
-					return 12
-				}
-			} else {
-				if n <= 9_999_999_999_999 { // 3
-					return 13
-				} else {
-					if n <= 99_999_999_999_999 { // 4
-						return 14
-					} else {
-						return 15
-					}
-				}
-			}
-		} else {
-			if n <= 99_999_999_999_999_999 { // 7
-				if n <= 9_999_999_999_999_999 { // 6
-					return 16
-				} else {
-					return 17
-				}
-			} else {
-				if n <= 999_999_999_999_999_999 { // 8
-					return 18
-				} else {
-					if n <= 9_999_999_999_999_999_999 { // 9
-						return 19
-					}
-					return 20
-				}
-			}
-		}
-	}
 }

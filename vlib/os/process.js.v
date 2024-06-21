@@ -1,9 +1,11 @@
 module os
 
-#const $child_process = require('child_process')
+$if js_node {
+	#const $child_process = require('child_process')
+}
 
 // new_process - create a new process descriptor
-// NB: new does NOT start the new process.
+// Note: new does NOT start the new process.
 // That is done because you may want to customize it first,
 // by calling different set_ methods on it.
 // In order to start it, call p.run() or p.wait()
@@ -24,7 +26,6 @@ fn (mut p Process) spawn_internal() {
 	#p.val.pid.on('error', function (err) { builtin.panic('Failed to start subprocess') })
 
 	p.status = .running
-	// todo(playX): stderr,stdin
 	if p.use_stdio_ctl {
 		#p.val.pid.stdout.pipe(process.stdout)
 		#p.val.pid.stdin.pipe(process.stdin)
@@ -94,6 +95,10 @@ pub fn (mut p Process) stdin_write(s string) {
 	#p.val.pid.stdin.write(s)
 }
 
+pub fn (mut p Process) stdin_resume() {
+	#p.val.pid.stdin.resume()
+}
+
 // todo(playX): probably does not work
 
 // will read from stdout pipe, will only return when EOF (end of file) or data
@@ -109,9 +114,13 @@ pub fn (mut p Process) stdout_slurp() string {
 // _check_redirection_call - should be called just by stdxxx methods
 fn (mut p Process) check_redirection_call(fn_name string) {
 	if !p.use_stdio_ctl {
-		panic('Call p.set_redirect_stdio() before calling p.$fn_name')
+		panic('Call p.set_redirect_stdio() before calling p.${fn_name}')
 	}
 	if p.status == .not_started {
 		panic('Call p.${fn_name}() after you have called p.run()')
 	}
+}
+
+pub fn (mut p Process) close() {
+	// no-op on JS backend
 }

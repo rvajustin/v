@@ -4,20 +4,18 @@ import gg
 import gx
 import automaton
 
-const (
-	screen_width  = 800
-	screen_height = 600
-	filled_color  = gx.blue
-)
+const screen_width = 800
+const screen_height = 600
+const filled_color = gx.blue
 
-[live]
+@[live]
 fn print_automaton(app &App) {
 	square_size := 18
 	for y := 1; y < app.a.field.maxy; y++ {
 		for x := 1; x < app.a.field.maxx; x++ {
 			cell := app.a.field.get(x, y)
 			if cell == 1 {
-				app.gg.draw_rect(f32(square_size * x), f32(square_size * y), f32(square_size),
+				app.gg.draw_rect_filled(f32(square_size * x), f32(square_size * y), f32(square_size),
 					f32(square_size), filled_color)
 			}
 		}
@@ -26,7 +24,7 @@ fn print_automaton(app &App) {
 
 struct App {
 mut:
-	gg &gg.Context
+	gg &gg.Context = unsafe { nil }
 	a  automaton.Automaton
 }
 
@@ -39,7 +37,6 @@ fn frame(mut app App) {
 
 fn main() {
 	mut app := App{
-		gg: 0
 		a: automaton.gun()
 	}
 	app.gg = gg.new_context(

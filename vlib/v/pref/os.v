@@ -1,7 +1,9 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module pref
+
+import os
 
 pub enum OS {
 	_auto // Reserved so .macos cannot be misunderstood as auto
@@ -17,37 +19,114 @@ pub enum OS {
 	js_browser
 	js_freestanding
 	android
+	termux // like android, but compiling/running natively on the devices
 	solaris
+	qnx
 	serenity
+	plan9
 	vinix
 	haiku
+	wasm32
+	wasm32_emscripten
+	wasm32_wasi
+	browser // -b wasm -os browser
+	wasi // -b wasm -os wasi
 	raw
 	all
 }
 
 // Helper function to convert string names to OS enum
-pub fn os_from_string(os_str string) ?OS {
+pub fn os_from_string(os_str string) !OS {
 	match os_str {
-		'linux' { return .linux }
-		'windows' { return .windows }
-		'ios' { return .ios }
-		'macos' { return .macos }
-		'freebsd' { return .freebsd }
-		'openbsd' { return .openbsd }
-		'netbsd' { return .netbsd }
-		'dragonfly' { return .dragonfly }
-		'js', 'js_node' { return .js_node }
-		'js_freestanding' { return .js_freestanding }
-		'js_browser' { return .js_browser }
-		'solaris' { return .solaris }
-		'serenity' { return .serenity }
-		'vinix' { return .vinix }
-		'android' { return .android }
-		'haiku' { return .haiku }
-		'raw' { return .raw }
-		'nix' { return .linux }
-		'' { return ._auto }
-		else { return error('bad OS $os_str') }
+		'' {
+			return ._auto
+		}
+		'linux' {
+			return .linux
+		}
+		'nix' {
+			return .linux
+		}
+		'windows' {
+			return .windows
+		}
+		'ios' {
+			return .ios
+		}
+		'macos' {
+			return .macos
+		}
+		'darwin' {
+			return .macos
+		}
+		'freebsd' {
+			return .freebsd
+		}
+		'openbsd' {
+			return .openbsd
+		}
+		'netbsd' {
+			return .netbsd
+		}
+		'dragonfly' {
+			return .dragonfly
+		}
+		'js', 'js_node' {
+			return .js_node
+		}
+		'js_freestanding' {
+			return .js_freestanding
+		}
+		'js_browser' {
+			return .js_browser
+		}
+		'solaris' {
+			return .solaris
+		}
+		'serenity' {
+			return .serenity
+		}
+		'qnx' {
+			return .qnx
+		}
+		'plan9' {
+			return .plan9
+		}
+		'vinix' {
+			return .vinix
+		}
+		'android' {
+			return .android
+		}
+		'termux' {
+			return .termux
+		}
+		'haiku' {
+			return .haiku
+		}
+		'raw' {
+			return .raw
+		}
+		// WASM options:
+		'wasm32' {
+			return .wasm32
+		}
+		'wasm32_wasi' {
+			return .wasm32_wasi
+		}
+		'wasm32_emscripten' {
+			return .wasm32_emscripten
+		}
+		// Native WASM options:
+		'browser' {
+			return .browser
+		}
+		'wasi' {
+			return .wasi
+		}
+		else {
+			return error('bad OS ${os_str}')
+		}
 	}
 }
 
@@ -66,16 +145,37 @@ pub fn (o OS) str() string {
 		.js_freestanding { return 'JavaScript' }
 		.js_browser { return 'JavaScript(Browser)' }
 		.android { return 'Android' }
+		.termux { return 'Termux' }
 		.solaris { return 'Solaris' }
+		.qnx { return 'QNX' }
 		.serenity { return 'SerenityOS' }
+		.plan9 { return 'Plan9' }
 		.vinix { return 'Vinix' }
 		.haiku { return 'Haiku' }
+		.wasm32 { return 'WebAssembly' }
+		.wasm32_emscripten { return 'WebAssembly(Emscripten)' }
+		.wasm32_wasi { return 'WebAssembly(WASI)' }
+		.browser { return 'browser' }
+		.wasi { return 'wasi' }
 		.raw { return 'Raw' }
 		.all { return 'all' }
 	}
 }
 
 pub fn get_host_os() OS {
+	if os.getenv('TERMUX_VERSION') != '' {
+		return .termux
+	}
+	$if android {
+		return .android
+	}
+	$if emscripten ? {
+		return .wasm32_emscripten
+	}
+	// TODO: make this work:
+	// $if wasm32_emscripten {
+	// 	return .wasm32_emscripten
+	// }
 	$if linux {
 		return .linux
 	}
@@ -103,6 +203,9 @@ pub fn get_host_os() OS {
 	$if serenity {
 		return .serenity
 	}
+	//$if plan9 {
+	//	return .plan9
+	//}
 	$if vinix {
 		return .vinix
 	}

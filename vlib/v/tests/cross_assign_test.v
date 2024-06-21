@@ -168,3 +168,24 @@ fn test_cross_assign_of_big_int() {
 	println(a)
 	assert a == big.one_int
 }
+
+fn test_cross_assign_of_reserved_name_variable() {
+	mut small := 1
+	mut big_ := 2
+	mut sum := 2
+
+	for big_ < 4_000_000 {
+		small, big_ = big_, small + big_
+		if big_ % 2 == 0 {
+			sum += big_
+		}
+	}
+	println(small)
+	assert small == 3524578
+
+	println(big_)
+	assert big_ == 5702887
+
+	println(sum)
+	assert sum == 4613732
+}

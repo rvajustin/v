@@ -25,12 +25,12 @@ enabled = true
 '
 
 fn test_parse() {
-	toml_doc := toml.parse(toml_text) or { panic(err) }
+	toml_doc := toml.parse_text(toml_text) or { panic(err) }
 	// dump(toml_doc.ast)
 	// assert false
 
 	assert toml_doc.value('db.enabled').bool()
-	// TODO make this work
+	// TODO: make this work
 	assert toml_doc.value('servers.alpha.ip').string() == '10.0.0.1'
 	assert toml_doc.value('servers.alpha.dc').string() == 'eqdc10'
 

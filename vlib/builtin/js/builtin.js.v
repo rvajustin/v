@@ -2,16 +2,25 @@ module builtin
 
 // used to generate JS throw statements.
 
-[noreturn]
+@[noreturn]
 pub fn js_throw(s any) {
 	#throw s
 
 	for {}
 }
 
-#let globalPrint;
+#let globalPrint, globalWrite;
 $if js_freestanding {
 	#globalPrint = globalThis.print
+	#globalWrite = (typeof globalThis.write === 'function')? write: globalThis.print
+}
+
+pub fn flush_stdout() {
+	// needed for parity with builtin.c.v
+}
+
+pub fn flush_stderr() {
+	// needed for parity with builtin.c.v
 }
 
 pub fn println(s string) {
@@ -25,6 +34,8 @@ pub fn println(s string) {
 pub fn print(s string) {
 	$if js_node {
 		#$process.stdout.write(s.str)
+	} $else $if js_freestanding {
+		#globalWrite(s.str)
 	} $else {
 		panic('Cannot `print` in a browser, use `println` instead')
 	}
@@ -49,10 +60,10 @@ pub fn eprint(s string) {
 // Exits the process in node, and halts execution in the browser
 // because `process.exit` is undefined. Workaround for not having
 // a 'real' way to exit in the browser.
-[noreturn]
+@[noreturn]
 pub fn exit(c int) {
 	JS.process.exit(c)
-	js_throw('exit($c)')
+	js_throw('exit(${c})')
 }
 
 fn opt_ok(data voidptr, option Option) {
@@ -92,8 +103,10 @@ pub fn isnil(val voidptr) bool {
 	res := false
 	// This one is kinda weird. In C and native backend we can cast booleans and integers to pointers
 	// so we just check *for* all possible NULL-like values here.
-	#val = val.valueOf()
-	#res.val = val === null || val === undefined || val === false || val === 0 || val === BigInt(0)
+	#if (typeof val == 'function') { res.val = false; } else {
+	#val = val instanceof voidptr ? val.valueOf().val : val;
+	#res.val = val === null || val === undefined || val === false || val === 0 || val === BigInt(0) || (val instanceof int ? val.val == 0 : false)
+	#}
 
 	return res
 }

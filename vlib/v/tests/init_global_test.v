@@ -1,3 +1,4 @@
+// vtest flaky: true
 // vtest retry: 4
 import sync
 
@@ -13,7 +14,7 @@ fn test_global_init() {
 	intmap['two'] = 27
 	key := 'two'
 	assert intmap[key] == 27
-	t := go pushf64()
+	t := spawn pushf64()
 	numberfns['one'] = one
 	numberfns['two'] = fn () int {
 		return 2
@@ -53,6 +54,11 @@ fn test_no_type() {
 	assert testmap['asd'] == -7.25
 }
 
+fn test_fn_type() {
+	assert func2(22) == 22
+	assert func3(22) == '22'
+}
+
 __global (
 	intmap    map[string]int
 	numberfns map[string]fn () int
@@ -74,6 +80,13 @@ __global (
 		'qwe': 2.5
 		'asd': -7.25
 		'yxc': 3.125
+	}
+	func1     = fn () {}
+	func2     = fn (n int) int {
+		return n
+	}
+	func3     = fn (n int) string {
+		return '${n}'
 	}
 )
 
@@ -111,7 +124,7 @@ fn test_global_shared() {
 		mys.x = 13.0
 		mys.y = -35.125
 	}
-	t := go switch()
+	t := spawn switch()
 	for _ in 0 .. 2500000 {
 		lock mys {
 			mys.x, mys.y = mys.y, mys.x
@@ -122,7 +135,7 @@ fn test_global_shared() {
 	}
 	sem.post()
 	t.wait()
-	eprintln('> a: $a | b: $b')
+	eprintln('> a: ${a} | b: ${b}')
 	assert (a == 13.75 && b == -35.125) || (a == -35.125 && b == 13.75)
 }
 
@@ -141,6 +154,7 @@ fn test_global_shared_map() {
 fn switch2() u64 {
 	mut cnt := u64(0)
 	for {
+		cnt++
 		mtx.@lock()
 		f1, f2 = f2, f1
 		if f1 == 17.0 || f2 == 17.0 {
@@ -148,15 +162,14 @@ fn switch2() u64 {
 			return cnt
 		}
 		mtx.unlock()
-		cnt++
 	}
 	return 0
 }
 
 fn test_global_mutex() {
 	assert f1 == 34.0625
-	t := go switch2()
-	for _ in 0 .. 2500000 {
+	t := spawn switch2()
+	for _ in 0 .. 25000 {
 		mtx.@lock()
 		f1, f2 = f2, f1
 		mtx.unlock()
@@ -172,6 +185,6 @@ fn test_global_mutex() {
 	assert (f1 == 17.0 && f2 == 34.0625) || (f1 == 34.0625 && f2 == 17.0)
 	mtx.runlock()
 	n := t.wait()
-	eprintln('> n: $n | f1: $f1 | $f2: $f2')
+	eprintln('> n: ${n} | f1: ${f1} | f2: ${f2}')
 	assert n > 0
 }

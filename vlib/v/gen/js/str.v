@@ -10,10 +10,10 @@ fn (mut g JsGen) gen_expr_to_string(expr ast.Expr, etype ast.Type) {
 		typ = typ.clear_flag(.shared_f).set_nr_muls(0)
 	}
 
-	mut sym := g.table.get_type_symbol(typ)
+	mut sym := g.table.sym(typ)
 	// when type is alias, print the aliased value
 	if mut sym.info is ast.Alias {
-		parent_sym := g.table.get_type_symbol(sym.info.parent_type)
+		parent_sym := g.table.sym(sym.info.parent_type)
 		if parent_sym.has_method('str') {
 			typ = sym.info.parent_type
 			sym = parent_sym
@@ -31,7 +31,7 @@ fn (mut g JsGen) gen_expr_to_string(expr ast.Expr, etype ast.Type) {
 	} else if typ == ast.bool_type {
 		g.write('new string((')
 		g.expr(expr)
-		g.write(').valueOf() ? "true" : "false")')
+		g.write(').valueOf()? "true" : "false")')
 	} else if sym.kind == .none_ {
 		g.write('new string("<none>")')
 	} else if sym.kind == .enum_ {
@@ -81,10 +81,10 @@ fn (mut g JsGen) gen_expr_to_string(expr ast.Expr, etype ast.Type) {
 	if is_shared {
 		typ = typ.clear_flag(.shared_f).set_nr_muls(0)
 	}
-	mut sym := g.table.get_type_symbol(typ)
+	mut sym := g.table.sym(typ)
 	// when type is alias, print the aliased value
 	if mut sym.info is ast.Alias {
-		parent_sym := g.table.get_type_symbol(sym.info.parent_type)
+		parent_sym := g.table.sym(sym.info.parent_type)
 		if parent_sym.has_method('str') {
 			typ = sym.info.parent_type
 			sym = parent_sym
@@ -100,7 +100,7 @@ fn (mut g JsGen) gen_expr_to_string(expr ast.Expr, etype ast.Type) {
 		g.expr(expr)
 	} else if typ == ast.bool_type {
 		g.expr(expr)
-		g.write('.valueOf() ? new string("true") : new string("false")')
+		g.write('.valueOf()? new string("true") : new string("false")')
 	} else if sym.kind == .none_ {
 		g.write('new string("<none>")')
 	} else if sym.kind == .enum_ {
@@ -120,11 +120,19 @@ fn (mut g JsGen) gen_expr_to_string(expr ast.Expr, etype ast.Type) {
 		is_var_mut := expr.is_auto_deref_var()
 		str_fn_name := g.get_str_fn(typ)
 		g.write('${str_fn_name}(')
+
 		if str_method_expects_ptr && !is_ptr {
 			g.write('new \$ref(')
 		}
+		if typ == ast.u32_type && expr is ast.CastExpr {
+			g.write('new u32(')
+		}
 
 		g.expr(expr)
+
+		if typ == ast.u32_type && expr is ast.CastExpr {
+			g.write(')')
+		}
 		if (!str_method_expects_ptr && is_ptr && !is_shared) || is_var_mut {
 			g.write('.val')
 		}

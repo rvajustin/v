@@ -29,15 +29,11 @@ hosts = [
 ]'
 
 fn test_parse_compact_text() {
-	toml_doc := toml.parse(toml_text) or { panic(err) }
+	toml_doc := toml.parse_text(toml_text) or { panic(err) }
 
 	title := toml_doc.value('title')
 	assert title == toml.Any('TOML Example')
 	assert title as string == 'TOML Example'
-
-	owner := toml_doc.value('owner') as map[string]toml.Any
-	any_name := owner.value('name') or { panic(err) }
-	assert any_name.string() == 'Tom Preston-Werner'
 
 	database := toml_doc.value('database') as map[string]toml.Any
 	db_serv := database['server'] or {
@@ -45,8 +41,7 @@ fn test_parse_compact_text() {
 	}
 	assert db_serv as string == '192.168.1.1'
 
-	// TODO BUG depending on WHAT directory the tests is run from, this one assert sometimes fail?!?!
-	// assert toml_doc.value('owner.name') as string == 'Tom Preston-Werner'
+	assert toml_doc.value('owner.name') as string == 'Tom Preston-Werner'
 
 	assert toml_doc.value('database.server') as string == '192.168.1.1'
 

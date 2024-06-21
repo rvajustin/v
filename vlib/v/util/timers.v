@@ -1,12 +1,16 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
+@[has_globals]
 module util
 
 import time
 
-[heap]
+__global g_timers = new_timers(should_print: false, label: 'g_timers')
+
+@[heap]
 pub struct Timers {
+	label string
 pub mut:
 	swatches     map[string]time.StopWatch
 	should_print bool
@@ -14,17 +18,27 @@ pub mut:
 	already_shown []string
 }
 
-pub fn new_timers(should_print bool) &Timers {
+@[params]
+pub struct TimerParams {
+pub:
+	should_print bool
+	label        string
+}
+
+pub fn new_timers(params TimerParams) &Timers {
+	$if trace_timers_creation ? {
+		eprintln('>>>> new_timers, should_print: ${params.should_print} | label: ${params.label}')
+	}
 	return &Timers{
+		label: params.label
 		swatches: map[string]time.StopWatch{}
-		should_print: should_print
+		should_print: params.should_print
+		already_shown: []string{cap: 100}
 	}
 }
 
-const timers = new_timers(false)
-
 pub fn get_timers() &Timers {
-	return util.timers
+	return g_timers
 }
 
 pub fn timing_start(label string) {
@@ -33,18 +47,15 @@ pub fn timing_start(label string) {
 }
 
 pub fn timing_measure(label string) {
-	mut t := get_timers()
-	t.show(label)
+	g_timers.show(label)
 }
 
 pub fn timing_measure_cumulative(label string) {
-	mut t := get_timers()
-	t.measure_cumulative(label)
+	g_timers.measure_cumulative(label)
 }
 
 pub fn timing_set_should_print(should_print bool) {
-	mut t := util.timers
-	t.should_print = should_print
+	g_timers.should_print = should_print
 }
 
 pub fn (mut t Timers) start(name string) {
@@ -56,9 +67,9 @@ pub fn (mut t Timers) start(name string) {
 pub fn (mut t Timers) measure(name string) i64 {
 	if name !in t.swatches {
 		timer_keys := t.swatches.keys()
-		eprintln('> Timer `$name` was NOT started.')
+		eprintln('> Timer `${name}` was NOT started.')
 		eprintln('>   Available timers:')
-		eprintln('>   $timer_keys')
+		eprintln('>   ${timer_keys}')
 	}
 	ms := t.swatches[name].elapsed().microseconds()
 	return ms
@@ -96,7 +107,7 @@ pub fn (mut t Timers) measure_resume(name string) {
 pub fn (mut t Timers) message(name string) string {
 	ms := f64(t.measure(name)) / 1000.0
 	value := bold('${ms:-8.3f}')
-	formatted_message := '$value ms $name'
+	formatted_message := '${value} ms ${name}'
 	return formatted_message
 }
 

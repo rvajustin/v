@@ -11,21 +11,21 @@ pub fn (ra []rune) string() string {
 
 pub fn (c rune) repeat(count int) string {
 	if count < 0 {
-		panic('rune.repeat: count is negative: $count')
+		panic('rune.repeat: count is negative: ${count}')
 	} else if count == 0 {
 		return ''
 	} else if count == 1 {
 		return c.str()
 	}
 	res := ''
-	#res.str = String.fromCharCode(c.val)
+	#res.str = String.fromCharCode(Number(c.val))
 
 	return res.repeat(count)
 }
 
 pub fn (c rune) str() string {
 	res := ''
-	#res.str = String.fromCharCode(c.val)
+	#res.str = String.fromCharCode(Number(c.val))
 
 	return res
 }

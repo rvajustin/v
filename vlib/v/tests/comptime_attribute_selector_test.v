@@ -1,9 +1,9 @@
-[name: 'abc']
-[amount: 2]
-[abc]
+@[name: 'abc']
+@[amount: 2]
+@[abc]
 struct Abc {}
 
-fn test_comp_for_attributes() {
+fn test_comptime_for_attributes() {
 	mut res := ''
 	mut amount := 0
 	$for attr in Abc.attributes {

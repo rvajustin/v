@@ -5,20 +5,16 @@ import gg
 import time
 import math
 
-const (
-	size  = 700
-	scale = 50.0
-)
+const size = 700
+const scale = 50.0
 
 struct Context {
 mut:
-	gg &gg.Context
+	gg &gg.Context = unsafe { nil }
 }
 
 fn main() {
-	mut context := &Context{
-		gg: 0
-	}
+	mut context := &Context{}
 	context.gg = gg.new_context(
 		width: size
 		height: size
@@ -29,7 +25,6 @@ fn main() {
 		frame_fn: frame
 		resizable: true
 		bg_color: gx.white
-		font_path: gg.system_font_path()
 	)
 	context.gg.run()
 }
@@ -40,7 +35,7 @@ fn frame(mut ctx Context) {
 	ctx.gg.end()
 }
 
-[live]
+@[live]
 fn (ctx &Context) draw() {
 	s := gg.window_size()
 	mut w := s.width
@@ -77,10 +72,10 @@ fn (ctx &Context) draw() {
 		// y = (x + 3) * (x + 3) / stime + stime*2.5
 		// y = math.sqrt(30.0 - x * x) * stime
 		// y -= (stime-0.5) + stime
-		// ctx.gg.draw_rect(f32((w/2) + x * scale), f32((h/2) - y * scale), 2, 2, blue)
-		ctx.gg.draw_rect(f32((w / 2) + x * scale), f32((h / 2) - y * scale), 2, (f32(y) * scale),
-			blue)
-		ctx.gg.draw_rect(f32((w / 2) + x * scale), f32((h / 2) + y * scale), 2, (f32(y) * scale) +
-			32, red)
+		// ctx.gg.draw_rect_filled(f32((w/2) + x * scale), f32((h/2) - y * scale), 2, 2, blue)
+		ctx.gg.draw_rect_filled(f32((w / 2) + x * scale), f32((h / 2) - y * scale), 2,
+			(f32(y) * scale), blue)
+		ctx.gg.draw_rect_filled(f32((w / 2) + x * scale), f32((h / 2) + y * scale), 2,
+			(f32(y) * scale) + 32, red)
 	}
 }

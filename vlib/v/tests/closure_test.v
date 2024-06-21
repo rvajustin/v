@@ -168,3 +168,133 @@ fn test_closures_with_ifstmt() {
 	assert f(0) == 1
 	assert g() == 1
 }
+
+struct Command {
+	a int = 1234
+	b int = 2345
+	c int = 3456
+	d int = 4567
+	e int = 5678
+}
+
+struct App {}
+
+fn test_larger_closure_parameters() {
+	mut app := &App{}
+	eprintln('app ptr: ${u64(app)}')
+	f := fn [mut app] (cmd Command) u64 {
+		p := u64(app)
+		println('>>   p: ${p}')
+		println('>> cmd: ${cmd}')
+		assert cmd.a == 1234
+		assert cmd.b == 2345
+		assert cmd.c == 3456
+		assert cmd.d == 4567
+		assert cmd.e == 5678
+		return p
+	}
+	cmd := Command{}
+	res := f(cmd)
+	println('> res: ${res} | sizeof Command: ${sizeof(Command)}')
+	assert res == u64(app)
+}
+
+fn test_closure_in_for_in_loop() {
+	a := [2, 4, 6, 9]
+	for v in a {
+		func := fn [v] (msg string) string {
+			return '${msg}: ${v}'
+		}
+		res := func('hello')
+		assert res == 'hello: ${v}'
+		// dump(res)
+	}
+}
+
+fn ret_two() (int, int) {
+	return 2, 5
+}
+
+fn test_closure_over_variable_that_is_returned_from_a_multi_value_function() {
+	one, two := ret_two()
+	a := fn [one] () {
+		println(one)
+	}
+	a()
+	println(two)
+}
+
+fn test_cross_var_assign_without_inherited() {
+	f := fn () {
+		mut left := 1
+		mut right := 2
+		left, right = right, left
+		assert left == 2 && right == 1
+	}
+	f()
+}
+
+fn test_cross_var_assign_with_inherited() {
+	mut left := 1
+	mut right := 2
+	f := fn [mut left, mut right] () {
+		left, right = right, left
+		assert left == 2 && right == 1
+	}
+	f()
+}
+
+// for issue 20498
+// test array / string / map as closure params with -autofree
+fn get_func_that_contains_closure() fn () {
+	arr := [1, 2, 3]
+	str := '${'a'}bcabc' // alloc on heap
+	m := {
+		'key1': 'abcabc'
+		'key2': 'abcabc'
+	}
+	return fn [arr, str, m] () {
+		assert arr == [1, 2, 3]
+		assert str == 'abcabc'
+		assert m == {
+			'key1': 'abcabc'
+			'key2': 'abcabc'
+		}
+	}
+}
+
+fn test_array_string_and_map_as_closure_params_with_autofree() {
+	func := get_func_that_contains_closure()
+	func()
+	assert true
+}
+
+// for issue 20208
+// phenomenon: cgen fails when the closure arg is auto_heap and is not reference.
+@[heap]
+struct Abc {
+	value int
+}
+
+@[heap]
+struct Container {
+	abc &Abc = unsafe { nil }
+}
+
+fn (mut c Container) m() fn () {
+	mut cr := &c
+	assert voidptr(c.abc) == voidptr(cr.abc)
+	f := fn [mut cr] () {
+		assert cr.abc.value == 1234
+	}
+	return f
+}
+
+fn test_auto_heap_var_and_non_ptr_as_closure_arg() {
+	mut c := &Container{
+		abc: &Abc{1234}
+	}
+	f := c.m()
+	f()
+	assert true
+}

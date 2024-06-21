@@ -5,14 +5,11 @@ import gx
 import os
 import math
 
-const (
-	win_width  = 600
-	win_height = 700
-	bg_color   = gx.white
-)
+const win_width = 600
+const win_height = 700
+const bg_color = gx.white
 
-const (
-	text = '
+const text = '
 Once upon a midnight dreary, while I pondered, weak and weary,
 Over many a quaint and curious volume of forgotten lore—
     While I nodded, nearly napping, suddenly there came a tapping,
@@ -55,18 +52,16 @@ Soon again I heard a tapping somewhat louder than before.
 Let my heart be still a moment and this mystery explore;—
             ’Tis the wind and nothing more!”
 '
-	lines = text.split('\n')
-)
+
+const lines = text.split('\n')
 
 struct App {
 mut:
-	gg &gg.Context
+	gg &gg.Context = unsafe { nil }
 }
 
 fn main() {
-	mut app := &App{
-		gg: 0
-	}
+	mut app := &App{}
 	mut font_path := os.resource_abs_path(os.join_path('..', 'assets', 'fonts', 'RobotoMono-Regular.ttf'))
 	$if android {
 		font_path = 'fonts/RobotoMono-Regular.ttf'
@@ -75,7 +70,7 @@ fn main() {
 		width: win_width
 		height: win_height
 		create_window: true
-		window_title: 'Empty window'
+		window_title: 'Raven text'
 		user_data: app
 		bg_color: bg_color
 		frame_fn: frame

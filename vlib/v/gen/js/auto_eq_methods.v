@@ -18,7 +18,7 @@ fn (mut g JsGen) gen_sumtype_equality_fn(left_type ast.Type) string {
 	fn_builder.writeln('function ${ptr_styp}_sumtype_eq(a,b) {')
 	fn_builder.writeln('\tlet aProto = Object.getPrototypeOf(a);')
 	fn_builder.writeln('\tlet bProto = Object.getPrototypeOf(b);')
-	fn_builder.writeln('\tif (aProto !== bProto) { return new booL(false); }')
+	fn_builder.writeln('\tif (aProto !== bProto) { return new bool(false); }')
 	for typ in info.variants {
 		variant := g.unwrap(typ)
 		fn_builder.writeln('\tif (aProto == ${g.js_name(variant.sym.name)}) {')
@@ -89,27 +89,27 @@ fn (mut g JsGen) gen_struct_equality_fn(left_type ast.Type) string {
 				fn_builder.write_string('a.${field_name}.str == b.${field_name}.str')
 			} else if field_type.sym.kind == .sum_type && !field.typ.is_ptr() {
 				eq_fn := g.gen_sumtype_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_sumtype_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_sumtype_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .struct_ && !field.typ.is_ptr() {
 				eq_fn := g.gen_struct_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_struct_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_struct_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .array && !field.typ.is_ptr() {
 				eq_fn := g.gen_array_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_arr_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_arr_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .array_fixed && !field.typ.is_ptr() {
 				eq_fn := g.gen_fixed_array_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_arr_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_arr_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .map && !field.typ.is_ptr() {
 				eq_fn := g.gen_map_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_map_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_map_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .alias && !field.typ.is_ptr() {
 				eq_fn := g.gen_alias_equality_fn(field.typ)
-				fn_builder.write_string('${eq_fn}_alias_eq(a.$field_name, b.$field_name)')
+				fn_builder.write_string('${eq_fn}_alias_eq(a.${field_name}, b.${field_name})')
 			} else if field_type.sym.kind == .function {
-				fn_builder.write_string('a.$field_name == b.$field_name')
+				fn_builder.write_string('a.${field_name} == b.${field_name}')
 			} else {
 				// fallback to vEq for JS types or primitives.
-				fn_builder.write_string('vEq(a.$field_name,b.$field_name)')
+				fn_builder.write_string('vEq(a.${field_name},b.${field_name})')
 			}
 		}
 	} else {
@@ -134,7 +134,7 @@ fn (mut g JsGen) gen_alias_equality_fn(left_type ast.Type) string {
 		g.definitions.writeln(fn_builder.str())
 	}
 	fn_builder.writeln('function ${ptr_styp}_alias_eq(a,b) {')
-	sym := g.table.get_type_symbol(info.parent_type)
+	sym := g.table.sym(info.parent_type)
 	if sym.kind == .string {
 		fn_builder.writeln('\treturn new bool(a.str == b.str);')
 	} else if sym.kind == .sum_type && !left.typ.is_ptr() {
@@ -231,7 +231,7 @@ fn (mut g JsGen) gen_fixed_array_equality_fn(left_type ast.Type) string {
 		g.definitions.writeln(fn_builder.str())
 	}
 	fn_builder.writeln('function ${ptr_styp}_arr_eq(a,b) {')
-	fn_builder.writeln('\tfor (let i = 0; i < $size; ++i) {')
+	fn_builder.writeln('\tfor (let i = 0; i < ${size}; ++i) {')
 	// compare every pair of elements of the two fixed arrays
 	if elem.sym.kind == .string {
 		fn_builder.writeln('\t\tif (a.arr.get(new int(i)).str != b.arr.get(new int(i)).str) {')
@@ -281,12 +281,14 @@ fn (mut g JsGen) gen_map_equality_fn(left_type ast.Type) string {
 		g.definitions.writeln(fn_builder.str())
 	}
 	fn_builder.writeln('function ${ptr_styp}_map_eq(a,b) {')
-	fn_builder.writeln('\tif (a.map.size != b.map.size) {')
+	fn_builder.writeln('\tif (Object.keys(a.map).length != Object.keys(b.map).length) {')
 	fn_builder.writeln('\t\treturn false;')
 	fn_builder.writeln('\t}')
-	fn_builder.writeln('\tfor (let [key,value] of a.map) {')
-	fn_builder.writeln('\t\tif (!b.map.has(key)) { return new bool(false); }')
-	fn_builder.writeln('\t\tlet x = value; let y = b.map.get(key);')
+	fn_builder.writeln('\tlet keys = Object.keys(a.map);')
+	fn_builder.writeln('\tfor (let i = 0;i < keys.length;i++) {')
+	fn_builder.writeln('\t\tlet key = keys[i]; let value = a.map[key];')
+	fn_builder.writeln('\t\tif (!(key in b.map)) { return new bool(false); }')
+	fn_builder.writeln('\t\tlet x = value; let y = b.map[key];')
 	kind := g.table.type_kind(value.typ)
 	if kind == .string {
 		fn_builder.writeln('\t\tif (x.str != y.str) {')

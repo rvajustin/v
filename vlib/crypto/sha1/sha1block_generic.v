@@ -1,21 +1,19 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 // This is the generic version with no architecture optimizations.
 // In its own file so that an architecture
-// optimized verision can be substituted
+// optimized version can be substituted
 module sha1
 
 import math.bits
 
-const (
-	_k0 = 0x5A827999
-	_k1 = 0x6ED9EBA1
-	_k2 = 0x8F1BBCDC
-	_k3 = 0xCA62C1D6
-)
+const _k0 = 0x5A827999
+const _k1 = 0x6ED9EBA1
+const _k2 = u32(0x8F1BBCDC)
+const _k3 = u32(0xCA62C1D6)
 
-fn block_generic(mut dig Digest, p_ []byte) {
+fn block_generic(mut dig Digest, p_ []u8) {
 	unsafe {
 		mut p := p_
 		mut w := []u32{len: (16)}
@@ -29,7 +27,7 @@ fn block_generic(mut dig Digest, p_ []byte) {
 			// rounds below if needed for speed.
 			for i in 0 .. 16 {
 				j := i * 4
-				w[i] = u32(p[j] << 24) | u32(p[j + 1] << 16) | u32(p[j + 2] << 8) | u32(p[j + 3])
+				w[i] = u32(p[j]) << 24 | u32(p[j + 1]) << 16 | u32(p[j + 2]) << 8 | u32(p[j + 3])
 			}
 			mut a := h0
 			mut b := h1
