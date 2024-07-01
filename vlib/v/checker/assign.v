@@ -87,7 +87,9 @@ fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 				// If it's a void type, it's an unknown variable, already had an error earlier.
 				return
 			}
-			c.error('assignment mismatch: ${node.left.len} variable(s) but `${right_first.get_name()}()` returns ${right_len} value(s)',
+			str_variables := if node.left.len == 1 { 'variable' } else { 'variables' }
+			str_values := if right_len == 1 { 'value' } else { 'values' }
+			c.error('assignment mismatch: ${node.left.len} ${str_variables} but `${right_first.get_name()}()` returns ${right_len} ${str_values}',
 				node.pos)
 		} else if mut right_first is ast.ParExpr {
 			mut right_next := right_first
@@ -105,7 +107,9 @@ fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 				}
 			}
 		} else {
-			c.error('assignment mismatch: ${node.left.len} variable(s) ${right_len} value(s)',
+			str_variables := if node.left.len == 1 { 'variable' } else { 'variables' }
+			str_values := if right_len == 1 { 'value' } else { 'values' }
+			c.error('assignment mismatch: ${node.left.len} ${str_variables} ${right_len} ${str_values}',
 				node.pos)
 		}
 		return
@@ -397,6 +401,16 @@ fn (mut c Checker) assign_stmt(mut node ast.AssignStmt) {
 									&& right.expr is ast.ComptimeSelector {
 									left.obj.ct_type_var = .field_var
 									left.obj.typ = c.comptime.comptime_for_field_type
+								} else if mut right is ast.CallExpr {
+									if left.obj.ct_type_var == .no_comptime
+										&& c.table.cur_fn != unsafe { nil }
+										&& c.table.cur_fn.generic_names.len != 0
+										&& !right.comptime_ret_val
+										&& right.return_type_generic.has_flag(.generic)
+										&& c.is_generic_expr(right) {
+										// mark variable as generic var because its type changes according to fn return generic resolution type
+										left.obj.ct_type_var = .generic_var
+									}
 								}
 							}
 							ast.GlobalField {

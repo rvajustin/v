@@ -4,6 +4,7 @@
 module c
 
 import os
+import term
 import strings
 import hash.fnv1a
 import v.ast
@@ -217,10 +218,11 @@ mut:
 	// where an aggregate (at least two types) is generated
 	// sum type deref needs to know which index to deref because unions take care of the correct field
 	aggregate_type_idx  int
-	arg_no_auto_deref   bool   // smartcast must not be dereferenced
-	branch_parent_pos   int    // used in BranchStmt (continue/break) for autofree stop position
-	returned_var_name   string // to detect that a var doesn't need to be freed since it's being returned
-	infix_left_var_name string // a && if expr
+	arg_no_auto_deref   bool     // smartcast must not be dereferenced
+	branch_parent_pos   int      // used in BranchStmt (continue/break) for autofree stop position
+	returned_var_name   string   // to detect that a var doesn't need to be freed since it's being returned
+	infix_left_var_name string   // a && if expr
+	curr_var_name       []string // curr var name on assignment
 	called_fn_name      string
 	timers              &util.Timers = util.get_timers()
 	force_main_console  bool // true when [console] used on fn main()
@@ -2044,8 +2046,10 @@ fn (mut g Gen) expr_with_tmp_var(expr ast.Expr, expr_typ ast.Type, ret_typ ast.T
 				}
 			} else {
 				simple_assign =
-					(expr is ast.SelectorExpr || (expr is ast.Ident && !expr.is_auto_heap()))
-					&& ret_typ.is_ptr() && expr_typ.is_ptr() && expr_typ.has_flag(.option)
+					((expr is ast.SelectorExpr || (expr is ast.Ident && !expr.is_auto_heap()))
+					&& ret_typ.is_ptr() && expr_typ.is_ptr() && expr_typ.has_flag(.option))
+					|| (expr_typ == ret_typ && !(expr_typ.has_option_or_result()
+					&& (expr_typ.is_ptr() || expr is ast.LambdaExpr)))
 				// option ptr assignment simplification
 				if simple_assign {
 					g.write('${tmp_var} = ')
@@ -2185,6 +2189,9 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 			// }
 			old_is_void_expr_stmt := g.is_void_expr_stmt
 			g.is_void_expr_stmt = !node.is_expr
+			if node.expr.is_auto_deref_var() {
+				g.write('*')
+			}
 			if node.typ != ast.void_type && g.expected_cast_type != 0
 				&& node.expr !in [ast.IfExpr, ast.MatchExpr] {
 				g.expr_with_cast(node.expr, node.typ, g.expected_cast_type)
@@ -2387,7 +2394,7 @@ fn (mut g Gen) get_sumtype_casting_fn(got_ ast.Type, exp_ ast.Type) string {
 		g.get_sumtype_variant_name(exp_, exp_sym)
 	}
 	// fn_name := '${got_sym.cname}_to_sumtype_${exp_sym.cname}'
-	fn_name := '${g.get_sumtype_variant_name(got_, got_sym)}_to_sumtype_${cname}/*KEK*/'
+	fn_name := '${g.get_sumtype_variant_name(got_, got_sym)}_to_sumtype_${cname}'
 	if got == exp || g.sumtype_definitions[i] {
 		return fn_name
 	}
@@ -4160,6 +4167,9 @@ fn (mut g Gen) debugger_stmt(node ast.DebuggerStmt) {
 	mut count := 1
 	outer: for _, obj in scope_vars {
 		if obj.name !in vars {
+			if obj.name in g.curr_var_name {
+				continue
+			}
 			if obj is ast.Var && g.check_var_scope(obj, node.pos.pos) {
 				keys.write_string('_SLIT("${obj.name}")')
 				var_typ := if obj.ct_type_var != .no_comptime {
@@ -4285,7 +4295,7 @@ fn (mut g Gen) debugger_stmt(node ast.DebuggerStmt) {
 fn (mut g Gen) enum_decl(node ast.EnumDecl) {
 	enum_name := util.no_dots(node.name)
 	is_flag := node.is_flag
-	if g.pref.ccompiler == 'msvc' {
+	if g.is_cc_msvc {
 		mut last_value := '0'
 		enum_typ_name := g.table.get_type_name(node.typ)
 		g.enum_typedefs.writeln('')
@@ -4720,12 +4730,6 @@ fn (mut g Gen) select_expr(node ast.SelectExpr) {
 	}
 }
 
-@[inline]
-pub fn (mut g Gen) is_generic_param_var(node ast.Expr) bool {
-	return node is ast.Ident && node.info is ast.IdentVar && node.obj is ast.Var
-		&& (node.obj as ast.Var).ct_type_var == .generic_param
-}
-
 fn (mut g Gen) get_const_name(node ast.Ident) string {
 	if g.pref.translated && !g.is_builtin_mod
 		&& !util.module_is_builtin(node.name.all_before_last('.')) {
@@ -4933,7 +4937,14 @@ fn (mut g Gen) ident(node ast.Ident) {
 								if node.obj.is_inherited {
 									g.write(closure_ctx + '->')
 								}
-								g.write(name)
+								if node.obj.typ.nr_muls() > 1 {
+									g.write('(')
+									g.write('*'.repeat(node.obj.typ.nr_muls() - 1))
+									g.write(name)
+									g.write(')')
+								} else {
+									g.write(name)
+								}
 								if node.obj.orig_type.is_ptr() {
 									is_ptr = true
 								}
@@ -6267,6 +6278,8 @@ fn (mut g Gen) global_decl(node ast.GlobalDecl) {
 			default_initializer := g.type_default(field.typ)
 			if default_initializer == '{0}' && should_init {
 				def_builder.write_string(' = {0}')
+			} else if default_initializer == '{EMPTY_STRUCT_INITIALIZATION}' && should_init {
+				init = '\tmemcpy(${field.name}, (${styp}){${g.type_default(field.typ)}}, sizeof(${styp})); // global'
 			} else {
 				if field.name !in ['as_cast_type_indexes', 'g_memory_block', 'global_allocator'] {
 					init = '\t${field.name} = *(${styp}*)&((${styp}[]){${g.type_default(field.typ)}}[0]); // global'
@@ -7150,7 +7163,13 @@ fn (mut g Gen) type_default(typ_ ast.Type) string {
 		.string {
 			return '(string){.str=(byteptr)"", .is_lit=1}'
 		}
-		.interface_, .sum_type, .array_fixed, .multi_return, .thread {
+		.array_fixed {
+			if sym.is_empty_struct_array() {
+				return '{EMPTY_STRUCT_INITIALIZATION}'
+			}
+			return '{0}'
+		}
+		.interface_, .sum_type, .multi_return, .thread {
 			return '{0}'
 		}
 		.alias {
@@ -7873,6 +7892,38 @@ fn (mut g Gen) trace[T](fbase string, x &T) {
 	if g.file.path_base == fbase {
 		println('> g.trace | ${fbase:-10s} | ${voidptr(x):16} | ${x}')
 	}
+}
+
+@[params]
+pub struct TraceLastLinesParams {
+pub:
+	nlines int = 2
+	msg    string
+}
+
+fn (mut g Gen) trace_last_lines(fbase string, params TraceLastLinesParams) {
+	if fbase != '' && g.file.path_base != fbase {
+		return
+	}
+	if params.nlines < 1 || params.nlines > 1000 {
+		return
+	}
+	if g.out.len == 0 {
+		return
+	}
+	mut lines := 1
+	mut i := g.out.len - 1
+	for ; i >= 0; i-- {
+		if g.out[i] == `\n` {
+			if lines == params.nlines {
+				break
+			}
+			lines++
+		}
+	}
+	println('> g.trace_last_lines g.out last ${params.nlines} lines, pos: ${i + 1} ... g.out.len: ${g.out.len} ${params.msg}')
+	println(term.colorize(term.green, g.out.after(i + 1)))
+	println('`'.repeat(80))
 }
 
 pub fn (mut g Gen) get_array_depth(el_typ ast.Type) int {

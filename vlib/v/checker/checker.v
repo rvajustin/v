@@ -18,6 +18,7 @@ import v.comptime
 // prevent stack overflows by restricting too deep recursion:
 const expr_level_cutoff_limit = 40
 const stmt_level_cutoff_limit = 40
+const type_level_cutoff_limit = 40 // it is very rarely deeper than 4
 const iface_level_cutoff_limit = 100
 const generic_fn_cutoff_limit_per_fn = 10_000 // how many times post_process_generic_fns, can visit the same function before bailing out
 
@@ -101,6 +102,7 @@ mut:
 	// increases for `x := optfn() or { statement_list3 }`;
 	// files                            []ast.File
 	expr_level                       int // to avoid infinite recursion segfaults due to compiler bugs
+	type_level                       int // to avoid infinite recursion segfaults due to compiler bugs in ensure_type_exists
 	ensure_generic_type_level        int // to avoid infinite recursion segfaults in ensure_generic_type_specify_type_names
 	cur_orm_ts                       ast.TypeSymbol
 	cur_anon_fn                      &ast.AnonFn = unsafe { nil }
@@ -1647,7 +1649,7 @@ fn (mut c Checker) selector_expr(mut node ast.SelectorExpr) ast.Type {
 		node.typ = field.typ
 		if node.or_block.kind == .block {
 			c.expected_or_type = node.typ.clear_option_and_result()
-			c.stmts_ending_with_expression(mut node.or_block.stmts)
+			c.stmts_ending_with_expression(mut node.or_block.stmts, c.expected_or_type)
 			c.check_or_expr(node.or_block, node.typ, c.expected_or_type, node)
 			c.expected_or_type = ast.void_type
 		}
@@ -2593,7 +2595,7 @@ fn (mut c Checker) import_stmt(node ast.Import) {
 fn (mut c Checker) stmts(mut stmts []ast.Stmt) {
 	old_stmt_level := c.stmt_level
 	c.stmt_level = 0
-	c.stmts_ending_with_expression(mut stmts)
+	c.stmts_ending_with_expression(mut stmts, c.expected_or_type)
 	c.stmt_level = old_stmt_level
 }
 
@@ -2602,7 +2604,7 @@ fn (mut c Checker) stmts(mut stmts []ast.Stmt) {
 //    `x := opt() or { stmt1 stmt2 ExprStmt }`,
 //    `x := if cond { stmt1 stmt2 ExprStmt } else { stmt2 stmt3 ExprStmt }`,
 //    `x := match expr { Type1 { stmt1 stmt2 ExprStmt } else { stmt2 stmt3 ExprStmt }`.
-fn (mut c Checker) stmts_ending_with_expression(mut stmts []ast.Stmt) {
+fn (mut c Checker) stmts_ending_with_expression(mut stmts []ast.Stmt, expected_or_type ast.Type) {
 	if stmts.len == 0 {
 		c.scope_returns = false
 		return
@@ -2623,7 +2625,10 @@ fn (mut c Checker) stmts_ending_with_expression(mut stmts []ast.Stmt) {
 				unreachable = stmt.pos
 			}
 		}
+		prev_expected_or_type := c.expected_or_type
+		c.expected_or_type = expected_or_type
 		c.stmt(mut stmt)
+		c.expected_or_type = prev_expected_or_type
 		if !c.inside_anon_fn && c.in_for_count > 0 && stmt is ast.BranchStmt
 			&& stmt.kind in [.key_continue, .key_break] {
 			c.scope_returns = true
@@ -3005,6 +3010,10 @@ pub fn (mut c Checker) expr(mut node ast.Expr) ast.Type {
 			if node.language == .c {
 				// string literal starts with "c": `C.printf(c'hello')`
 				return ast.u8_type.set_nr_muls(1)
+			}
+			if node.is_raw {
+				// raw strings don't need any sort of checking related to unicode
+				return ast.string_type
 			}
 			return c.string_lit(mut node)
 		}
@@ -3649,7 +3658,7 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 			}
 			unwrapped_typ := typ.clear_option_and_result()
 			c.expected_or_type = unwrapped_typ
-			c.stmts_ending_with_expression(mut node.or_expr.stmts)
+			c.stmts_ending_with_expression(mut node.or_expr.stmts, c.expected_or_type)
 			c.check_or_expr(node.or_expr, typ, c.expected_or_type, node)
 			return unwrapped_typ
 		}
@@ -3759,7 +3768,7 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 						}
 						unwrapped_typ := typ.clear_option_and_result()
 						c.expected_or_type = unwrapped_typ
-						c.stmts_ending_with_expression(mut node.or_expr.stmts)
+						c.stmts_ending_with_expression(mut node.or_expr.stmts, c.expected_or_type)
 						c.check_or_expr(node.or_expr, typ, c.expected_or_type, node)
 						return unwrapped_typ
 					}
@@ -3821,7 +3830,7 @@ fn (mut c Checker) ident(mut node ast.Ident) ast.Type {
 					if node.or_expr.kind != .absent {
 						unwrapped_typ := typ.clear_option_and_result()
 						c.expected_or_type = unwrapped_typ
-						c.stmts_ending_with_expression(mut node.or_expr.stmts)
+						c.stmts_ending_with_expression(mut node.or_expr.stmts, c.expected_or_type)
 						c.check_or_expr(node.or_expr, typ, c.expected_or_type, node)
 					}
 					return typ
@@ -4215,6 +4224,13 @@ fn (mut c Checker) find_obj_definition(obj ast.ScopeObject) !ast.Expr {
 	if mut expr is ast.Ident {
 		return c.find_definition(expr)
 	}
+	if mut expr is ast.ComptimeCall && expr.is_compile_value {
+		if expr.result_type == ast.bool_type {
+			return ast.BoolLiteral{
+				val: expr.compile_value.bool()
+			}
+		}
+	}
 	if !expr.is_pure_literal() {
 		return error('definition of `${name}` is unknown at compile time')
 	}
@@ -4448,7 +4464,7 @@ fn (mut c Checker) prefix_expr(mut node ast.PrefixExpr) ast.Type {
 	if node.op == .arrow {
 		raw_right_sym := c.table.final_sym(right_type)
 		if raw_right_sym.kind == .chan {
-			c.stmts_ending_with_expression(mut node.or_block.stmts)
+			c.stmts_ending_with_expression(mut node.or_block.stmts, c.expected_or_type)
 			return raw_right_sym.chan_info().elem_type
 		}
 		c.type_error_for_operator('<-', '`chan`', raw_right_sym.name, node.pos)
@@ -4619,8 +4635,9 @@ fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 			info := typ_sym.info as ast.Map
 			c.expected_type = info.key_type
 			index_type := c.expr(mut node.index)
-			if !c.check_types(index_type, info.key_type) {
-				err := c.expected_msg(index_type, info.key_type)
+			key_type := c.unwrap_generic(info.key_type)
+			if !c.check_types(index_type, key_type) {
+				err := c.expected_msg(index_type, key_type)
 				c.error('invalid key: ${err}', node.pos)
 			}
 			value_sym := c.table.sym(info.value_type)
@@ -4645,7 +4662,7 @@ fn (mut c Checker) index_expr(mut node ast.IndexExpr) ast.Type {
 	if node.or_expr.stmts.len > 0 && node.or_expr.stmts.last() is ast.ExprStmt {
 		c.expected_or_type = typ
 	}
-	c.stmts_ending_with_expression(mut node.or_expr.stmts)
+	c.stmts_ending_with_expression(mut node.or_expr.stmts, c.expected_or_type)
 	c.check_expr_option_or_result_call(node, typ)
 	return typ
 }
@@ -4930,6 +4947,15 @@ fn (mut c Checker) ensure_generic_type_specify_type_names(typ ast.Type, pos toke
 fn (mut c Checker) ensure_type_exists(typ ast.Type, pos token.Pos) bool {
 	if typ == 0 {
 		c.error('unknown type', pos)
+		return false
+	}
+	c.type_level++
+	defer {
+		c.type_level--
+	}
+	if c.type_level > checker.type_level_cutoff_limit {
+		c.error('checker: too many levels of Checker.ensure_type_exists calls: ${c.type_level}, probably due to a self referencing type',
+			pos)
 		return false
 	}
 	sym := c.table.sym(typ)

@@ -774,6 +774,7 @@ pub mut:
 	receiver_type          Type // User / T, if receiver is generic, then cgen requires receiver_type to be T
 	receiver_concrete_type Type // if receiver_type is T, then receiver_concrete_type is concrete type, otherwise it is the same as receiver_type
 	return_type            Type
+	return_type_generic    Type   // the original generic return type from fn def
 	fn_var_type            Type   // the fn type, when `is_fn_a_const` or `is_fn_var` is true
 	const_name             string // the fully qualified name of the const, i.e. `main.c`, given `const c = abc`, and callexpr: `c()`
 	should_be_skipped      bool   // true for calls to `[if someflag?]` functions, when there is no `-d someflag`
@@ -825,6 +826,7 @@ pub enum ComptimeVarKind {
 	value_var // map value from `for k,v in t.$(field.name)`
 	field_var // comptime field var `a := t.$(field.name)`
 	generic_param // generic fn parameter
+	generic_var // generic var
 	smartcast // smart cast when used in `is v` (when `v` is from $for .variants)
 }
 
@@ -1010,11 +1012,25 @@ pub mut:
 	obj            ScopeObject
 	mod            string
 	name           string
+	full_name      string
 	kind           IdentKind
 	info           IdentInfo
 	is_mut         bool // if mut *token* is before name. Use `is_mut()` to lookup mut variable
 	or_expr        OrExpr
 	concrete_types []Type
+}
+
+// full_name returns the name of the ident, prefixed with the module name
+pub fn (mut i Ident) full_name() string {
+	if i.full_name != '' {
+		return i.full_name
+	}
+	if i.name.contains('.') {
+		i.full_name = i.name
+	} else {
+		i.full_name = i.mod + '.' + i.name
+	}
+	return i.full_name
 }
 
 pub fn (i &Ident) is_auto_heap() bool {
@@ -1963,6 +1979,19 @@ pub fn (mut cc ComptimeCall) resolve_compile_value(compile_values map[string]str
 	cc.compile_value = value
 	cc.result_type = typ
 	cc.is_d_resolved = true
+}
+
+// expr_str returns the string representation of `ComptimeCall` for use with
+// `ast.Expr`'s `str()' method (used by e.g. vfmt).
+pub fn (cc ComptimeCall) expr_str() string {
+	mut str := 'ast.ComptimeCall'
+	if cc.is_compile_value {
+		arg := cc.args[0] or { return str }
+		if arg.expr.is_pure_literal() {
+			str = "\$${cc.method_name}('${cc.args_var}', ${arg})"
+		}
+	}
+	return str
 }
 
 pub struct None {

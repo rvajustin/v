@@ -342,7 +342,13 @@ pub fn (s string) replace_once(rep string, with string) string {
 	if idx == -1 {
 		return s.clone()
 	}
-	return s.substr(0, idx) + with + s.substr(idx + rep.len, s.len)
+	// return s.substr(0, idx) + with + s.substr(idx + rep.len, s.len)
+	//
+	// Avoid an extra allocation here by using substr_unsafe
+	// string_plus copies from both strings via vmemcpy, so it's safe.
+	//
+	// return s.substr_unsafe(0, idx) + with + s.substr_unsafe(idx + rep.len, s.len)
+	return s.substr_unsafe(0, idx).plus_two(with, s.substr_unsafe(idx + rep.len, s.len))
 }
 
 const replace_stack_buffer_size = 10
@@ -796,6 +802,25 @@ fn (s string) + (a string) string {
 	unsafe {
 		vmemcpy(res.str, s.str, s.len)
 		vmemcpy(res.str + s.len, a.str, a.len)
+	}
+	unsafe {
+		res.str[new_len] = 0 // V strings are not null terminated, but just in case
+	}
+	return res
+}
+
+// for `s + s2 + s3`, an optimization (faster than string_plus(string_plus(s1, s2), s3))
+@[direct_array_access]
+fn (s string) plus_two(a string, b string) string {
+	new_len := a.len + b.len + s.len
+	mut res := string{
+		str: unsafe { malloc_noscan(new_len + 1) }
+		len: new_len
+	}
+	unsafe {
+		vmemcpy(res.str, s.str, s.len)
+		vmemcpy(res.str + s.len, a.str, a.len)
+		vmemcpy(res.str + s.len + a.len, b.str, b.len)
 	}
 	unsafe {
 		res.str[new_len] = 0 // V strings are not null terminated, but just in case
@@ -1493,7 +1518,7 @@ pub fn (s string) to_lower() string {
 	unsafe {
 		mut b := malloc_noscan(s.len + 1)
 		for i in 0 .. s.len {
-			if s.str[i] >= `A` && s.str[i] <= `Z` {
+			if s.str[i].is_capital() {
 				b[i] = s.str[i] + 32
 			} else {
 				b[i] = s.str[i]
@@ -1612,7 +1637,7 @@ pub fn (s string) is_capital() bool {
 // Example: assert 'Hello. World.'.starts_with_capital() == true
 @[direct_array_access]
 pub fn (s string) starts_with_capital() bool {
-	if s.len == 0 || !(s[0] >= `A` && s[0] <= `Z`) {
+	if s.len == 0 || !s[0].is_capital() {
 		return false
 	}
 	return true
@@ -2018,7 +2043,7 @@ pub fn (c u8) is_digit() bool {
 // Example: assert u8(`F`).is_hex_digit() == true
 @[inline]
 pub fn (c u8) is_hex_digit() bool {
-	return (c >= `0` && c <= `9`) || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`)
+	return c.is_digit() || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`)
 }
 
 // is_oct_digit returns `true` if the byte is in range 0-7 and `false` otherwise.
@@ -2604,7 +2629,12 @@ pub fn (name string) match_glob(pattern string) bool {
 // is_ascii returns true  if all characters belong to the US-ASCII set ([` `..`~`])
 @[inline]
 pub fn (s string) is_ascii() bool {
-	return !s.bytes().any(it < u8(` `) || it > u8(`~`))
+	for i := 0; i < s.len; i++ {
+		if s[i] < u8(` `) || s[i] > u8(`~`) {
+			return false
+		}
+	}
+	return true
 }
 
 // camel_to_snake convert string from camelCase to snake_case
@@ -2617,44 +2647,53 @@ pub fn (s string) camel_to_snake() string {
 	if s.len == 0 {
 		return ''
 	}
-	lower_first_char := if s[0] >= `A` && s[0] <= `Z` { s[0] + 32 } else { s[0] }
 	if s.len == 1 {
-		return lower_first_char.ascii_str()
+		return s.to_lower()
 	}
 	mut b := unsafe { malloc_noscan(2 * s.len + 1) }
-	second_char := if s[1] >= `A` && s[1] <= `Z` { `_` } else { s[1] }
-	unsafe {
-		b[0] = lower_first_char
-		b[1] = second_char
-	}
-	mut prev_char := second_char
+	// Rather than checking whether the iterator variable is > 1 inside the loop,
+	// handle the first two chars separately to reduce load.
+	mut pos := 2
 	mut prev_is_upper := false
-	mut lower_c := `_`
-	mut c_is_upper := false
-	mut pos := 1
-	for i in pos .. s.len {
+	unsafe {
+		if s[0].is_capital() {
+			b[0] = s[0] + 32
+			b[1] = if s[1].is_capital() {
+				prev_is_upper = true
+				s[1] + 32
+			} else {
+				s[1]
+			}
+		} else {
+			b[0] = s[0]
+			if s[1].is_capital() {
+				prev_is_upper = true
+				if s[0] != `_` && s.len > 2 && !s[2].is_capital() {
+					b[1] = `_`
+					b[2] = s[1] + 32
+					pos = 3
+				} else {
+					b[1] = s[1] + 32
+				}
+			} else {
+				b[1] = s[1]
+			}
+		}
+	}
+	for i := 2; i < s.len; i++ {
 		c := s[i]
-		c_is_upper = c >= `A` && c <= `Z`
-		lower_c = if c_is_upper { c + 32 } else { c }
-		if prev_is_upper == false && c_is_upper {
-			// aB => a_b, if prev has `_`, then do not add `_`
+		c_is_upper := c.is_capital()
+		// Cases: `aBcd == a_bcd` || `ABcd == ab_cd`
+		if ((c_is_upper && !prev_is_upper)
+			|| (!c_is_upper && prev_is_upper && s[i - 2].is_capital())) && c != `_` {
 			unsafe {
 				if b[pos - 1] != `_` {
 					b[pos] = `_`
 					pos++
 				}
 			}
-		} else if prev_is_upper && c_is_upper == false && c != `_` {
-			// Ba => _ba, if prev has `_`, then do not add `_`
-			unsafe {
-				if b[pos - 2] != `_` {
-					prev_char = b[pos - 1]
-					b[pos - 1] = `_`
-					b[pos] = prev_char
-					pos++
-				}
-			}
 		}
+		lower_c := if c_is_upper { c + 32 } else { c }
 		unsafe {
 			b[pos] = lower_c
 		}
