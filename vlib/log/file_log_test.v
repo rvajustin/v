@@ -14,6 +14,7 @@ fn test_reopen() {
 
 	dump(lfolder)
 	mut l := log.new_thread_safe_log()
+	l.set_level(.debug)
 	l.set_full_logpath(lpath1)
 	l.warn('one warning')
 	l.error('one error')
@@ -25,7 +26,7 @@ fn test_reopen() {
 	l.warn('third warning')
 	l.flush()
 	l.close()
-	// os.system('ls -la $lpath1 $lpath2')
+	// os.system('ls -la ${lpath1} ${lpath2}')
 	lcontent1 := os.read_file(lpath1)!
 	lcontent2 := os.read_file(lpath2)!
 	assert lcontent1.len > 0
@@ -42,6 +43,7 @@ fn test_reopen() {
 }
 
 fn test_set_always_flush() {
+	log.set_level(.debug)
 	lfolder := os.join_path(os.vtmp_dir(), rand.ulid())
 	lpath1 := os.join_path(lfolder, 'current.log')
 	os.mkdir_all(lfolder)!

@@ -2,7 +2,7 @@ module edwards25519
 
 import rand
 import encoding.binary
-import crypto.internal.subtle
+import crypto.subtle
 
 // A Scalar is an integer modulo
 //
@@ -44,7 +44,7 @@ pub fn new_scalar() Scalar {
 // add sets s = x + y mod l, and returns s.
 pub fn (mut s Scalar) add(x Scalar, y Scalar) Scalar {
 	// s = 1 * x + y mod l
-	sc_mul_add(mut s.s, edwards25519.sc_one.s, x.s, y.s)
+	sc_mul_add(mut s.s, sc_one.s, x.s, y.s)
 	return s
 }
 
@@ -57,21 +57,21 @@ pub fn (mut s Scalar) multiply_add(x Scalar, y Scalar, z Scalar) Scalar {
 // subtract sets s = x - y mod l, and returns s.
 pub fn (mut s Scalar) subtract(x Scalar, y Scalar) Scalar {
 	// s = -1 * y + x mod l
-	sc_mul_add(mut s.s, edwards25519.sc_minus_one.s, y.s, x.s)
+	sc_mul_add(mut s.s, sc_minus_one.s, y.s, x.s)
 	return s
 }
 
 // negate sets s = -x mod l, and returns s.
 pub fn (mut s Scalar) negate(x Scalar) Scalar {
 	// s = -1 * x + 0 mod l
-	sc_mul_add(mut s.s, edwards25519.sc_minus_one.s, x.s, edwards25519.sc_zero.s)
+	sc_mul_add(mut s.s, sc_minus_one.s, x.s, sc_zero.s)
 	return s
 }
 
 // multiply sets s = x * y mod l, and returns s.
 pub fn (mut s Scalar) multiply(x Scalar, y Scalar) Scalar {
 	// s = x * y + 0 mod l
-	sc_mul_add(mut s.s, x.s, y.s, edwards25519.sc_zero.s)
+	sc_mul_add(mut s.s, x.s, y.s, sc_zero.s)
 	return s
 }
 
@@ -104,13 +104,8 @@ pub fn (mut s Scalar) set_canonical_bytes(x []u8) !Scalar {
 	if x.len != 32 {
 		return error('invalid scalar length')
 	}
-	// mut bb := []u8{len:32}
 	mut ss := Scalar{}
-	for i, item in x {
-		ss.s[i] = item
-	}
-
-	//_ := copy(mut ss.s[..], x) //its not working
+	copy(mut ss.s, x)
 	if !is_reduced(ss) {
 		return error('invalid scalar encoding')
 	}
@@ -121,10 +116,10 @@ pub fn (mut s Scalar) set_canonical_bytes(x []u8) !Scalar {
 // is_reduced returns whether the given scalar is reduced modulo l.
 fn is_reduced(s Scalar) bool {
 	for i := s.s.len - 1; i >= 0; i-- {
-		if s.s[i] > edwards25519.sc_minus_one.s[i] {
+		if s.s[i] > sc_minus_one.s[i] {
 			return false
 		}
-		if s.s[i] < edwards25519.sc_minus_one.s[i] {
+		if s.s[i] < sc_minus_one.s[i] {
 			return true
 		}
 		/*
@@ -1068,7 +1063,8 @@ fn (mut s Scalar) signed_radix16() []i8 {
 // utility function
 // generate returns a valid (reduced modulo l) Scalar with a distribution
 // weighted towards high, low, and edge values.
-fn generate_scalar(size int) !Scalar {
+// fn generate_scalar(size int) !Scalar {
+fn generate_scalar(_ int) !Scalar {
 	/*
 	s := scZero
 	diceRoll := rand.Intn(100)
@@ -1096,7 +1092,7 @@ fn generate_scalar(size int) !Scalar {
 	}
 	return reflect.ValueOf(s)
 	*/
-	mut s := edwards25519.sc_zero
+	mut s := sc_zero
 	diceroll := rand.intn(100) or { 0 }
 	match true {
 		/*
@@ -1104,59 +1100,31 @@ fn generate_scalar(size int) !Scalar {
 			case diceroll == 1:
 		*/
 		diceroll == 0 || diceroll == 1 {
-			s = edwards25519.sc_one
+			s = sc_one
 		}
 		diceroll == 2 {
-			s = edwards25519.sc_minus_one
+			s = sc_minus_one
 		}
 		diceroll < 5 {
-			// rand.Read(s.s[:16]) // read random bytes and fill buf
-			// using builtin rand.read([]buf)
-			rand.read(mut s.s[..16])
-			// buf := rand.read(s.s[..16].len)!
-			// copy(mut s.s[..16], buf)
-
-			/*
-			for i, item in buf {
-				s.s[i] = item
-			}
-			*/
-			s.s[15] &= (1 * 32) - 1
 			// generate a low scalar in [0, 2^125).
+			rand.read(mut s.s[..16])
+			s.s[15] &= (1 * 32) - 1
 		}
 		diceroll < 10 {
 			// generate a high scalar in [2^252, 2^252 + 2^124).
 			s.s[31] = 1 * 16
-			// Read generates len(p) random bytes and writes them into p
-			// rand.Read(s.s[:16])
 			rand.read(mut s.s[..16])
-			// buf := rand.read(s.s[..16].len)!
-			// copy(mut s.s[..16], buf)
-
-			/*
-			for i, item in buf {
-				s.s[i] = item
-			}
-			*/
 			s.s[15] &= (1 * 16) - 1
 		}
 		else {
 			// generate a valid scalar in [0, l) by returning [0, 2^252) which has a
 			// negligibly different distribution (the former has a 2^-127.6 chance
 			// of being out of the latter range).
-			// rand.Read(s.s[:])
 			rand.read(mut s.s[..])
-			// buf := crand.read(s.s.len)!
-			// copy(mut s.s[..], buf)
-
-			/*
-			for i, item in buf {
-				s.s[i] = item
-			}
-			*/
 			s.s[31] &= (1 * 16) - 1
 		}
 	}
+
 	return s
 }
 
@@ -1164,7 +1132,7 @@ type NotZeroScalar = Scalar
 
 fn generate_notzero_scalar(size int) !NotZeroScalar {
 	mut s := Scalar{}
-	for s == edwards25519.sc_zero {
+	for s == sc_zero {
 		s = generate_scalar(size)!
 	}
 	return NotZeroScalar(s)

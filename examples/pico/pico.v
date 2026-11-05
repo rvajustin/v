@@ -1,4 +1,5 @@
-import json
+// vtest build: !solaris
+import json2 as json
 import picoev
 import picohttpparser
 
@@ -21,7 +22,7 @@ fn hello_response() string {
 	return 'Hello, World!'
 }
 
-fn callback(data voidptr, req picohttpparser.Request, mut res picohttpparser.Response) {
+fn callback(_data voidptr, req picohttpparser.Request, mut res picohttpparser.Response) {
 	if req.method == 'GET' {
 		if req.path == '/t' {
 			res.http_ok()

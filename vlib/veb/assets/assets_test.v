@@ -37,6 +37,7 @@ fn get_test_file_contents(file string) string {
 		'test2.css' { '.two {\n\tcolor: #996633;\n}\n' }
 		else { 'wibble\n' }
 	}
+
 	return contents
 }
 
@@ -75,7 +76,7 @@ fn test_add_minify_missing_cache_dir() {
 
 fn test_add_minified() {
 	mut am := assets.AssetManager{
-		minify: true
+		minify:    true
 		cache_dir: cache_dir('test_add_minified')
 	}
 	clean_cache_dir(am.cache_dir)
@@ -108,7 +109,7 @@ fn test_combine_minified() {
 	// minify test is simple for now, because assets are not properly minified yet
 	mut am := assets.AssetManager{
 		cache_dir: cache_dir('test_combine_minified')
-		minify: true
+		minify:    true
 	}
 	clean_cache_dir(am.cache_dir)
 
@@ -124,7 +125,7 @@ fn test_combine_minified() {
 
 fn test_minify_cache_last_modified() {
 	mut am := assets.AssetManager{
-		minify: true
+		minify:    true
 		cache_dir: cache_dir('test_cache_last_modified')
 	}
 	clean_cache_dir(am.cache_dir)
@@ -149,7 +150,7 @@ fn test_minify_cache_last_modified() {
 
 fn test_cleanup_cache() {
 	mut am := assets.AssetManager{
-		minify: true
+		minify:    true
 		cache_dir: cache_dir('test_cleanup_cache')
 	}
 	clean_cache_dir(am.cache_dir)

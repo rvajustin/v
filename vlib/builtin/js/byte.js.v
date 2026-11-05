@@ -39,7 +39,7 @@ pub fn (c u8) is_digit() bool {
 // Example: assert u8(`F`) == true
 @[inline]
 pub fn (c u8) is_hex_digit() bool {
-	return (c >= `0` && c <= `9`) || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`)
+	return c.is_digit() || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`)
 }
 
 // is_oct_digit returns `true` if the byte is in range 0-7 and `false` otherwise.
@@ -78,7 +78,7 @@ pub fn (c u8) is_capital() bool {
 	return c >= `A` && c <= `Z`
 }
 
-// str_escaped returns the contents of `byte` as an escaped `string`.
+// str_escaped returns the contents of `u8` as an escaped `string`.
 // Example: assert u8(0).str_escaped() == r'`\0`'
 
 pub fn (b u8) str_escaped() string {
@@ -96,5 +96,6 @@ pub fn (b u8) str_escaped() string {
 		32...126 { str = b.ascii_str() }
 		else { str = '0x' + b.hex() }
 	}
+
 	return str
 }

@@ -2,7 +2,9 @@ module main
 
 import os
 
-const git_log_cmd = 'git log -n 500 --pretty=format:"%s" --simplify-merges'
+const delete_skipped = true
+
+const git_log_cmd = 'git log --pretty=format:"%s" --simplify-merges'
 
 enum Category {
 	checker
@@ -13,7 +15,6 @@ enum Category {
 	web
 	orm
 	db
-	native
 	cgen
 	js_backend
 	comptime
@@ -22,9 +23,12 @@ enum Category {
 	examples
 	vfmt
 	os_support
+	interpreter
 }
 
 const category_titles = '#### Improvements in the language
+
+#### V interpreter
 
 #### Breaking changes
 
@@ -42,11 +46,11 @@ const category_titles = '#### Improvements in the language
 
 #### Database drivers
 
-#### Native backend
-
 #### C backend
 
 #### JavaScript backend
+
+#### Comptime
 
 #### vfmt
 
@@ -74,31 +78,25 @@ mut:
 
 const is_interactive = false
 
-// Instantly updates CHANGELOG.md without confirming each line
-fn no_interactive(version string) {
-}
-
 fn main() {
 	mut version := ''
 
 	if os.args.len == 2 && os.args[1].starts_with('0.') {
 		version = os.args[1]
-		// no_interactive(version)
-		// return
 	} else {
 		println('Usage: v run tools/changelog_helper.v 0.4.5')
 		return
 	}
 	if !os.exists(log_txt) {
-		os.execute(git_log_cmd + ' > ' + log_txt)
+		result := os.exec(os.split_args(git_log_cmd)!)
+		os.write_file(log_txt, result.output)!
 		println('log.txt generated')
 		// println('log.txt generated, remove unnecessary commits from it and run the tool again')
 		// return
 	}
 	mut lines := os.read_lines(log_txt)!
 	// Trim everything before current version, commit "(tag: 0.4.4) V 0.4.4"
-	mut prev_version := (version.replace('.', '').int() - 1).str()
-	prev_version = '0.${prev_version[0].ascii_str()}.${prev_version[1].ascii_str()}'
+	mut prev_version := get_prev_version(version)
 	println('prev version=${prev_version}')
 	for i, line in lines {
 		if line == ('V ${prev_version}') {
@@ -107,9 +105,6 @@ fn main() {
 		}
 	}
 	os.write_file(log_txt, lines.join('\n'))!
-	if true {
-		// return
-	}
 	mut app := &App{
 		total_lines: lines.len
 	}
@@ -118,10 +113,6 @@ fn main() {
 		category_titles)
 	os.write_file('CHANGELOG.md', app.result)!
 	changelog_txt := os.read_file('CHANGELOG.md')!.to_lower()
-	if true {
-		// println(changelog_txt)
-		// return
-	}
 	// mut counter := 0 // to display how many commits are left
 	for line in lines {
 		s := line.trim_space()
@@ -152,25 +143,29 @@ fn (mut app App) process_line(text string) ! {
 	if text == '' {
 		return
 	}
-	semicolon_pos := text.index(': ') or {
-		println('no `:` in commit, skipping: "${text}"')
-		return
-	}
-	prefix := text[..semicolon_pos]
 	// Get category based on keywords in the commit message/prefix
 	mut category := Category.examples
-	if text.contains('checker:') {
+	if is_checker(text) {
 		category = .checker
-	} else if is_examples(text) {
-		// Always skip examples and typos fixes
-		category = .examples
+	} else if is_interpreter(text) {
+		category = .interpreter
+	} else if is_skip(text) {
+		// Always skip cleanups, typos etc
+		println('Skipping line (cleanup/typo)\n${text}\n')
+		if delete_skipped {
+			delete_processed_line_from_log(text)!
+		}
 		return
+	} else if is_examples(text) {
+		category = .examples
 	} else if is_os_support(text) {
 		category = .os_support
 	} else if is_cgen(text) {
 		category = .cgen
 	} else if is_js_backend(text) {
 		category = .js_backend
+	} else if is_comptime(text) {
+		category = .comptime
 	} else if is_db(text) {
 		category = .db
 	} else if is_stdlib(text) {
@@ -187,20 +182,22 @@ fn (mut app App) process_line(text string) ! {
 		category = .compiler_internals
 	} else if is_improvements(text) {
 		category = .improvements
-	} else if is_native(text) {
-		category = .native
 	} else if is_vfmt(text) {
 		category = .vfmt
 	} else if text.contains('docs:') || text.contains('doc:') {
 		// Always skip docs
 		delete_processed_line_from_log(text)!
 		return
-	}
-	//
-	else {
+	} else {
+		println('Skipping line (unknown category)\n${text}\n')
+		// if delete_skipped {
+		// delete_processed_line_from_log(text)!
+		//}
 		return
 	}
 	println('process_line: cat=${category} "${text}"')
+	semicolon_pos := text.index(': ') or { text.len }
+	prefix := text[..semicolon_pos]
 
 	// Trim everything to the left of `:` for some commits (e.g. `checker: `)
 	mut s := text
@@ -209,7 +206,8 @@ fn (mut app App) process_line(text string) ! {
 	// exit(0)
 	//}
 	if (semicolon_pos < 15
-		&& prefix in ['checker', 'cgen', 'parser', 'v.parser', 'ast', 'jsgen', 'v.gen.js', 'fmt', 'vfmt', 'tools'])
+		&& prefix in ['checker', 'cgen', 'fix', 'orm', 'parser', 'v.parser', 'native', 'ast', 'jsgen',
+			'v.gen.js', 'fmt', 'vfmt', 'tools', 'examples', 'eval'])
 		|| (semicolon_pos < 30 && prefix.contains(', ')) {
 		s = '- ' + text[semicolon_pos + 2..].capitalize()
 	}
@@ -255,6 +253,7 @@ fn (mut app App) process_line(text string) ! {
 			}
 			else {}
 		}
+
 		app.counter++
 	} else {
 		line := Line{category, s}
@@ -280,12 +279,12 @@ const category_map = {
 	Category.checker:    '#### Checker improvements'
 	.breaking:           '#### Breaking changes'
 	.improvements:       '#### Improvements in the'
+	.interpreter:        '#### V interpreter'
 	.parser:             '#### Parser improvements'
 	.stdlib:             '#### Standard library'
 	.web:                '#### Web'
 	.orm:                '#### ORM'
 	.db:                 '#### Database drivers'
-	.native:             '#### Native backend'
 	.cgen:               '#### C backend'
 	.js_backend:         '#### JavaScript backend'
 	.comptime:           '#### Comptime'
@@ -300,12 +299,12 @@ fn (l Line) write_at_category(txt string) ?string {
 	title := category_map[l.category]
 	title_pos := txt.index(title)?
 	// Find the position of the ### category title
-	pos := txt.index_after('\n', title_pos + 1)
+	pos := txt.index_after('\n', title_pos + 1) or { return none }
 	first_half := txt[..pos]
 	second_half := txt[pos..]
 	if txt.contains(l.text) {
 		// Avoid duplicates (just in case)
-		println("Got a duplicate: '${txt}'")
+		println("Got a duplicate: '${l.text}'")
 		return txt
 	}
 	// Now insert the line in the middle, under the ### category title
@@ -314,7 +313,7 @@ fn (l Line) write_at_category(txt string) ?string {
 	// Trim "prefix:" for some categories
 	// mut capitalized := false
 	mut has_prefix := true
-	if l.category in [.cgen, .checker, .improvements] {
+	if l.category in [.cgen, .checker, .improvements, .orm, .interpreter] {
 		has_prefix = false
 		if semicolon_pos := line_text.index(': ') {
 			prefix := line_text[..semicolon_pos]
@@ -335,9 +334,17 @@ fn (l Line) write_at_category(txt string) ?string {
 }
 
 fn delete_processed_line_from_log(line string) ! {
-	text := os.read_file(log_txt)!
-	new_text := text.replace_once(line, '')
-	os.write_file(log_txt, new_text)!
+	lines := os.read_lines(log_txt)!
+	mut new_lines := []string{cap: lines.len}
+	mut was_deleted := false
+	for existing_line in lines {
+		if !was_deleted && existing_line == line {
+			was_deleted = true
+			continue
+		}
+		new_lines << existing_line
+	}
+	os.write_file(log_txt, new_lines.join('\n'))!
 }
 
 const db_strings = [
@@ -345,7 +352,10 @@ const db_strings = [
 	'db.sqlite',
 	'db.mysql',
 	'db.pg',
+	'db.mssql',
+	'db.redis',
 	'pg:',
+	'mysql:',
 ]
 
 const parser_strings = [
@@ -354,12 +364,24 @@ const parser_strings = [
 ]
 
 const stdlib_strings = [
+	'aes-gcm',
+	'archive:',
+	'closure:',
+	'compress',
+	'context',
+	'dtm2:',
+	'encoding:',
+	'executor:',
+	'goroutines:',
 	'gg:',
+	'hash.',
+	'image:',
 	'json:',
 	'json2:',
 	'time:',
 	'sync:',
 	'datatypes:',
+	'datatypes.',
 	'math:',
 	'math.',
 	'math.big',
@@ -367,6 +389,7 @@ const stdlib_strings = [
 	'sokol',
 	'os:',
 	'rand:',
+	'rand.',
 	'math:',
 	'toml:',
 	'vlib:',
@@ -376,6 +399,7 @@ const stdlib_strings = [
 	'sync.',
 	'builtin:',
 	'builtin,',
+	'builtin.',
 	'strconv',
 	'readline',
 	'cli:',
@@ -385,6 +409,24 @@ const stdlib_strings = [
 	'io:',
 	'io.',
 	'log:',
+	'lz:',
+	'maps:',
+	'mcp:',
+	'flag:',
+	'regex:',
+	'regex.',
+	'tmpl:',
+	'hash:',
+	'stbi:',
+	'snappy:',
+	'strings:',
+	'term.ui:',
+	'atomic:',
+	'context:',
+	'thirdparty',
+	'x.markdown:',
+	'data analysis tool library',
+	'yaml:',
 ]
 
 fn is_stdlib(text string) bool {
@@ -404,7 +446,11 @@ fn is_orm(text string) bool {
 }
 
 const cgen_strings = [
+	'c compilation error',
 	'cgen:',
+	'cgen,',
+	'gen/c:',
+	'preserve interface arrays',
 	'v.gen.c:',
 ]
 
@@ -423,11 +469,30 @@ fn is_js_backend(text string) bool {
 }
 
 const internal_strings = [
+	'ast,pref,genc:',
+	'compiler:',
+	'gen:',
+	'gc:',
+	'libgc:',
+	'native:',
+	'reflection:',
 	'scanner:',
 	'transformer:',
+	'markused:',
 	'builder:',
 	'pref:',
 	'v.util',
+	'v.generic',
+	'v.comptime',
+	'table:',
+	'util:',
+	'v2:',
+	'v2/',
+	'v2 ',
+	'v3:',
+	'v3 ownership',
+	'vgc:',
+	'vlib,builder,v3:',
 ]
 
 fn is_internal(text string) bool {
@@ -435,7 +500,9 @@ fn is_internal(text string) bool {
 }
 
 const improvements_strings = [
+	'@[soa]',
 	'all:',
+	'c function wrappers',
 	'v:',
 	'coroutines:',
 	'autofree',
@@ -447,23 +514,70 @@ fn is_improvements(text string) bool {
 
 const examples_strings = [
 	'example',
+]
+const skip_strings = [
 	'tests',
+	'test list',
+	'test pass',
+	'test_all',
+	'test failures',
+	'test failure',
+	'test fixes',
+	'test regressions',
+	'test ordering',
+	'test coverage',
+	'test:',
+	'library test',
 	'readme:',
+	'update docs',
+	'doc comment',
 	'.md:',
+	': format',
+	': vfmt',
+	'quick fmt',
+	'all code is formatted',
 	'typos',
 	' typo',
 	'cleanup',
 	'clean up',
+	'build(deps)',
+	'funding',
+	'master ci',
+	'fix ci',
+	'ci regressions',
+	'tools ci',
+	'benchmark',
+	'bench:',
+	'remove unused',
+	'removed unused',
+	'revert:',
+	'dynamic_template_manager_test',
+	'vtmp_cov',
 ]
 
 fn is_examples(text string) bool {
 	return is_xxx(text, examples_strings)
 }
 
+fn is_skip(text string) bool {
+	lower_text := text.to_lower()
+	return lower_text in ['fixes', 'ok'] || lower_text.starts_with('fix #')
+		|| (lower_text.contains('example') && (lower_text.contains('fix')
+			|| lower_text.contains('update'))) || is_xxx(text, skip_strings)
+}
+
 const tools_strings = [
+	'build:',
+	'cmd:',
+	'cmd/tools/',
+	'editors:',
+	'help:',
+	'make:',
+	'make.bat:',
+	'makev.bat:',
 	'tools:',
 	'vpm:',
-	'ci',
+	'ci:',
 	'github:',
 	'gitignore',
 	'benchmark',
@@ -473,6 +587,12 @@ const tools_strings = [
 	'REPL',
 	'vet',
 	'tools.',
+	'GNUmakefile',
+	'Dockerfile',
+	'vcomplete',
+	'vwatch',
+	'vsh:',
+	'changelog',
 ]
 
 fn is_tools(text string) bool {
@@ -484,9 +604,9 @@ fn is_parser(text string) bool {
 }
 
 const web_strings = [
-	'vweb',
+	'fasthttp',
 	'veb',
-	'x.vweb',
+	'vweb',
 	'websocket:',
 	'pico',
 	'x.sessions',
@@ -496,21 +616,15 @@ const web_strings = [
 	'net.',
 	'wasm:',
 	'http:',
+	'xsessions:',
 ]
 
 fn is_web(text string) bool {
 	return is_xxx(text, web_strings)
 }
 
-const native_strings = [
-	'native:',
-]
-
-fn is_native(text string) bool {
-	return is_xxx(text, native_strings)
-}
-
 const vfmt_strings = [
+	'attribute call syntax in vfmt',
 	'vfmt:',
 	'fmt:',
 ]
@@ -530,15 +644,42 @@ const os_support_strings = [
 	'windows',
 	'Linux',
 	'linux',
+	'ios module',
+	'ppc64',
+	'raspberry pi',
+	'regqueryinfokeyw',
+	'sparc64',
+	'tcc/bionic',
+	'this app cannot run on your pc',
+	'msvc:',
 ]
 
 fn is_os_support(text string) bool {
 	return is_xxx(text, os_support_strings)
 }
 
+fn is_comptime(text string) bool {
+	lower_text := text.to_lower()
+	return lower_text.starts_with('comptime:') || lower_text.contains(': comptime ')
+		|| lower_text.starts_with('gen: fix comptime')
+}
+
+fn is_interpreter(text string) bool {
+	lower_text := text.to_lower()
+	return lower_text.starts_with('eval:') || lower_text.starts_with('v2.eval:')
+		|| lower_text.contains('eval backend')
+}
+
+fn is_checker(text string) bool {
+	lower_text := text.to_lower()
+	return lower_text.contains('checker:') || lower_text.contains('checker(')
+		|| lower_text.contains('#26848')
+}
+
 fn is_xxx(text string, words []string) bool {
+	lower_text := text.to_lower()
 	for s in words {
-		if text.contains(s) {
+		if lower_text.contains(s.to_lower()) {
 			return true
 		}
 	}
@@ -549,4 +690,16 @@ fn print_category_hint() {
 	$for val in Category.values {
 		println('${int(val.value) + 1} - ${val.name}; ')
 	}
+}
+
+// For 0.4.12 returns 0.4.11 etc
+fn get_prev_version(version string) string {
+	parts := version.split('.')
+	if parts.len != 3 {
+		return ''
+	}
+	major := parts[0]
+	minor := parts[1]
+	patch := parts[2].int()
+	return '${major}.${minor}.${patch - 1}'
 }

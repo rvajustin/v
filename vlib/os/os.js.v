@@ -127,20 +127,49 @@ pub fn join_path_single(base string, elem string) string {
 	return join_path(base, elem)
 }
 
+// execute runs a legacy command string. Use exec for literal arguments.
+@[deprecated: 'use os.exec with an argument array; command strings can allow shell injection']
 pub fn execute(cmd string) Result {
+	return execute_shell(cmd)
+}
+
+fn execute_shell(cmd string) Result {
 	mut exit_code := 0
-	mut stdout := ''
+	mut out := ''
 	#let commands = cmd.str.split(' ');
 	#let output = $child_process.spawnSync(commands[0],commands.slice(1,commands.length));
 	#exit_code = new int(output.status)
-	#stdout = new string(output.stdout + '')
+	#out = new string(output.stdout + '')
 
 	return Result{
 		exit_code: exit_code
-		output: stdout
+		output:    out
 	}
 }
 
+// exec starts the specified command with arguments, waits for it to complete, and returns its output.
+pub fn exec(args []string) Result {
+	if args.len == 0 {
+		return Result{
+			exit_code: -1
+			output:    'exec requires at least one argument'
+		}
+	}
+	mut exit_code := 0
+	mut out := ''
+	#let commands = args.arr.map((x) => x.valueOf() + '');
+	#let output = $child_process.spawnSync(commands[0], commands.slice(1, commands.length));
+	#exit_code = new int(output.status === null ? -1 : output.status)
+	#out = new string((output.stdout ? output.stdout + '' : '') + (output.stderr ? output.stderr + '' : ''))
+
+	return Result{
+		exit_code: exit_code
+		output:    out
+	}
+}
+
+// system runs a legacy command string with inherited standard streams.
+@[deprecated: 'use os.system_args with an argument array; command strings can allow shell injection']
 pub fn system(cmd string) int {
 	exit_code := 0
 	#let commands = cmd.str.split(' ');
@@ -183,4 +212,17 @@ pub fn ensure_folder_is_writable(path string) ! {
 	#try { $fs.writeFileSync(fpath); $fs.unlinkSync(fpath) } catch(e) { return error(new string('could not write to ' + path)) }
 
 	_ := fpath
+}
+
+// system_args runs a program with literal arguments and inherited standard streams.
+// It waits for the program and returns its exit code without invoking a shell.
+pub fn system_args(args []string) int {
+	if args.len == 0 {
+		return -1
+	}
+	mut exit_code := 0
+	#let commands = args.arr.map((x) => x.valueOf() + '');
+	#let output = $child_process.spawnSync(commands[0], commands.slice(1), {stdio: 'inherit'});
+	#exit_code = new int(output.status === null ? -1 : output.status)
+	return exit_code
 }

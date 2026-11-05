@@ -43,23 +43,27 @@ const bias32 = 127 // f32 exponent bias
 
 const maxexp32 = 255
 
+// get_string_32 formats d in scientific notation.
 // max 46 char
 // -3.40282346638528859811704183484516925440e+38
-@[direct_array_access]
+@[direct_array_access; manualfree]
 pub fn (d Dec32) get_string_32(neg bool, i_n_digit int, i_pad_digit int) string {
-	n_digit := i_n_digit + 1
+	n_digit := if i_n_digit < 1 { 1 } else { i_n_digit + 1 }
 	pad_digit := i_pad_digit + 1
 	mut out := d.m
 	// mut out_len      := decimal_len_32(out)
 	mut out_len := dec_digits(out)
-	out_len_original := out_len
+	mut exponent := d.e + out_len - 1
 
 	mut fw_zeros := 0
 	if pad_digit > out_len {
 		fw_zeros = pad_digit - out_len
 	}
 
-	mut buf := []u8{len: int(out_len + 5 + 1 + 1)} // sign + mant_len + . +  e + e_sign + exp_len(2) + \0}
+	buffer_len := out_len + 7 + fw_zeros
+	mut buf := []u8{len: buffer_len}
+	unsafe { buf.flags |= .noslices }
+	defer { unsafe { buf.free() } }
 	mut i := 0
 
 	if neg {
@@ -79,8 +83,12 @@ pub fn (d Dec32) get_string_32(neg bool, i_n_digit int, i_pad_digit int) string 
 
 	if n_digit < out_len {
 		// println("orig: ${out_len_original}")
-		out += strconv.ten_pow_table_32[out_len - n_digit - 1] * 5 // round to up
-		out /= strconv.ten_pow_table_32[out_len - n_digit]
+		out += ten_pow_table_32[out_len - n_digit - 1] * 5 // round to up
+		out /= ten_pow_table_32[out_len - n_digit]
+		if out >= ten_pow_table_32[n_digit] {
+			out /= 10
+			exponent++
+		}
 		out_len = n_digit
 	}
 
@@ -93,19 +101,11 @@ pub fn (d Dec32) get_string_32(neg bool, i_n_digit int, i_pad_digit int) string 
 		x++
 	}
 
-	// no decimal digits needed, end here
-	if i_n_digit == 0 {
-		unsafe {
-			buf[i] = 0
-			return tos(&u8(&buf[0]), i)
-		}
-	}
-
-	if out_len >= 1 {
+	if out_len > 1 || fw_zeros > 0 {
 		buf[y - x] = `.`
-		x++
 		i++
 	}
+	x++
 
 	if y - x >= 0 {
 		buf[y - x] = `0` + u8(out % 10)
@@ -121,7 +121,7 @@ pub fn (d Dec32) get_string_32(neg bool, i_n_digit int, i_pad_digit int) string 
 	buf[i] = `e`
 	i++
 
-	mut exp := d.e + out_len_original - 1
+	mut exp := exponent
 	if exp < 0 {
 		buf[i] = `-`
 		i++
@@ -141,17 +141,17 @@ pub fn (d Dec32) get_string_32(neg bool, i_n_digit int, i_pad_digit int) string 
 	buf[i] = 0
 
 	return unsafe {
-		tos(&u8(&buf[0]), i)
+		tos(memdup_noscan(&buf[0], i + 1), i)
 	}
 }
 
 fn f32_to_decimal_exact_int(i_mant u32, exp u32) (Dec32, bool) {
 	mut d := Dec32{}
-	e := exp - strconv.bias32
-	if e > strconv.mantbits32 {
+	e := exp - bias32
+	if e > mantbits32 {
 		return d, false
 	}
-	shift := strconv.mantbits32 - e
+	shift := mantbits32 - e
 	mant := i_mant | 0x0080_0000 // implicit 1
 	// mant := i_mant | (1 << mantbits32) // implicit 1
 	d.m = mant >> shift
@@ -171,11 +171,11 @@ fn f32_to_decimal(mant u32, exp u32) Dec32 {
 	if exp == 0 {
 		// We subtract 2 so that the bounds computation has
 		// 2 additional bits.
-		e2 = 1 - strconv.bias32 - int(strconv.mantbits32) - 2
+		e2 = 1 - bias32 - int(mantbits32) - 2
 		m2 = mant
 	} else {
-		e2 = int(exp) - strconv.bias32 - int(strconv.mantbits32) - 2
-		m2 = (u32(1) << strconv.mantbits32) | mant
+		e2 = int(exp) - bias32 - int(mantbits32) - 2
+		m2 = (u32(1) << mantbits32) | mant
 	}
 	even := (m2 & 1) == 0
 	accept_bounds := even
@@ -318,19 +318,22 @@ fn f32_to_decimal(mant u32, exp u32) Dec32 {
 //=============================================================================
 
 // f32_to_str returns a `string` in scientific notation with max `n_digit` after the dot.
+// The digits are the ones of the shortest decimal number that converts back to `f`, rounded half
+// up when there are more than `n_digit` of them after the dot. A subnormal `f` is rounded from its
+// exact value instead, because its shortest digits are too few to be rounded again.
 pub fn f32_to_str(f f32, n_digit int) string {
 	mut u1 := Uf32{}
 	u1.f = f
 	u := unsafe { u1.u }
 
-	neg := (u >> (strconv.mantbits32 + strconv.expbits32)) != 0
-	mant := u & ((u32(1) << strconv.mantbits32) - u32(1))
-	exp := (u >> strconv.mantbits32) & ((u32(1) << strconv.expbits32) - u32(1))
+	neg := (u >> (mantbits32 + expbits32)) != 0
+	mant := u & ((u32(1) << mantbits32) - u32(1))
+	exp := (u >> mantbits32) & ((u32(1) << expbits32) - u32(1))
 
 	// println("${neg} ${mant} e ${exp-bias32}")
 
 	// Exit early for easy cases.
-	if exp == strconv.maxexp32 || (exp == 0 && mant == 0) {
+	if exp == maxexp32 || (exp == 0 && mant == 0) {
 		return get_string_special(neg, exp == 0, mant == 0)
 	}
 
@@ -340,25 +343,49 @@ pub fn f32_to_str(f f32, n_digit int) string {
 		d = f32_to_decimal(mant, exp)
 	}
 
+	if exp == 0 && dec_digits(d.m) > (if n_digit > 0 { n_digit + 1 } else { 1 }) {
+		// A subnormal has fewer significant bits than a normal f32, so rounding its shortest
+		// digits again can give the wrong last digit; round its exact value instead.
+		return exact_float_scientific(f64(f), n_digit)
+	}
+
 	// println("${d.m} ${d.e}")
 	return d.get_string_32(neg, n_digit, 0)
 }
 
-// f32_to_str_pad returns a `string` in scientific notation with max `n_digit` after the dot.
+// f32_to_str_pad returns `f` as a `string` in scientific notation with `n_digit` digits after the dot.
+// The digits are the ones of the shortest decimal number that converts back to `f`: they are
+// rounded half up when there are more than `n_digit` of them after the dot, and zeros are appended
+// when there are fewer. The result is thus not always the correctly rounded exact value of `f`,
+// that C's `printf("%.*e")` prints: `f32_to_str_pad(0.1, 10)` is `1.0000000000e-01`
+// (and not `1.0000000149e-01`), and `f32_to_str_pad(9.95, 1)` is `1.0e+01` (and not `9.9e+00`).
+// A subnormal `f` is the exception: its shortest digits are too few even for a small `n_digit`
+// (`1e-45` for the smallest one, `1.401298464...e-45`), so its exact value is rounded instead.
+// Example: assert strconv.f32_to_str_pad(1234.5, 2) == '1.23e+03'
+// Example: assert strconv.f32_to_str_pad(1.5, 4) == '1.5000e+00'
 pub fn f32_to_str_pad(f f32, n_digit int) string {
 	mut u1 := Uf32{}
 	u1.f = f
 	u := unsafe { u1.u }
 
-	neg := (u >> (strconv.mantbits32 + strconv.expbits32)) != 0
-	mant := u & ((u32(1) << strconv.mantbits32) - u32(1))
-	exp := (u >> strconv.mantbits32) & ((u32(1) << strconv.expbits32) - u32(1))
+	neg := (u >> (mantbits32 + expbits32)) != 0
+	mant := u & ((u32(1) << mantbits32) - u32(1))
+	exp := (u >> mantbits32) & ((u32(1) << expbits32) - u32(1))
 
 	// println("${neg} ${mant} e ${exp-bias32}")
 
 	// Exit early for easy cases.
-	if exp == strconv.maxexp32 || (exp == 0 && mant == 0) {
-		return get_string_special(neg, exp == 0, mant == 0)
+	if exp == maxexp32 {
+		return get_string_special(neg, false, mant == 0)
+	}
+	if exp == 0 && mant == 0 {
+		// zero gets its digits after the dot too
+		zero := Dec32{}
+		return zero.get_string_32(neg, n_digit, n_digit)
+	}
+	if exp == 0 {
+		// subnormal: its shortest digits can not be padded, see above
+		return exact_float_scientific(f64(f), n_digit)
 	}
 
 	mut d, ok := f32_to_decimal_exact_int(mant, exp)

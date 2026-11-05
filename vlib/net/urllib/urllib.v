@@ -38,7 +38,7 @@ fn error_msg(message string, val string) string {
 // reserved characters correctly. See golang.org/issue/5684.
 fn should_escape(c u8, mode EncodingMode) bool {
 	// §2.3 Unreserved characters (alphanum)
-	if (`a` <= c && c <= `z`) || (`A` <= c && c <= `Z`) || (`0` <= c && c <= `9`) {
+	if c.is_alnum() {
 		return false
 	}
 	if mode == .encode_host || mode == .encode_zone {
@@ -51,7 +51,7 @@ fn should_escape(c u8, mode EncodingMode) bool {
 		// we could possibly allow, and parse will reject them if we
 		// escape them (because hosts can`t use %-encoding for
 		// ASCII bytes).
-		if c in [`!`, `$`, `&`, `\\`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `[`, `]`, `<`, `>`,
+		if c in [`!`, `$`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `[`, `]`, `<`, `>`,
 			`"`] {
 			return false
 		}
@@ -104,6 +104,7 @@ fn should_escape(c u8, mode EncodingMode) bool {
 		}
 		else {}
 	}
+
 	if mode == .encode_fragment {
 		// RFC 3986 §2.2 allows not escaping sub-delims. A subset of sub-delims are
 		// included in reserved from RFC 2396 §2.2. The remaining sub-delims do not
@@ -165,7 +166,7 @@ fn unescape(s_ string, mode EncodingMode) !string {
 					if s.len > 3 {
 						s = s[..3]
 					}
-					return error(error_msg(urllib.err_msg_escape, s))
+					return error(error_msg(err_msg_escape, s))
 				}
 				// Per https://tools.ietf.org/html/rfc3986#page-21
 				// in the host component %-encoding can only be used
@@ -175,7 +176,7 @@ fn unescape(s_ string, mode EncodingMode) !string {
 				// in IPv6 scoped-address literals. Yay.
 				if i + 3 >= s.len && mode == .encode_host && unhex(s[i + 1]) < 8
 					&& s[i..i + 3] != '%25' {
-					return error(error_msg(urllib.err_msg_escape, s[i..i + 3]))
+					return error(error_msg(err_msg_escape, s[i..i + 3]))
 				}
 				if mode == .encode_zone {
 					// RFC 6874 says basically 'anything goes' for zone identifiers
@@ -185,12 +186,11 @@ fn unescape(s_ string, mode EncodingMode) !string {
 					// That is, you can use escaping in the zone identifier but not
 					// to introduce bytes you couldn't just write directly.
 					// But Windows puts spaces here! Yay.
-					if i + 3 >= s.len {
-						return error(error_msg('unescape: invalid escape sequence', ''))
-					}
+					// The escape's two hex digits were checked above; a complete
+					// escape is valid even when it ends the zone identifier.
 					v := ((unhex(s[i + 1]) << u8(4)) | unhex(s[i + 2]))
 					if s[i..i + 3] != '%25' && v != ` ` && should_escape(v, .encode_host) {
-						error(error_msg(urllib.err_msg_escape, s[i..i + 3]))
+						return error(error_msg(err_msg_escape, s[i..i + 3]))
 					}
 				}
 				i += 3
@@ -202,7 +202,7 @@ fn unescape(s_ string, mode EncodingMode) !string {
 			else {
 				if (mode == .encode_host || mode == .encode_zone) && s[i] < 0x80
 					&& should_escape(s[i], mode) {
-					error(error_msg('unescape: invalid character in host name', s[i..i + 1]))
+					return error(error_msg('unescape: invalid character in host name', s[i..i + 1]))
 				}
 				i++
 			}
@@ -318,7 +318,7 @@ pub struct URL {
 pub mut:
 	scheme      string
 	opaque      string    // encoded opaque data
-	user        &Userinfo = unsafe { nil } // username and password information
+	user        ?Userinfo // username and password information
 	host        string    // host or host:port
 	path        string    // path (relative paths may omit leading slash)
 	raw_path    string    // encoded path hint (see escaped_path method)
@@ -334,10 +334,10 @@ pub fn (url &URL) debug() string {
 
 // user returns a Userinfo containing the provided username
 // and no password set.
-pub fn user(username string) &Userinfo {
-	return &Userinfo{
-		username: username
-		password: ''
+pub fn user(username string) Userinfo {
+	return Userinfo{
+		username:     username
+		password:     ''
 		password_set: false
 	}
 }
@@ -350,28 +350,28 @@ pub fn user(username string) &Userinfo {
 // ``is NOT RECOMMENDED, because the passing of authentication
 // information in clear text (such as URI) has proven to be a
 // security risk in almost every case where it has been used.''
-fn user_password(username string, password string) &Userinfo {
-	return &Userinfo{username, password, true}
+fn user_password(username string, password string) Userinfo {
+	return Userinfo{username, password, true}
 }
 
 // The Userinfo type is an immutable encapsulation of username and
 // password details for a URL. An existing Userinfo value is guaranteed
 // to have a username set (potentially empty, as allowed by RFC 2396),
 // and optionally a password.
-struct Userinfo {
+pub struct Userinfo {
 pub:
 	username     string
 	password     string
 	password_set bool
 }
 
-fn (u &Userinfo) empty() bool {
-	return isnil(u) || (u.username == '' && u.password == '')
+fn (u Userinfo) empty() bool {
+	return u.username == '' && u.password == '' && !u.password_set
 }
 
 // string returns the encoded userinfo information in the standard form
 // of 'username[:password]'.
-fn (u &Userinfo) str() string {
+fn (u Userinfo) str() string {
 	if u.empty() {
 		return ''
 	}
@@ -388,9 +388,9 @@ fn (u &Userinfo) str() string {
 fn split_by_scheme(rawurl string) ![]string {
 	for i in 0 .. rawurl.len {
 		c := rawurl[i]
-		if (`a` <= c && c <= `z`) || (`A` <= c && c <= `Z`) {
+		if c.is_letter() {
 			// do nothing
-		} else if (`0` <= c && c <= `9`) || (c == `+` || c == `-` || c == `.`) {
+		} else if c.is_digit() || c in [`+`, `-`, `.`] {
 			if i == 0 {
 				return ['', rawurl]
 			}
@@ -409,8 +409,8 @@ fn split_by_scheme(rawurl string) ![]string {
 }
 
 fn get_scheme(rawurl string) !string {
-	split := split_by_scheme(rawurl) or { return err.msg() }
-	return split[0]
+	parts := split_by_scheme(rawurl) or { return err.msg() }
+	return parts[0]
 }
 
 // split slices s into two substrings separated by the first occurrence of
@@ -428,30 +428,37 @@ fn split(s string, sep u8, cutc bool) (string, string) {
 }
 
 // parse parses rawurl into a URL structure.
+// IPv6 zone identifiers permit escaped percent signs (%25) and spaces (%20),
+// including at the end of the zone. Invalid or prohibited escapes return an error.
 //
 // The rawurl may be relative (a path, without a host) or absolute
 // (starting with a scheme). Trying to parse a hostname and path
 // without a scheme is invalid but may not necessarily return an
 // error, due to parsing ambiguities.
+// A literal colon in userinfo sets the password, even when it is empty.
+// Percent-encoded colons do not act as userinfo separators.
 pub fn parse(rawurl string) !URL {
 	// Cut off #frag
 	u, frag := split(rawurl, `#`, true)
-	mut url := parse_url(u, false) or { return error(error_msg(urllib.err_msg_parse, u)) }
+	mut url := parse_url(u, false) or {
+		return error(error_msg(err_msg_parse + '[${err.msg()}]', u))
+	}
 	if frag == '' {
 		return url
 	}
-	f := unescape(frag, .encode_fragment) or { return error(error_msg(urllib.err_msg_parse,
-		u)) }
+	f := unescape(frag, .encode_fragment) or {
+		return error(error_msg(err_msg_parse + '[${err.msg()}]', u))
+	}
 	url.fragment = f
 	return url
 }
 
-// parse_request_uri parses rawurl into a URL structure. It assumes that
-// rawurl was received in an HTTP request, so the rawurl is interpreted
-// only as an absolute URI or an absolute path.
+// parse_request_uri parses rawurl into a URL structure for an HTTP request.
+// It accepts only absolute URIs or absolute paths and preserves leading `//`
+// sequences as part of the path for request targets.
 // The string rawurl is assumed not to have a #fragment suffix.
 // (Web browsers strip #fragment before sending the URL to a web server.)
-fn parse_request_uri(rawurl string) !URL {
+pub fn parse_request_uri(rawurl string) !URL {
 	return parse_url(rawurl, true)
 }
 
@@ -468,7 +475,7 @@ fn parse_url(rawurl string, via_request bool) !URL {
 		return error(error_msg('parse_url: empty URL', rawurl))
 	}
 	mut url := URL{
-		user: unsafe { nil }
+		user: none
 	}
 	if rawurl == '*' {
 		url.path = '*'
@@ -480,8 +487,7 @@ fn parse_url(rawurl string, via_request bool) !URL {
 	url.scheme = p[0]
 	mut rest := p[1]
 	url.scheme = url.scheme.to_lower()
-	// if rest.ends_with('?') && strings.count(rest, '?') == 1 {
-	if rest.ends_with('?') && !rest[..1].contains('?') {
+	if rest.ends_with('?') && rest.count('?') == 1 {
 		url.force_query = true
 		rest = rest[..rest.len - 1]
 	} else {
@@ -504,12 +510,13 @@ fn parse_url(rawurl string, via_request bool) !URL {
 		// RFC 3986, §3.3:
 		// In addition, a URI reference (Section 4.1) may be a relative-path reference,
 		// in which case the first path segment cannot contain a colon (':') character.
-		colon := rest.index(':') or { return error('there should be a : in the URL') }
-		slash := rest.index('/') or { return error('there should be a / in the URL') }
-		if colon >= 0 && (slash < 0 || colon < slash) {
-			// First path segment has colon. Not allowed in relative URL.
-			return error(error_msg('parse_url: first path segment in URL cannot contain colon',
-				''))
+		if colon := rest.index(':') {
+			slash := rest.index('/') or { return error('there should be a / in the URL') }
+			if colon >= 0 && (slash < 0 || colon < slash) {
+				// First path segment has colon. Not allowed in relative URL.
+				return error(error_msg('parse_url: first path segment in URL cannot contain colon',
+					''))
+			}
 		}
 	}
 	if ((url.scheme != '' || !via_request) && !rest.starts_with('///')) && rest.starts_with('//')
@@ -529,7 +536,7 @@ fn parse_url(rawurl string, via_request bool) !URL {
 }
 
 struct ParseAuthorityRes {
-	user &Userinfo
+	user ?Userinfo
 	host string
 }
 
@@ -547,7 +554,7 @@ fn parse_authority(authority string) !ParseAuthorityRes {
 	}
 	host := parse_host(raw_host)!
 	name, pwd := split(raw_user, `:`, true)
-	auth := if pwd != '' {
+	auth := if raw_user.contains(':') {
 		user_password(unescape(name, .encode_user_password)!, unescape(pwd, .encode_user_password)!)
 	} else {
 		user(unescape(name, .encode_user_password)!)
@@ -570,8 +577,7 @@ fn parse_host(host string) !string {
 		}
 		mut colon_port := host[i + 1..]
 		if !valid_optional_port(colon_port) {
-			return error(error_msg('parse_host: invalid port ${colon_port} after host ',
-				''))
+			return error(error_msg('parse_host: invalid port ${colon_port} after host ', ''))
 		}
 		// RFC 6874 defines that %25 (%-encoded percent) introduces
 		// the zone identifier, and the zone identifier can use basically
@@ -590,8 +596,7 @@ fn parse_host(host string) !string {
 		if i != -1 {
 			colon_port := host[i..]
 			if !valid_optional_port(colon_port) {
-				return error(error_msg('parse_host: invalid port ${colon_port} after host ',
-					''))
+				return error(error_msg('parse_host: invalid port ${colon_port} after host ', ''))
 			}
 		}
 	}
@@ -644,7 +649,7 @@ fn valid_encoded_path(s string) bool {
 		// should_escape handle the others.
 		x := s[i]
 		match x {
-			`!`, `$`, `&`, `\\`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `@` {
+			`!`, `$`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `@` {
 				// ok
 			}
 			`[`, `]` {
@@ -693,7 +698,7 @@ fn valid_optional_port(port string) bool {
 //
 // In the second form, the following rules apply:
 // - if u.scheme is empty, scheme: is omitted.
-// - if u.user is nil, userinfo@ is omitted.
+// - if u.user is none, userinfo@ is omitted.
 // - if u.host is empty, host/ is omitted.
 // - if u.scheme and u.host are empty and u.user is nil,
 // the entire scheme://userinfo@host/ is omitted.
@@ -710,12 +715,13 @@ pub fn (u URL) str() string {
 	if u.opaque != '' {
 		buf.write_string(u.opaque)
 	} else {
-		if u.scheme != '' || u.host != '' || !u.user.empty() {
-			if u.host != '' || u.path != '' || !u.user.empty() {
+		userinfo := u.user or { Userinfo{} }
+		if u.scheme != '' || u.host != '' || !userinfo.empty() {
+			if u.host != '' || u.path != '' || !userinfo.empty() {
 				buf.write_string('//')
 			}
-			if !u.user.empty() {
-				buf.write_string(u.user.str())
+			if !userinfo.empty() {
+				buf.write_string(userinfo.str())
 				buf.write_string('@')
 			}
 			if u.host != '' {
@@ -917,7 +923,8 @@ pub fn (u &URL) resolve_reference(ref &URL) !URL {
 	if ref.scheme == '' {
 		url.scheme = u.scheme
 	}
-	if ref.scheme != '' || ref.host != '' || !ref.user.empty() {
+	ref_user := ref.user or { Userinfo{} }
+	if ref.scheme != '' || ref.host != '' || !ref_user.empty() {
 		// The 'absoluteURI' or 'net_path' cases.
 		// We can ignore the error from set_path since we know we provided a
 		// validly-escaped path.
@@ -1016,17 +1023,11 @@ pub fn split_host_port(hostport string) (string, string) {
 // It doesn't validate pct-encoded. The caller does that via fn unescape.
 pub fn valid_userinfo(s string) bool {
 	for r in s {
-		if `A` <= r && r <= `Z` {
-			continue
-		}
-		if `a` <= r && r <= `z` {
-			continue
-		}
-		if `0` <= r && r <= `9` {
+		if r.is_alnum() {
 			continue
 		}
 		match r {
-			`-`, `.`, `_`, `:`, `~`, `!`, `$`, `&`, `\\`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `%`,
+			`-`, `.`, `_`, `:`, `~`, `!`, `$`, `&`, `'`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `%`,
 			`@` {
 				continue
 			}
@@ -1069,4 +1070,16 @@ fn unhex(c u8) u8 {
 		return c - `A` + 10
 	}
 	return 0
+}
+
+// join_host_port joins host and port into a network address of the form
+// `host:port`. The colon is retained when port is empty. IPv6 addresses are
+// bracketed, and an already bracketed host is preserved. No validation or
+// service-name resolution is performed.
+pub fn join_host_port(host string, port string) string {
+	mut h := host
+	if h.contains(':') && !h.starts_with('[') {
+		h = '[' + h + ']'
+	}
+	return h + ':' + port
 }

@@ -30,6 +30,14 @@ fn test_len_utf8() {
 	assert 'Λέξη'.len_utf8() == 4
 }
 
+fn test_is_pure_ascii() {
+	assert 'Vlang'.is_pure_ascii()
+	assert !'María'.is_pure_ascii()
+	assert !'姓名'.is_pure_ascii()
+	assert !'Слово'.is_pure_ascii()
+	assert !'Λέξη'.is_pure_ascii()
+}
+
 fn test_ends_with() {
 	a := 'browser.v'
 	assert a.ends_with('.v')
@@ -94,6 +102,24 @@ fn test_compare_strings() {
 	assert compare_strings(d, e) == 1
 	assert compare_strings(a, e) == -1
 	assert compare_strings(e, a) == 1
+}
+
+fn test_eq_with_freed_string() {
+	mut s := 'abc'.clone()
+	unsafe {
+		s.free()
+	}
+	assert (s == 'abc') == false
+	assert ('abc' == s) == false
+}
+
+fn test_eq_empty_with_freed_string() {
+	mut s := 'abc'.clone()
+	unsafe {
+		s.free()
+	}
+	assert (s == '') == true
+	assert ('' == s) == true
 }
 
 fn test_sort() {
@@ -227,6 +253,50 @@ fn test_rsplit_nth() {
 	assert e.rsplit_nth(',', 3).len == 3
 }
 
+// An empty delimiter must split on runes, not bytes, so a multi-byte
+// character is never torn across two parts. Every existing test of an empty
+// delimiter used ASCII, where one byte and one rune are the same thing.
+// See https://github.com/vlang/v/issues/29834 .
+fn test_split_empty_delimiter_is_rune_wise() {
+	assert 'αβγδ'.split('') == ['α', 'β', 'γ', 'δ']
+	assert '日本語'.split('') == ['日', '本', '語']
+	assert 'Ünïcödé'.split('') == ['Ü', 'n', 'ï', 'c', 'ö', 'd', 'é']
+	// ASCII is unchanged: one byte is one rune
+	assert 'ABCDEF'.split('') == ['A', 'B', 'C', 'D', 'E', 'F']
+}
+
+fn test_split_empty_delimiter_preserves_invalid_utf8_without_crossing_boundaries() {
+	bytes := [u8(0xe2), 0x82, `A`, 0xff, 0xc2]
+	text := bytes.bytestr()
+	parts := text.split('')
+	assert parts.map(it.bytes()) == bytes.map([it])
+	assert parts.join('') == text
+	assert text.rsplit('').map(it.bytes()) == bytes.reverse().map([it])
+	assert text.split_nth('', 2) == [text[..1], text[1..]]
+	assert text.rsplit_nth('', 2) == [text[4..], text[..4]]
+}
+
+fn test_rsplit_empty_delimiter_is_rune_wise() {
+	assert 'αβγδ'.rsplit('') == ['δ', 'γ', 'β', 'α']
+	assert '日本語'.rsplit('') == ['語', '本', '日']
+	assert 'ABCDEF'.rsplit('') == ['F', 'E', 'D', 'C', 'B', 'A']
+}
+
+// The `nth` remainder must slot on a rune boundary, so the last part is the
+// remaining whole runes rather than a byte prefix.
+fn test_split_nth_empty_delimiter_is_rune_wise() {
+	assert 'αβγδ'.split_nth('', 2) == ['α', 'βγδ']
+	assert '日本語テキスト'.split_nth('', 3) == ['日', '本', '語テキスト']
+	// The `nth` remainder is the leading runes, not their reverse.
+	assert 'αβγδ'.rsplit_nth('', 2) == ['δ', 'αβγ']
+	// an empty string still splits to nothing
+	assert ''.split('') == []
+	assert ''.rsplit('') == []
+	// and the ASCII expectations the old tests pinned still hold
+	assert '123'.split_nth('', 2) == ['1', '23']
+	assert '123'.rsplit_nth('', 2) == ['3', '12']
+}
+
 fn test_split_nth_values() {
 	line := 'CMD=eprintln(phase=1)'
 
@@ -333,6 +403,13 @@ fn test_split() {
 	assert vals.len == 2
 	assert vals[0] == 'wavy turquoise'
 	assert vals[1] == ''
+	// /////////
+	s = 'aaaa'
+	vals = s.split('aa')
+	assert vals.len == 3
+	assert vals[0] == ''
+	assert vals[1] == ''
+	assert vals[2] == ''
 }
 
 fn test_rsplit() {
@@ -381,6 +458,19 @@ fn test_rsplit() {
 	assert vals[1] == ''
 }
 
+fn test_rsplit_trailing_delim_30510() {
+	// A delimiter that ends the string must still be found (#30510).
+	assert 'abcabcabc'.rsplit('abc') == ['', '', '', '']
+	assert 'abc'.rsplit('abc') == ['', '']
+	assert 'abcabc'.rsplit('abc') == ['', '', '']
+	assert 'aaaa'.rsplit('aa') == ['', '', '']
+	assert 'ababa'.rsplit('aba') == ['', 'ab']
+	assert 'abcabcabc'.rsplit_nth('abc', 2) == ['', 'abcabc']
+	a, b := 'abcabcabc'.rsplit_once('abc') or { '', '' }
+	assert a == 'abcabc'
+	assert b == ''
+}
+
 fn test_split_any() {
 	assert 'ABC'.split_any('') == ['A', 'B', 'C']
 	assert ''.split_any(' ') == []
@@ -390,6 +480,11 @@ fn test_split_any() {
 	assert 'Ciao+come*stai? '.split_any('+*') == ['Ciao', 'come', 'stai? ']
 	assert 'Ciao+come*stai? '.split_any('+* ') == ['Ciao', 'come', 'stai?']
 	assert 'first row\nsecond row'.split_any(' \n') == ['first', 'row', 'second', 'row']
+	// #30512: cutset is a set of runes, not bytes; no input char is in the cutset here
+	assert '日本語テキスト'.split_any('あい') == ['日本語テキスト']
+	assert 'a　b'.split_any('あい') == ['a　b']
+	assert 'Ünïcödé tëst'.split_any('é') == ['Ünïcöd', ' tëst']
+	assert 'a,b;c'.split_any(',;') == ['a', 'b', 'c']
 }
 
 fn test_rsplit_any() {
@@ -401,6 +496,11 @@ fn test_rsplit_any() {
 	assert ' Ciao+come*stai?'.rsplit_any('+*') == ['stai?', 'come', ' Ciao']
 	assert ' Ciao+come*stai?'.rsplit_any('+* ') == ['stai?', 'come', 'Ciao']
 	assert 'first row\nsecond row'.rsplit_any(' \n') == ['row', 'second', 'row', 'first']
+	// #30512: cutset is a set of runes, not bytes; no input char is in the cutset here
+	assert '日本語テキスト'.rsplit_any('あい') == ['日本語テキスト']
+	assert 'a　b'.rsplit_any('あい') == ['a　b']
+	assert 'Ünïcödé tëst'.rsplit_any('é') == [' tëst', 'Ünïcöd']
+	assert 'a,b;c'.rsplit_any(',;') == ['c', 'b', 'a']
 }
 
 fn test_split_once() ? {
@@ -425,6 +525,13 @@ fn test_rsplit_once() ? {
 	path3, ext3 := 'home/dir'.rsplit_once('.') or { '', '' }
 	assert path3 == ''
 	assert ext3 == ''
+}
+
+fn test_split_by_space() {
+	assert 'a     b    c'.split_by_space() == ['a', 'b', 'c']
+	assert '  a\t\tb\tc'.split_by_space() == ['a', 'b', 'c']
+	assert 'a b c \n\r'.split_by_space() == ['a', 'b', 'c']
+	assert '\ta b \t \tc \r\n'.split_by_space() == ['a', 'b', 'c']
 }
 
 fn test_is_bin() {
@@ -455,6 +562,13 @@ fn test_is_bin() {
 	assert '0.34'.is_bin() == false
 	assert '0o23'.is_bin() == false
 	assert 'vlang'.is_bin() == false
+	// the prefix characters are accepted in either case, like .int()
+	assert '0B1'.is_bin() == true
+	assert '0B0'.is_bin() == true
+	assert '-0B1'.is_bin() == true
+	assert '+0B1101'.is_bin() == true
+	assert '0B'.is_bin() == false
+	assert '-0B'.is_bin() == false
 }
 
 fn test_is_oct() {
@@ -465,6 +579,13 @@ fn test_is_oct() {
 	assert '-0o0'.is_oct() == true
 	assert '-0o1'.is_oct() == true
 	assert '-0o2'.is_oct() == true
+	// the prefix characters are accepted in either case, like .int()
+	assert '0O0'.is_oct() == true
+	assert '0O1'.is_oct() == true
+	assert '-0O1'.is_oct() == true
+	assert '+0O23'.is_oct() == true
+	assert '0O'.is_oct() == false
+	assert '0O8'.is_oct() == false
 
 	assert '0o04'.is_oct() == true
 	assert '0o16'.is_oct() == true
@@ -529,6 +650,15 @@ fn test_is_hex() {
 	assert '0.34'.is_hex() == false
 	assert '0o23'.is_hex() == false
 	assert 'vlang'.is_hex() == false
+	// the prefix characters are accepted in either case, like .int()
+	assert '0X1'.is_hex() == true
+	assert '0X1A'.is_hex() == true
+	assert '-0X1'.is_hex() == true
+	assert '-0X1A'.is_hex() == true
+	assert '+0X1'.is_hex() == true
+	assert '+0XFF'.is_hex() == true
+	assert '0X'.is_hex() == false
+	assert '0XG'.is_hex() == false
 }
 
 fn test_is_int() {
@@ -596,8 +726,11 @@ fn test_is_int() {
 fn test_trim_space() {
 	a := ' a '
 	assert a.trim_space() == 'a'
-	code := '
+	assert a.trim_space_left() == 'a '
+	assert a.trim_space_right() == ' a'
 
+	code := '
+\t
 fn main() {
         println(2)
 }
@@ -606,7 +739,19 @@ fn main() {
 	code_clean := 'fn main() {
         println(2)
 }'
+	code_trim_right := '
+\t
+fn main() {
+        println(2)
+}'
+	code_trim_left := 'fn main() {
+        println(2)
+}
+
+'
 	assert code.trim_space() == code_clean
+	assert code.trim_space_right() == code_trim_right
+	assert code.trim_space_left() == code_trim_left
 }
 
 fn test_join() {
@@ -660,6 +805,24 @@ fn test_replace() {
 	assert v.replace('  ', ' ') == 'a  b c d'
 }
 
+fn test_replace_once() {
+	assert 'abcabc'.replace_once('abc', 'X') == 'Xabc'
+	assert 'abc'.replace_once('b', 'XYZ') == 'aXYZc'
+	assert 'abc'.replace_once('c', '') == 'ab'
+	assert 'abc'.replace_once('missing', 'X') == 'abc'
+	assert 'abc'.replace_once('abcd', 'X') == 'abc'
+	assert ''.replace_once('a', 'X') == ''
+	assert 'abc'.replace_once('', 'X') == 'Xabc'
+	assert ''.replace_once('', 'X') == 'X'
+	assert 'abc'.replace_once('', '') == 'abc'
+	assert ''.replace_once('', '') == ''
+	assert 'é🙂'.replace_once('', '前') == '前é🙂'
+	assert 'abc'.replace_once('b', r'$&') == r'a$&c'
+	assert 'abc'.replace_once('b', r'$$') == r'a$$c'
+	assert 'abc'.replace_once('b', r'$`') == r'a$`c'
+	assert 'abc'.replace_once('b', r"$'") == r"a$'c"
+}
+
 fn test_replace_each() {
 	s := 'hello man man :)'
 	q := s.replace_each([
@@ -695,6 +858,51 @@ fn test_replace_each() {
 	assert y == 'bbbb'
 	s2 := 'hello_world hello'
 	assert s2.replace_each(['hello_world', 'aaa', 'hello', 'bbb']) == 'aaa bbb'
+	// an empty needle is skipped instead of looping forever
+	assert 'abc'.replace_each(['', 'X']) == 'abc'
+	assert 'abc'.replace_each(['', 'X', 'b', 'B', '', 'Y', 'c', 'C']) == 'aBC'
+	assert 'abc'.replace_each(['a', 'A', '', 'X']) == 'Abc'
+	assert ''.replace_each(['', 'X']) == ''
+	assert 'abc'.replace_each(['a', '', 'b', '']) == 'c'
+}
+
+fn test_replace_each_preserves_nul_bytes_and_match_precedence() {
+	assert 'a\r\nQ\x00UIT'.replace_each(['\r', '', '\n', '', '\x00', '']) == 'aQUIT'
+	assert 'abc'.replace_each(['b', '', '\x00', 'XYZ']) == 'ac'
+	assert 'a\x00b\x00'.replace_each(['\x00', 'XYZ', 'b', '']) == 'aXYZXYZ'
+	assert 'a\x00b\x00'.replace_each(['a\x00', '', '\x00', '!']) == 'b!'
+	assert 'a\x00\x00b'.replace_each(['\x00\x00', '\x00']) == 'a\x00b'
+	assert 'a\x00b'.replace_each(['a', '\x00', '\x00', 'X']) == '\x00Xb'
+	assert '\x00\x00\x00'.replace_each(['\x00\x00', 'X', '\x00', 'Y']) == 'XY'
+	assert 'aaaa'.replace_each(['aa', 'X', 'aaa', 'Y']) == 'XX'
+	// A rejected overlapping match must not hide a later disjoint match.
+	assert 'abcbcb'.replace_each(['ab', 'X', 'bc', 'Y']) == 'XcYb'
+	assert 'abca'.replace_each(['b', '', 'ac', 'X']) == 'aca'
+	assert 'abcabc'.replace_each(['bc', 'X', 'abc', 'Y']) == 'aXaX'
+	assert 'ABCD'.replace_each(['B', 'C/', 'C', 'D', 'D', 'C']) == 'AC/DC'
+	original := 'a\x00b'
+	assert original.replace_each(['a', 'A', '\x00', '']) == 'Ab'
+	assert original.bytes() == [u8(97), 0, 98]
+}
+
+fn test_replace_each_skips_consumed_spans() {
+	n := 8192
+	run := 'a'.repeat(n)
+	needle := 'a'.repeat(n / 2)
+	assert run.replace_each(['a', 'X', needle, 'Y']) == 'X'.repeat(n)
+	assert (run + '\x00' + run).replace_each(['\x00', 'X', needle, 'Y']) == 'YYXYY'
+	assert ('a\x00'.repeat(n) + run).replace_each(['\x00', 'X', needle, 'Y']) ==
+		'aX'.repeat(n) + 'YY'
+}
+
+fn test_format() {
+	template := 'First: {0}, First again: {0}, Second: {1}, Third: {2}'
+	assert template.format('A', 'B', 'C') == 'First: A, First again: A, Second: B, Third: C'
+	assert template.format('R', 'G', 'B') == 'First: R, First again: R, Second: G, Third: B'
+	assert 'Escaped {{0}} and {{braces}}'.format('unused') == 'Escaped {0} and {braces}'
+	assert '{0} {3} {1}'.format('A', 'B') == 'A {3} B'
+	assert '{10}-{2}'.format('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10') == '10-2'
+	assert 'keep {name} and {1'.format('A', 'B') == 'keep {name} and {1'
 }
 
 fn test_replace_char() {
@@ -707,6 +915,11 @@ fn test_replace_char() {
 fn test_normalize_tabs() {
 	assert '\t\tHello!'.normalize_tabs(4) == '        Hello!'
 	assert '\t\tHello!\t; greeting'.normalize_tabs(1) == '  Hello! ; greeting'
+}
+
+fn test_expand_tabs() {
+	assert 'AB\tHello!'.expand_tabs(4) == 'AB  Hello!'
+	assert 'AB\t\tHello!\t; greeting'.expand_tabs(4) == 'AB      Hello!  ; greeting'
 }
 
 fn test_itoa() {
@@ -888,7 +1101,11 @@ fn test_hash() {
 	s3 := 'Content-Type'
 	assert s3.hash() == 949037134
 	s4 := 'bad_key'
-	assert s4.hash() == -346636507
+	assert s4.hash() == $if new_int ?&& x64 {
+		3948330789
+	} $else {
+		-346636507
+	}
 	s5 := '24640'
 	// From a map collision test
 	assert s5.hash() % ((1 << 20) - 1) == s.hash() % ((1 << 20) - 1)
@@ -899,6 +1116,7 @@ fn test_trim() {
 	assert 'banana'.trim('bna') == ''
 	assert 'abc'.trim('ac') == 'b'
 	assert 'aaabccc'.trim('ac') == 'b'
+	assert 'あいうえお'.trim('あい') == 'うえお'
 }
 
 fn test_trim_indexes() {
@@ -920,6 +1138,7 @@ fn test_trim_left() {
 	s = 'banana'
 	assert s.trim_left('ba') == 'nana'
 	assert s.trim_left('ban') == ''
+	assert 'あいうえお'.trim_left('あい') == 'うえお'
 }
 
 fn test_trim_right() {
@@ -931,6 +1150,7 @@ fn test_trim_right() {
 	s = 'banana'
 	assert s.trim_right('na') == 'b'
 	assert s.trim_right('ban') == ''
+	assert 'あいうえお'.trim_right('うえお') == 'あい'
 }
 
 fn test_all_before() {
@@ -979,7 +1199,7 @@ fn test_bytes_to_string() {
 }
 
 fn test_charptr() {
-	foo := &char('VLANG'.str)
+	foo := &char(c'VLANG')
 	assert typeof(foo).name == '&char'
 	assert unsafe { foo.vstring() } == 'VLANG'
 	assert unsafe { foo.vstring_with_len(3) } == 'VLA'
@@ -1013,11 +1233,48 @@ fn test_lower() {
 	s = 'hi'
 	assert s.is_lower()
 	assert s.to_lower() == 'hi'
+	// a leading digit no longer decides the whole string
+	assert '123abc'.is_lower()
+	assert '1a'.is_lower()
+	assert '1, 2, 3, 4 go!'.is_lower()
+	assert 'a1b2'.is_lower()
+	assert ' 123abc!'.is_lower()
+	assert !'!@#$'.is_lower()
+	assert !'   '.is_lower()
+	assert !'1A'.is_lower()
+	assert !'1a2B'.is_lower()
 	assert 'aloha!'[0] == `a`
 	assert 'aloha!'[5] == `!`
 	s = '123'
 	assert !s.is_lower()
 	assert s.to_lower() == '123'
+	s = ''
+	assert !s.is_lower()
+}
+
+fn test_lower_ascii() {
+	mut s := 'A'
+	assert !s.is_lower()
+	assert s.to_lower_ascii() == 'a'
+	assert s.to_lower_ascii().len == 1
+	s = 'HELLO'
+	assert !s.is_lower()
+	assert s.to_lower_ascii() == 'hello'
+	assert s.to_lower_ascii().len == 5
+	s = 'Aloha'
+	assert !s.is_lower()
+	assert s.to_lower_ascii() == 'aloha'
+	s = 'Have A nice Day!'
+	assert !s.is_lower()
+	assert s.to_lower_ascii() == 'have a nice day!'
+	s = 'hi'
+	assert s.is_lower()
+	assert s.to_lower_ascii() == 'hi'
+	assert 'aloha!'[0] == `a`
+	assert 'aloha!'[5] == `!`
+	s = '123'
+	assert !s.is_lower()
+	assert s.to_lower_ascii() == '123'
 	s = ''
 	assert !s.is_lower()
 }
@@ -1040,6 +1297,9 @@ fn test_upper() {
 	s = 'HI'
 	assert s.is_upper()
 	assert s.to_upper() == 'HI'
+	s = '1, 2, 3, 4 GO!'
+	assert s.is_upper()
+	assert s.to_upper() == '1, 2, 3, 4 GO!'
 	s = '123'
 	assert !s.is_upper()
 	assert s.to_upper() == '123'
@@ -1047,7 +1307,43 @@ fn test_upper() {
 	assert !s.is_upper()
 }
 
+fn test_upper_ascii() {
+	mut s := 'a'
+	assert !s.is_upper()
+	assert s.to_upper_ascii() == 'A'
+	assert s.to_upper_ascii().len == 1
+	s = 'hello'
+	assert !s.is_upper()
+	assert s.to_upper_ascii() == 'HELLO'
+	assert s.to_upper_ascii().len == 5
+	s = 'Aloha'
+	assert !s.is_upper()
+	assert s.to_upper_ascii() == 'ALOHA'
+	s = 'have a nice day!'
+	assert !s.is_upper()
+	assert s.to_upper_ascii() == 'HAVE A NICE DAY!'
+	s = 'HI'
+	assert s.is_upper()
+	assert s.to_upper_ascii() == 'HI'
+	s = '123'
+	assert !s.is_upper()
+	assert s.to_upper_ascii() == '123'
+	s = ''
+	assert !s.is_upper()
+}
+
+fn test_runes_to_upper() {
+	assert 'água'.to_upper() == 'ÁGUA'
+}
+
+fn test_runes_to_lower() {
+	assert 'ÁGUA'.to_lower() == 'água'
+}
+
 fn test_capitalize() {
+	assert ''.capitalize() == ''
+	assert 'a'.capitalize() == 'A'
+	assert 'A'.capitalize() == 'A'
 	mut s := 'hello'
 	assert !s.is_capital()
 	assert s.capitalize() == 'Hello'
@@ -1067,6 +1363,20 @@ fn test_capitalize() {
 	assert s.is_capital()
 	assert s.capitalize() == 'Test it'
 	assert 'GameMission_t'.capitalize() == 'GameMission_t'
+	assert 'чорба'.capitalize() == 'Чорба'
+	assert 'ä ö å æ ã ø ô é ë'.title() == 'Ä Ö Å Æ Ã Ø Ô É Ë'
+}
+
+fn test_uncapitalize() {
+	assert ''.uncapitalize() == ''
+	assert 'a'.uncapitalize() == 'a'
+	assert 'A'.uncapitalize() == 'a'
+	assert 'hello'.uncapitalize() == 'hello'
+	assert 'Hello'.uncapitalize() == 'hello'
+	assert 'HELLO'.uncapitalize() == 'hELLO'
+	assert 'чорба'.uncapitalize() == 'чорба'
+	assert 'Чорба'.uncapitalize() == 'чорба'
+	assert 'ЧОРБА'.uncapitalize() == 'чОРБА'
 }
 
 fn test_title() {
@@ -1079,6 +1389,7 @@ fn test_title() {
 	s = 'Hello World'
 	assert s.is_title()
 	assert s.title() == 'Hello World'
+	assert 'пет корита ябълки'.title() == 'Пет Корита Ябълки'
 }
 
 fn test_for_loop() {
@@ -1111,7 +1422,10 @@ fn test_limit() {
 	assert s.limit(2) == 'he'
 	assert s.limit(9) == s
 	assert s.limit(0) == ''
-	// assert s.limit(-1) == ''
+	assert s.limit(-1) == ''
+	assert ''.limit(-2147483648) == ''
+	assert 'é😊界'.limit(2) == 'é😊'
+	assert 'é😊界'.limit(-2147483648) == ''
 }
 
 fn test_repeat() {
@@ -1196,7 +1510,7 @@ fn test_raw_with_quotes() {
 
 fn test_escape() {
 	a := 10
-	assert "\"${a}" == '"10'
+	assert '"${a}' == '"10'
 }
 
 fn test_atoi() {
@@ -1212,6 +1526,7 @@ fn test_atoi() {
 fn test_raw_inter() {
 	world := 'world'
 	s := r'hello\n$world'
+	assert world == 'world'
 	assert s == r'hello\n$world'
 	assert s.contains('$')
 }
@@ -1222,6 +1537,8 @@ fn test_c_r() {
 	cs := '${c}'
 	r := 50
 	rs := '${r}'
+	assert cs == '42'
+	assert rs == '50'
 }
 
 fn test_inter_before_comptime_if() {
@@ -1416,6 +1733,16 @@ fn test_emoji_to_runes() {
 	assert x.runes()[0] == `👋`
 }
 
+fn test_graphemes() {
+	assert '\u006E\u0303'.graphemes() == ['ñ']
+	assert '\U0001F3F3\uFE0F\u200D\U0001F308'.graphemes() == ['🏳️‍🌈']
+	assert 'ห์'.graphemes() == ['ห์']
+	assert 'ปีเตอร์'.graphemes() == ['ปี', 'เ', 'ต', 'อ', 'ร์']
+	assert '🇺🇳'.graphemes() == ['🇺🇳']
+	assert '👩🏽‍💻'.graphemes() == ['👩🏽‍💻']
+	assert 'a\r\nb'.graphemes() == ['a', '\r\n', 'b']
+}
+
 fn test_string_to_rune() {
 	x := 'Hello World 👋'
 	assert x.runes().len == 13
@@ -1453,6 +1780,20 @@ fn test_string_is_ascii() {
 	assert 'a👋bc'.is_ascii() == false
 }
 
+fn test_string_is_identifier() {
+	assert ''.is_identifier() == false
+	assert ' '.is_identifier() == false
+	assert '~~'.is_identifier() == false
+	assert '_Az~'.is_identifier() == false
+	assert '_Aö~'.is_identifier() == false
+	assert '👋'.is_identifier() == false
+	assert 'a👋bc'.is_identifier() == false
+	assert '9'.is_identifier() == false
+	assert '_9'.is_identifier() == true
+	assert 'a 9'.is_identifier() == false
+	assert 't'.is_identifier() == true
+}
+
 fn test_string_with_zero_byte_escape() {
 	assert '\x00'.bytes() == [u8(0)]
 }
@@ -1484,12 +1825,47 @@ fn test_index_u8() {
 	assert 'abcabca'.index_u8(`a`) == 0
 	assert 'abcabca'.index_u8(`b`) == 1
 	assert 'abcabca'.index_u8(`c`) == 2
-	//
+
 	assert 'abc'.index_u8(`d`) == -1
 	assert 'abc'.index_u8(`A`) == -1
 	assert 'abc'.index_u8(`B`) == -1
 	assert 'abc'.index_u8(`C`) == -1
-	//
+}
+
+fn test_index_empty_needle() {
+	for s in ['abc', '', 'é🙂', string{}] {
+		for needle in ['', string{}] {
+			assert s.contains(needle)
+			assert s.index_(needle) == 0
+			assert s.index(needle)? == 0
+		}
+	}
+	assert 'abcabc'.index('bc')? == 1
+	assert 'abc'.index('missing') == none
+	assert ''.index('a') == none
+}
+
+fn test_last_index_empty_needle() {
+	for s in ['abc', '', 'é🙂', string{}] {
+		for needle in ['', string{}] {
+			assert s.last_index(needle)? == s.len
+		}
+	}
+	assert ''.last_index('a') == none
+}
+
+fn test_empty_delimiter_helpers() {
+	for s in ['abc', '', 'é🙂'] {
+		assert s.before('') == s
+		assert s.all_before('') == s
+		assert s.all_before_last('') == s
+		assert s.all_after('') == s
+		assert s.all_after_first('') == s
+		assert s.all_after_last('') == s
+		assert s.after('') == s
+		assert s.find_between('', ']') == ''
+		assert s.find_between('[', '') == ''
+	}
 }
 
 fn test_last_index() {
@@ -1499,7 +1875,7 @@ fn test_last_index() {
 	assert 'Zabcabca'.last_index('Z')? == 0
 	x := 'Zabcabca'.last_index('Y')
 	assert x == none
-	// TODO: `assert 'Zabcabca'.index_last('Y') == none` is a cgen error, 2023/12/04
+	assert 'Zabcabca'.last_index('Y') == none
 }
 
 fn test_last_index_u8() {
@@ -1524,10 +1900,23 @@ fn test_contains_byte() {
 
 fn test_camel_to_snake() {
 	assert 'Abcd'.camel_to_snake() == 'abcd'
+	assert 'aBcd'.camel_to_snake() == 'a_bcd'
+	assert 'AAbb'.camel_to_snake() == 'aa_bb'
 	assert 'aaBB'.camel_to_snake() == 'aa_bb'
+	assert 'BBaa'.camel_to_snake() == 'bb_aa'
 	assert 'aaBbCcDD'.camel_to_snake() == 'aa_bb_cc_dd'
-	assert 'BBaa'.camel_to_snake() == 'b_baa'
+	assert 'AAbbCC'.camel_to_snake() == 'aa_bb_cc'
+	assert 'aaBBcc'.camel_to_snake() == 'aa_bb_cc'
 	assert 'aa_BB'.camel_to_snake() == 'aa_bb'
+	assert 'aa__BB'.camel_to_snake() == 'aa__bb'
+	assert 'JVM_PUBLIC_ACC'.camel_to_snake() == 'jvm_public_acc'
+	assert '_ISspace'.camel_to_snake() == '_is_space'
+	assert '_aBcd'.camel_to_snake() == '_a_bcd'
+	assert '_a_Bcd'.camel_to_snake() == '_a_bcd'
+	assert '_AbCDe_'.camel_to_snake() == '_ab_cd_e_'
+	assert 'HTTPServer'.camel_to_snake() == 'http_server'
+	assert 'HTTP2Server'.camel_to_snake() == 'http2_server'
+	assert 'XML2JSON'.camel_to_snake() == 'xml_2_json'
 }
 
 fn test_snake_to_camel() {
@@ -1536,4 +1925,116 @@ fn test_snake_to_camel() {
 	assert 'ab_cd_efg'.snake_to_camel() == 'AbCdEfg'
 	assert '_abcd'.snake_to_camel() == 'Abcd'
 	assert '_abcd_'.snake_to_camel() == 'Abcd'
+}
+
+fn test_string_wrap() {
+	assert 'Hello World'.wrap(width: 10) == 'Hello\nWorld'
+	assert 'Hello World'.wrap(width: 10, end: '<linea-break>') == 'Hello<linea-break>World'
+	assert 'The V programming language'.wrap(width: 20, end: '|') == 'The V programming|language'
+	assert 'Hello, my name is Carl and I am a delivery'.wrap(width: 20) == 'Hello, my name is\nCarl and I am a\ndelivery'
+}
+
+fn test_hex() {
+	assert 'Hello World!'.hex() == '48656c6c6f20576f726c6421'
+	assert 'VLANG'.hex() == '564c414e47'
+	assert 'VLANG'.hex() == 'VLANG'.bytes().hex()
+	for c in u8(0) .. 255 {
+		assert c.ascii_str().hex() == [c].hex()
+	}
+}
+
+fn test_integer_conveniences_keep_leading_zeros_decimal() {
+	for input, expected in {
+		'010':     10
+		'08':      8
+		'0_10':    10
+		'0b1010':  10
+		'0B_1010': 10
+		'0o12':    10
+		'0O_12':   10
+		'0xA':     10
+		'0X_A':    10
+	} {
+		assert input.int() == expected
+		assert input.i8() == i8(expected)
+		assert input.i16() == i16(expected)
+		assert input.i32() == i32(expected)
+		assert input.i64() == i64(expected)
+		assert input.u8() == u8(expected)
+		assert input.u16() == u16(expected)
+		assert input.u32() == u32(expected)
+		assert input.u64() == u64(expected)
+	}
+	for input in ['-010', '-0b1010', '-0o12', '-0xA', '-0X_A'] {
+		assert input.int() == -10
+		assert input.i8() == i8(-10)
+		assert input.i16() == i16(-10)
+		assert input.i32() == i32(-10)
+		assert input.i64() == i64(-10)
+	}
+	for input in ['+010', '+0b1010', '+0o12', '+0xA', '+0X_A'] {
+		assert input.int() == 10
+		assert input.i8() == i8(10)
+		assert input.i16() == i16(10)
+		assert input.i32() == i32(10)
+		assert input.i64() == i64(10)
+	}
+	assert '010'.parse_int(0, 64)! == 8
+	assert '010'.parse_uint(0, 64)! == 8
+	if value := '08'.parse_int(0, 64) {
+		assert false, 'invalid octal digits parsed as ${value}'
+	}
+	if value := '08'.parse_uint(0, 64) {
+		assert false, 'invalid octal digits parsed as ${value}'
+	}
+}
+
+fn test_split_any_invalid_utf8_matches_replacement_runes() {
+	for bytes in [[u8(`a`), 0x80, `b`], [u8(`a`), 0xc0, 0x80, `b`], [u8(`a`), 0xe2, 0x82, `b`],
+		[u8(`a`), 0xf4, 0x90, 0x80, 0x80, `b`]] {
+		s := bytes.bytestr()
+		mut expected := ['a']
+		for _ in 0 .. bytes.len - 3 {
+			expected << ''
+		}
+		expected << 'b'
+		assert s.split_any('�') == expected
+		assert s.rsplit_any('�') == expected.reverse()
+	}
+	assert 'a😀b😀c'.split_any('😀') == ['a', 'b', 'c']
+	assert 'a😀b😀c'.rsplit_any('😀') == ['c', 'b', 'a']
+	bad_delim := [u8(0x80)].bytestr()
+	assert 'a�b'.split_any(bad_delim) == ['a', 'b']
+	assert 'a�b'.rsplit_any(bad_delim) == ['b', 'a']
+	mut bytes := []u8{len: 4096, init: 0x80}
+	bytes.insert(0, `a`)
+	bytes << `b`
+	s := bytes.bytestr()
+	parts := s.split_any('�')
+	assert parts.len == 4097
+	assert s.rsplit_any('�') == parts.reverse()
+}
+
+fn test_after_empty_missing_and_multibyte_delimiters() {
+	for s in ['abc', '', 'é🙂'] {
+		assert s.after('') == s
+		assert s.after('missing') == s
+	}
+	assert '23:34:45.234'.after(':') == '45.234'
+	assert 'abc--def--ghi'.after('--') == 'ghi'
+	assert 'α🙂β🙂γ'.after('🙂') == 'γ'
+}
+
+fn test_string_equality_with_shared_storage_still_compares_lengths() {
+	text := 'prefix:value'.clone()
+	full := unsafe { text.substr_unsafe(0, text.len) }
+	short := unsafe { text.substr_unsafe(0, 6) }
+	assert text.str == full.str
+	assert text.str == short.str
+	assert text == full
+	assert text != short
+	assert short == 'prefix'
+	assert text == text.clone()
+	assert text != 'prefix:other'
+	assert '' == ''.clone()
 }

@@ -26,11 +26,10 @@ pub enum EventType {
 	clipboard_pasted
 	files_dropped
 	num
-	files_droped  @[deprecated: 'use files_dropped instead'; deprecated_after: '2023-08-21']
 }
 
 pub enum MouseButton {
-	invalid = -1
+	invalid = 256
 	left    = 0
 	right   = 1
 	middle  = 2

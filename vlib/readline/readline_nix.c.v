@@ -10,10 +10,11 @@ module readline
 import term.termios
 import term
 import os
+import encoding.utf8.east_asian
 
-fn C.raise(sig int)
+fn C.raise(sig int) int
 
-fn C.getppid() int
+fn C.getppid() i32
 
 // Action defines what actions to be executed.
 enum Action {
@@ -50,15 +51,17 @@ pub fn (mut r Readline) enable_raw_mode() {
 		return
 	}
 	mut raw := r.orig_termios
-	// println('> r.orig_termios: $r.orig_termios')
-	// println('>            raw: $raw')
-	raw.c_iflag &= termios.invert(C.BRKINT | C.ICRNL | C.INPCK | C.ISTRIP | C.IXON)
+	// println('> r.orig_termios: ${r.orig_termios}')
+	// println('>            raw: ${raw}')
+	raw.c_iflag &=
+		termios.invert(termios.flag(int(C.BRKINT) | int(C.ICRNL) | int(C.INPCK) | int(C.ISTRIP) | int(C.IXON)))
 	raw.c_cflag |= termios.flag(C.CS8)
-	raw.c_lflag &= termios.invert(C.ECHO | C.ICANON | C.IEXTEN | C.ISIG)
+	raw.c_lflag &=
+		termios.invert(termios.flag(int(C.ECHO) | int(C.ICANON) | int(C.IEXTEN) | int(C.ISIG)))
 	raw.c_cc[C.VMIN] = u8(1)
 	raw.c_cc[C.VTIME] = u8(0)
 	termios.tcsetattr(0, C.TCSADRAIN, mut raw)
-	// println('>   after    raw: $raw')
+	// println('>   after    raw: ${raw}')
 	r.is_raw = true
 	r.is_tty = true
 }
@@ -74,9 +77,10 @@ pub fn (mut r Readline) enable_raw_mode_nosig() {
 		return
 	}
 	mut raw := r.orig_termios
-	raw.c_iflag &= termios.invert(C.BRKINT | C.ICRNL | C.INPCK | C.ISTRIP | C.IXON)
+	raw.c_iflag &=
+		termios.invert(termios.flag(int(C.BRKINT) | int(C.ICRNL) | int(C.INPCK) | int(C.ISTRIP) | int(C.IXON)))
 	raw.c_cflag |= termios.flag(C.CS8)
-	raw.c_lflag &= termios.invert(C.ECHO | C.ICANON | C.IEXTEN)
+	raw.c_lflag &= termios.invert(termios.flag(int(C.ECHO) | int(C.ICANON) | int(C.IEXTEN)))
 	raw.c_cc[C.VMIN] = u8(1)
 	raw.c_cc[C.VTIME] = u8(0)
 	termios.tcsetattr(0, C.TCSADRAIN, mut raw)
@@ -95,13 +99,13 @@ pub fn (mut r Readline) disable_raw_mode() {
 
 // read_char reads a single character.
 pub fn (r Readline) read_char() !int {
-	return int(term.utf8_getchar() or { return err })
+	return int(term.utf8_getchar() or { return error('failed to read character') })
 }
 
 // read_line_utf8 blocks execution in a loop and awaits user input
 // characters from a terminal until `EOF` or `Enter` key is encountered
 // in the input stream.
-// read_line_utf8 returns the complete input line as an UTF-8 encoded `[]rune` or
+// read_line_utf8 returns the complete UTF-8 input line as an UTF-32 encoded `[]rune` or
 // an error if the line is empty.
 // The `prompt` `string` is output as a prefix text for the input capturing.
 // read_line_utf8 is the main method of the `readline` module and `Readline` struct.
@@ -152,7 +156,7 @@ pub fn (mut r Readline) read_line(prompt string) !string {
 // read_line_utf8 blocks execution in a loop and awaits user input
 // characters from a terminal until `EOF` or `Enter` key is encountered
 // in the input stream.
-// read_line_utf8 returns the complete input line as an UTF-8 encoded `[]rune` or
+// read_line_utf8 returns the complete UTF-8 input line as an UTF-32 encoded `[]rune` or
 // an error if the line is empty.
 // The `prompt` `string` is output as a prefix text for the input capturing.
 // read_line_utf8 is the main method of the `readline` module and `Readline` struct.
@@ -180,7 +184,7 @@ fn (mut r Readline) analyse(c int) Action {
 		return Action.insert_character
 	}
 	match u8(c) {
-		`\0`, 0x3, 0x4, 255 {
+		`\0`, 0x3, 0x4 {
 			return .eof
 		} // NUL, End of Text, End of Transmission
 		`\n`, `\r` {
@@ -264,6 +268,7 @@ fn (r Readline) analyse_extended_control() Action {
 		}
 		else {}
 	}
+
 	return .nothing
 }
 
@@ -281,6 +286,7 @@ fn (r Readline) analyse_extended_control_no_eat(last_c u8) Action {
 		}
 		else {}
 	}
+
 	return .nothing
 }
 
@@ -308,6 +314,7 @@ fn (mut r Readline) execute(a Action, c int) bool {
 		.completion { r.completion() }
 		else {}
 	}
+
 	return false
 }
 
@@ -374,20 +381,29 @@ fn get_prompt_offset(prompt string) int {
 // refresh_line redraws the current line, including the prompt.
 fn (mut r Readline) refresh_line() {
 	mut end_of_input := [0, 0]
-	end_of_input = calculate_screen_position(r.prompt.len, 0, get_screen_columns(), r.current.len,
-		end_of_input)
+	last_prompt_line := if r.prompt.contains('\n') {
+		r.prompt.all_after_last('\n')
+	} else {
+		r.prompt
+	}
+	last_prompt_width := east_asian.display_width(last_prompt_line, 1)
+	current_width := east_asian.display_width(r.current.string(), 1)
+	cursor_prefix_width := east_asian.display_width(r.current[..r.cursor].string(), 1)
+
+	end_of_input = calculate_screen_position(last_prompt_width, 0, get_screen_columns(),
+		current_width, end_of_input)
 	end_of_input[1] += r.current.filter(it == `\n`).len
 	mut cursor_pos := [0, 0]
-	cursor_pos = calculate_screen_position(r.prompt.len, 0, get_screen_columns(), r.cursor,
-		cursor_pos)
+	cursor_pos = calculate_screen_position(last_prompt_width, 0, get_screen_columns(),
+		cursor_prefix_width, cursor_pos)
 	shift_cursor(0, -r.cursor_row_offset)
 	term.erase_toend()
-	print(r.prompt)
+	print(last_prompt_line)
 	print(r.current.string())
 	if end_of_input[0] == 0 && end_of_input[1] > 0 {
 		print('\n')
 	}
-	shift_cursor(cursor_pos[0] - r.prompt_offset, -(end_of_input[1] - cursor_pos[1]))
+	shift_cursor(cursor_pos[0], -(end_of_input[1] - cursor_pos[1]))
 	r.cursor_row_offset = cursor_pos[1]
 }
 
@@ -427,7 +443,7 @@ fn (mut r Readline) delete_character() {
 }
 
 fn (mut r Readline) delete_word_left() {
-	if r.cursor == 0 {
+	if r.cursor == 0 || r.current.len == 0 {
 		return
 	}
 
@@ -436,7 +452,7 @@ fn (mut r Readline) delete_word_left() {
 		r.cursor = r.current.len - 1
 	}
 
-	if r.current[r.cursor] != ` ` && r.current[r.cursor - 1] == ` ` {
+	if r.cursor > 0 && r.current[r.cursor] != ` ` && r.current[r.cursor - 1] == ` ` {
 		r.cursor--
 	}
 

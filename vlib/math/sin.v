@@ -17,10 +17,10 @@ const sin_data = [
 	-1.1821555255364833468288e-19,
 ]
 const sin_cs = ChebSeries{
-	c: sin_data
+	c:     sin_data
 	order: 11
-	a: -1
-	b: 1
+	a:     -1
+	b:     1
 }
 const cos_data = [
 	0.165391825637921473505668118136,
@@ -36,10 +36,10 @@ const cos_data = [
 	-3.7363121133079412079201377318e-18,
 ]
 const cos_cs = ChebSeries{
-	c: cos_data
+	c:     cos_data
 	order: 10
-	a: -1
-	b: 1
+	a:     -1
+	b:     1
 }
 
 // sin calculates the sine of the angle in radians
@@ -54,26 +54,32 @@ pub fn sin(x f64) f64 {
 		return x * (1.0 - x2 / 6.0)
 	} else {
 		mut sgn_result := sgn_x
-		mut y := floor(abs_x / (0.25 * pi))
-		mut octant := int(y - ldexp(floor(ldexp(y, -3)), 3))
-		if (octant & 1) == 1 {
-			octant++
-			octant &= 7
-			y += 1.0
+		mut octant := 0
+		mut z := 0.0
+		if abs_x >= reduce_threshold {
+			octant, z = trig_reduce(abs_x)
+		} else {
+			mut y := floor(abs_x / (0.25 * pi))
+			octant = int(y - ldexp(floor(ldexp(y, -3)), 3))
+			if (octant & 1) == 1 {
+				octant++
+				octant &= 7
+				y += 1.0
+			}
+			z = ((abs_x - y * p1) - y * p2) - y * p3
 		}
 		if octant > 3 {
 			octant -= 4
 			sgn_result = -sgn_result
 		}
-		z := ((abs_x - y * p1) - y * p2) - y * p3
 		mut result := 0.0
 		if octant == 0 {
 			t := 8.0 * abs(z) / pi - 1.0
-			sin_cs_val, _ := math.sin_cs.eval_e(t)
+			sin_cs_val, _ := sin_cs.eval_e(t)
 			result = z * (1.0 + z * z * sin_cs_val)
 		} else {
 			t := 8.0 * abs(z) / pi - 1.0
-			cos_cs_val, _ := math.cos_cs.eval_e(t)
+			cos_cs_val, _ := cos_cs.eval_e(t)
 			result = 1.0 - 0.5 * z * z * (1.0 - z * z * cos_cs_val)
 		}
 		result *= sgn_result
@@ -92,12 +98,19 @@ pub fn cos(x f64) f64 {
 		return 1.0 - 0.5 * x2
 	} else {
 		mut sgn_result := 1
-		mut y := floor(abs_x / (0.25 * pi))
-		mut octant := int(y - ldexp(floor(ldexp(y, -3)), 3))
-		if (octant & 1) == 1 {
-			octant++
-			octant &= 7
-			y += 1.0
+		mut octant := 0
+		mut z := 0.0
+		if abs_x >= reduce_threshold {
+			octant, z = trig_reduce(abs_x)
+		} else {
+			mut y := floor(abs_x / (0.25 * pi))
+			octant = int(y - ldexp(floor(ldexp(y, -3)), 3))
+			if (octant & 1) == 1 {
+				octant++
+				octant &= 7
+				y += 1.0
+			}
+			z = ((abs_x - y * p1) - y * p2) - y * p3
 		}
 		if octant > 3 {
 			octant -= 4
@@ -106,15 +119,14 @@ pub fn cos(x f64) f64 {
 		if octant > 1 {
 			sgn_result = -sgn_result
 		}
-		z := ((abs_x - y * p1) - y * p2) - y * p3
 		mut result := 0.0
 		if octant == 0 {
 			t := 8.0 * abs(z) / pi - 1.0
-			cos_cs_val, _ := math.cos_cs.eval_e(t)
+			cos_cs_val, _ := cos_cs.eval_e(t)
 			result = 1.0 - 0.5 * z * z * (1.0 - z * z * cos_cs_val)
 		} else {
 			t := 8.0 * abs(z) / pi - 1.0
-			sin_cs_val, _ := math.sin_cs.eval_e(t)
+			sin_cs_val, _ := sin_cs.eval_e(t)
 			result = z * (1.0 + z * z * sin_cs_val)
 		}
 		result *= sgn_result
@@ -153,12 +165,19 @@ pub fn sincos(x f64) (f64, f64) {
 	} else {
 		mut sgn_result_sin := sgn_x
 		mut sgn_result_cos := 1
-		mut y := floor(abs_x / (0.25 * pi))
-		mut octant := int(y - ldexp(floor(ldexp(y, -3)), 3))
-		if (octant & 1) == 1 {
-			octant++
-			octant &= 7
-			y += 1.0
+		mut octant := 0
+		mut z := 0.0
+		if abs_x >= reduce_threshold {
+			octant, z = trig_reduce(abs_x)
+		} else {
+			mut y := floor(abs_x / (0.25 * pi))
+			octant = int(y - ldexp(floor(ldexp(y, -3)), 3))
+			if (octant & 1) == 1 {
+				octant++
+				octant &= 7
+				y += 1.0
+			}
+			z = ((abs_x - y * p1) - y * p2) - y * p3
 		}
 		if octant > 3 {
 			octant -= 4
@@ -166,10 +185,9 @@ pub fn sincos(x f64) (f64, f64) {
 			sgn_result_cos = -sgn_result_cos
 		}
 		sgn_result_cos = if octant > 1 { -sgn_result_cos } else { sgn_result_cos }
-		z := ((abs_x - y * p1) - y * p2) - y * p3
 		t := 8.0 * abs(z) / pi - 1.0
-		sin_cs_val, _ := math.sin_cs.eval_e(t)
-		cos_cs_val, _ := math.cos_cs.eval_e(t)
+		sin_cs_val, _ := sin_cs.eval_e(t)
+		cos_cs_val, _ := cos_cs.eval_e(t)
 		mut result_sin := 0.0
 		mut result_cos := 0.0
 		if octant == 0 {

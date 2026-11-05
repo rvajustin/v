@@ -21,7 +21,7 @@ pub enum Method { // as of 2023-06-20
 	delete
 	label
 	link
-	@lock
+	lock
 	merge
 	mkactivity
 	mkcalendar
@@ -66,7 +66,7 @@ pub fn (m Method) str() string {
 		.delete { 'DELETE' }
 		.label { 'LABEL' }
 		.link { 'LINK' }
-		.@lock { 'LOCK' }
+		.lock { 'LOCK' }
 		.merge { 'MERGE' }
 		.mkactivity { 'MKACTIVITY' }
 		.mkcalendar { 'MKCALENDAR' }
@@ -115,7 +115,7 @@ pub fn method_from_str(m string) Method {
 		'DELETE' { Method.delete }
 		'LABEL' { Method.label }
 		'LINK' { Method.link }
-		'LOCK' { Method.@lock }
+		'LOCK' { Method.lock }
 		'MERGE' { Method.merge }
 		'MKACTIVITY' { Method.mkactivity }
 		'MKCALENDAR' { Method.mkcalendar }
@@ -140,6 +140,7 @@ pub fn method_from_str(m string) Method {
 		'UPDATE' { Method.update }
 		'UPDATEREDIRECTREF' { Method.updateredirectref }
 		'VERSION-CONTROL' { Method.version_control }
-		else { Method.get } // always default to .get, it is the safest
+		else { Method.get }
 	}
+	// always default to .get, it is the safest
 }

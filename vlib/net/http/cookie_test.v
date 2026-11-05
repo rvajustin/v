@@ -1,4 +1,5 @@
 import net.http
+import time
 
 struct SetCookieTestCase {
 	cookie &http.Cookie
@@ -18,67 +19,83 @@ struct AddCookieTestCase {
 const write_set_cookie_tests = [
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-1'
+			name:  'cookie-1'
 			value: 'v1'
 		}
-		raw: 'cookie-1=v1'
+		raw:    'cookie-1=v1'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-2'
-			value: 'two'
+			name:    'cookie-2'
+			value:   'two'
 			max_age: 3600
 		}
-		raw: 'cookie-2=two; Max-Age=3600'
+		raw:    'cookie-2=two; Max-Age=3600'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-3'
-			value: 'three'
+			name:   'cookie-3'
+			value:  'three'
 			domain: '.example.com'
 		}
-		raw: 'cookie-3=three; domain=example.com'
+		raw:    'cookie-3=three; Domain=example.com'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-4'
+			name:  'cookie-4'
 			value: 'four'
-			path: '/restricted/'
+			path:  '/restricted/'
 		}
-		raw: 'cookie-4=four; path=/restricted/'
+		raw:    'cookie-4=four; Path=/restricted/'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-5'
-			value: 'five'
+			name:   'cookie-5'
+			value:  'five'
 			domain: 'wrong;bad.abc'
 		}
-		raw: 'cookie-5=five'
+		raw:    'cookie-5=five'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-6'
-			value: 'six'
+			name:   'cookie-6'
+			value:  'six'
 			domain: 'bad-.abc'
 		}
-		raw: 'cookie-6=six'
+		raw:    'cookie-6=six'
 	},
-	// SetCookieTestCase{
-	// 	cookie: &http.Cookie{name: 'cookie-7', value: 'seven', domain: '127.0.0.1'},
-	// 	raw: 'cookie-7=seven; domain=127.0.0.1'
-	// },
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-8'
-			value: 'eight'
+			name:   'cookie-7'
+			value:  'seven'
+			domain: '127.0.0.1'
+		}
+		raw:    'cookie-7=seven; Domain=127.0.0.1'
+	},
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:   'cookie-7b'
+			value:  'seven'
+			domain: '256.0.0.1'
+		}
+		raw:    'cookie-7b=seven'
+	},
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:   'cookie-8'
+			value:  'eight'
 			domain: '::1'
 		}
-		raw: 'cookie-8=eight'
+		raw:    'cookie-8=eight'
 	},
-	// {
-	// 	cookie: &http.Cookie{name: 'cookie-9', value: 'expiring', expires: time.unix(1257894000, 0)},
-	// 	'cookie-9=expiring; Expires=Tue, 10 Nov 2009 23:00:00 GMT',
-	// },
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:    'cookie-9'
+			value:   'expiring'
+			expires: time.unix(1257894000)
+		}
+		raw:    'cookie-9=expiring; Expires=Tue, 10 Nov 2009 23:00:00 GMT'
+	},
 	// According to IETF 6265 Section 5.1.1.5, the year cannot be less than 1601
 	// SetCookieTestCase{
 	// 	cookie: &http.Cookie{name: 'cookie-10', value: 'expiring-1601', expires: time.parse('Mon, 01 Jan 1601 01:01:01 GMT')},
@@ -90,171 +107,213 @@ const write_set_cookie_tests = [
 	// },
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-12'
-			value: 'samesite-default'
+			name:      'cookie-12'
+			value:     'samesite-default'
 			same_site: .same_site_default_mode
 		}
-		raw: 'cookie-12=samesite-default; SameSite'
+		raw:    'cookie-12=samesite-default'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-13'
-			value: 'samesite-lax'
+			name:      'cookie-13'
+			value:     'samesite-lax'
 			same_site: .same_site_lax_mode
 		}
-		raw: 'cookie-13=samesite-lax; SameSite=Lax'
+		raw:    'cookie-13=samesite-lax; SameSite=Lax'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-14'
-			value: 'samesite-strict'
+			name:      'cookie-14'
+			value:     'samesite-strict'
 			same_site: .same_site_strict_mode
 		}
-		raw: 'cookie-14=samesite-strict; SameSite=Strict'
+		raw:    'cookie-14=samesite-strict; SameSite=Strict'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'cookie-15'
-			value: 'samesite-none'
+			name:      'cookie-15'
+			value:     'samesite-none'
 			same_site: .same_site_none_mode
 		}
-		raw: 'cookie-15=samesite-none; SameSite=None'
+		raw:    'cookie-15=samesite-none; SameSite=None'
 	},
 	// The 'special' cookies have values containing commas or spaces which
 	// are disallowed by RFC 6265 but are common in the wild.
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-1'
+			name:  'special-1'
 			value: 'a z'
 		}
-		raw: 'special-1=a z'
+		raw:    'special-1="a z"'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-2'
+			name:  'special-2'
 			value: ' z'
 		}
-		raw: 'special-2=" z"'
+		raw:    'special-2=" z"'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-3'
+			name:  'special-3'
 			value: 'a '
 		}
-		raw: 'special-3="a "'
+		raw:    'special-3="a "'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-4'
+			name:  'special-4'
 			value: ' '
 		}
-		raw: 'special-4=" "'
+		raw:    'special-4=" "'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-5'
+			name:  'special-5'
 			value: 'a,z'
 		}
-		raw: 'special-5=a,z'
+		raw:    'special-5="a,z"'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-6'
+			name:  'special-6'
 			value: ',z'
 		}
-		raw: 'special-6=",z"'
+		raw:    'special-6=",z"'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-7'
+			name:  'special-7'
 			value: 'a,'
 		}
-		raw: 'special-7="a,"'
+		raw:    'special-7="a,"'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'special-8'
+			name:  'special-8'
 			value: ','
 		}
-		raw: 'special-8=","'
+		raw:    'special-8=","'
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'empty-value'
+			name:  'empty-value'
 			value: ''
 		}
-		raw: 'empty-value='
+		raw:    'empty-value='
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
 			name: ''
 		}
-		raw: ''
+		raw:    ''
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
 			name: '\t'
 		}
-		raw: ''
+		raw:    ''
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
 			name: '\r'
 		}
-		raw: ''
+		raw:    ''
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'a\nb'
+			name:  'a\nb'
 			value: 'v'
 		}
-		raw: ''
+		raw:    ''
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'a\nb'
+			name:  'a\nb'
 			value: 'v'
 		}
-		raw: ''
+		raw:    ''
 	},
 	SetCookieTestCase{
 		cookie: &http.Cookie{
-			name: 'a\rb'
+			name:  'a\rb'
 			value: 'v'
 		}
-		raw: ''
+		raw:    ''
+	},
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:  'complex-value'
+			value: 'a b,c;d'
+		}
+		raw:    'complex-value="a b,cd"'
+	},
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:  'invalid-bytes'
+			value: ' a"b\\c;'
+		}
+		raw:    'invalid-bytes=" abc"'
+	},
+	SetCookieTestCase{
+		cookie: &http.Cookie{
+			name:  'only-invalid'
+			value: '";'
+		}
+		raw:    'only-invalid='
 	},
 ]
 const add_cookies_tests = [
 	AddCookieTestCase{
 		cookie: []
-		raw: ''
+		raw:    ''
 	},
 	AddCookieTestCase{
 		cookie: [&http.Cookie{
-			name: 'cookie-1'
+			name:  'cookie-1'
 			value: 'v1'
 		}]
-		raw: 'cookie-1=v1'
+		raw:    'cookie-1=v1'
 	},
 	AddCookieTestCase{
 		cookie: [&http.Cookie{
-			name: 'cookie-1'
+			name:  'cookie-1'
 			value: 'v1'
 		}, &http.Cookie{
-			name: 'cookie-2'
+			name:  'cookie-2'
 			value: 'v2'
-		},
-			&http.Cookie{
-				name: 'cookie-3'
-				value: 'v3'
-			}]
-		raw: 'cookie-1=v1; cookie-2=v2; cookie-3=v3'
+		}, &http.Cookie{
+			name:  'cookie-3'
+			value: 'v3'
+		}]
+		raw:    'cookie-1=v1; cookie-2=v2; cookie-3=v3'
 	},
 ]
 
 fn test_write_set_cookies() {
 	for _, tt in write_set_cookie_tests {
 		assert tt.cookie.str() == tt.raw
+	}
+}
+
+fn test_sanitize_cookie_value_filters_bytes_and_preserves_edge_quoting() {
+	assert http.sanitize_cookie_value('') == ''
+	assert http.sanitize_cookie_value('\x00a\tb\r\nc\x7f"\\;') == 'abc'
+	assert http.sanitize_cookie_value([u8(0), u8(0x7f), u8(0xff)].bytestr()) == ''
+	assert http.sanitize_cookie_value('a b,c') == '"a b,c"'
+	assert http.sanitize_cookie_value('; a') == '" a"'
+	assert http.sanitize_cookie_value('a ;') == '"a "'
+	assert http.sanitize_cookie_value(';,a') == '",a"'
+	assert http.sanitize_cookie_value('a,;') == '"a,"'
+}
+
+fn test_cookie_ipv4_domain_boundaries() {
+	for domain in ['0.0.0.0', '127.0.0.1', '255.255.255.255'] {
+		cookie := http.Cookie{ name: 'a', value: 'b', domain: domain }
+		assert cookie.str() == 'a=b; Domain=${domain}'
+	}
+	for domain in ['256.0.0.1', '127.0.0', '127.0.0.1.2', '1..2.3', '-1.2.3.4', '1234.1.1.1'] {
+		cookie := http.Cookie{ name: 'a', value: 'b', domain: domain }
+		assert cookie.str() == 'a=b'
 	}
 }

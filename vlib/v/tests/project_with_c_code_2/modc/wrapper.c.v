@@ -1,13 +1,12 @@
 module modc
 
-#flag -I @VMODROOT/modc
 #flag @VMODROOT/modc/impl.o
 #include "header.h"
 
 pub struct C.Atype {
 }
 
-// Note: [trusted] below, means that the C function, can be safely called outside unsafe{} blocks.
+// Note: @[trusted] below, means that the C function, can be safely called outside unsafe{} blocks.
 //
 // By default, all C. functions are NOT trusted, and all V functions are by default trusted.
 //
@@ -19,17 +18,17 @@ pub mut:
 	p &C.Atype
 }
 
-fn C.new_atype(int) voidptr
+fn C.new_atype(i32) voidptr
 
 @[trusted]
-fn C.handle_array(voidptr, int)
+fn C.handle_array(voidptr, i32)
 
 fn todo_remove_me() {
-	// TODO: remove this dummy function, when the vfmt bug of [trusted] after a void C function is fixed
+	// TODO: remove this dummy function, when the vfmt bug of @[trusted] after a void C function is fixed
 }
 
 @[trusted]
-fn C.handle_array2(voidptr, int)
+fn C.handle_array2(voidptr, i32)
 
 fn C.destroy_atype(voidptr)
 
@@ -50,4 +49,17 @@ pub fn call_with_array_param(arr []Vtype) {
 
 pub fn destroy_vtype(t Vtype) {
 	C.destroy_atype(t.p)
+}
+
+pub enum MyEnum {
+	unknown      = C.UNKNOWN
+	name1        = C.NAME1
+	name2        = C.NAME2
+	name3        = C.NAME3
+	name4        = C.NAME4
+	name5        = C.NAME5
+	name6        = C.NAME6
+	common_name1 = C.COMMON_NAME1
+	common_name2 = C.COMMON_NAME2
+	common_name3 = C.COMMON_NAME3
 }

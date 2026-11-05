@@ -2,13 +2,12 @@
 import os
 import v.vmod
 
-const vroot = os.quoted_path(@VEXEROOT)
-const vexe = os.quoted_path(@VEXE)
+const vexe = @VEXE
 // Expect has to be installed for the test.
-const expect_exe = os.quoted_path(os.find_abs_path_of_executable('expect') or {
+const expect_exe = os.find_abs_path_of_executable('expect') or {
 	eprintln('skipping test, since expect is missing')
 	exit(0)
-})
+}
 // Directory that contains the Expect scripts used in the test.
 const expect_tests_path = os.join_path(@VEXEROOT, 'cmd', 'tools', 'vcreate', 'tests')
 const test_project_dir_name = 'test_project'
@@ -24,19 +23,25 @@ fn init_and_check() ! {
 	os.chdir(test_path)!
 
 	// Keep track of the last modified time of the main file to ensure it is not modified if it already exists.
-	main_exists := os.exists('src/main.v')
-	main_last_modified := if main_exists { os.file_last_mod_unix('src/main.v') } else { 0 }
+	main_exists := os.exists('main.v')
+	main_last_modified := if main_exists { os.file_last_mod_unix('main.v') } else { 0 }
 
 	// Initialize project.
-	os.execute_or_exit('${expect_exe} ${os.join_path(expect_tests_path, 'init.expect')} ${vroot}')
+	os.exec_or_exit([os.find_abs_path_of_executable('expect') or {
+		eprintln('skipping test, since expect is missing')
+		exit(0)
+	}, os.join_path(expect_tests_path, 'init.expect'), @VEXE])
 
-	x := os.execute_or_exit('${vexe} run .')
+	// Without `--agents-md`, no `AGENTS.md` is written.
+	assert !os.exists('AGENTS.md')
+
+	x := os.exec_or_exit([@VEXE, 'run', '.'])
 	assert x.output.trim_space() == 'Hello World!'
 
 	if main_exists {
-		assert main_last_modified == os.file_last_mod_unix('src/main.v')
+		assert main_last_modified == os.file_last_mod_unix('main.v')
 	} else {
-		assert os.read_file('src/main.v')! == [
+		assert os.read_file('main.v')! == [
 			'module main\n',
 			'fn main() {',
 			"	println('Hello World!')",
@@ -47,7 +52,7 @@ fn init_and_check() ! {
 
 	assert os.read_file('v.mod')! == [
 		'Module {',
-		"	name: '${test_project_dir_name}'",
+		"\tname: '${test_project_dir_name}'",
 		"	description: ''",
 		"	version: '0.0.0'",
 		"	license: 'MIT'",
@@ -78,9 +83,12 @@ fn init_and_check() ! {
 		'# ENV',
 		'.env',
 		'',
-		'# vweb and database',
+		'# Web assets and local databases',
 		'*.db',
 		'*.js',
+		'',
+		'# Modules installed with `v install --local` land beside this file, one',
+		'# directory per module. Add them here if they should stay out of the repo.',
 		'',
 	].join_lines()
 
@@ -109,6 +117,23 @@ fn init_and_check() ! {
 	].join_lines()
 }
 
+fn test_v_init_creates_agents_md() {
+	prepare_test_path()!
+	os.exec_or_exit([os.find_abs_path_of_executable('expect') or {
+		eprintln('skipping test, since expect is missing')
+		exit(0)
+	}, os.join_path(expect_tests_path, 'init_with_agents_md.expect'), @VEXE])
+	assert os.exists('AGENTS.md')
+	content := os.read_file('AGENTS.md') or {
+		assert false, err.str()
+		return
+	}
+	assert content.contains('# AGENTS.md - ${test_project_dir_name}')
+	assert content.contains('## Commands')
+	assert content.contains('## Layout')
+	assert content.contains('## Conventions')
+}
+
 fn prepare_test_path() ! {
 	os.rmdir_all(test_path) or {}
 	os.mkdir_all(test_path) or {}
@@ -122,14 +147,17 @@ fn test_v_init() {
 
 fn test_v_init_in_git_dir() {
 	prepare_test_path()!
-	os.execute_or_exit('git init .')
+	os.exec_or_exit(['git', 'init', '.'])
 	init_and_check()!
 }
 
 fn test_v_init_no_overwrite_gitignore() {
 	prepare_test_path()!
 	os.write_file('.gitignore', 'foo')!
-	os.execute_or_exit('${expect_exe} ${os.join_path(expect_tests_path, 'init.expect')} ${vroot}')
+	os.exec_or_exit([os.find_abs_path_of_executable('expect') or {
+		eprintln('skipping test, since expect is missing')
+		exit(0)
+	}, os.join_path(expect_tests_path, 'init.expect'), @VEXE])
 	assert os.read_file('.gitignore')! == 'foo'
 }
 
@@ -147,7 +175,11 @@ indent_style = tab
 	prepare_test_path()!
 	os.write_file('.gitattributes', git_attributes_content)!
 	os.write_file('.editorconfig', editor_config_content)!
-	res := os.execute_or_exit('${expect_exe} ${os.join_path(expect_tests_path, 'init.expect')} ${vroot}')
+	res :=
+		os.exec_or_exit([os.find_abs_path_of_executable('expect') or {
+			eprintln('skipping test, since expect is missing')
+			exit(0)
+		}, os.join_path(expect_tests_path, 'init.expect'), @VEXE])
 	assert res.output.contains('Created binary (application) project `${test_project_dir_name}`')
 	assert os.read_file('.gitattributes')! == git_attributes_content
 	assert os.read_file('.editorconfig')! == editor_config_content
@@ -158,9 +190,17 @@ fn test_v_init_in_dir_with_invalid_mod_name_input() {
 	dir_name_with_invalid_mod_name := 'my-proj'
 	corrected_mod_name := 'my_proj'
 	proj_path := os.join_path(os.vtmp_dir(), dir_name_with_invalid_mod_name)
+	os.rmdir_all(proj_path) or {}
 	os.mkdir_all(proj_path) or {}
+	defer {
+		os.rmdir_all(proj_path) or {}
+	}
 	os.chdir(proj_path)!
-	os.execute_or_exit('${expect_exe} ${os.join_path(expect_tests_path, 'init_in_dir_with_invalid_mod_name.expect')} ${vroot} ${dir_name_with_invalid_mod_name} ${corrected_mod_name}')
+	os.exec_or_exit([os.find_abs_path_of_executable('expect') or {
+		eprintln('skipping test, since expect is missing')
+		exit(0)
+	}, os.join_path(expect_tests_path, 'init_in_dir_with_invalid_mod_name.expect'), @VEXE,
+		dir_name_with_invalid_mod_name, '${corrected_mod_name}'])
 	// Assert mod data set in `new_with_model_arg.expect`.
 	mod := vmod.from_file(os.join_path(proj_path, 'v.mod')) or {
 		assert false, err.str()
@@ -172,7 +212,8 @@ fn test_v_init_in_dir_with_invalid_mod_name_input() {
 fn test_v_init_with_model_arg_input() {
 	prepare_test_path()!
 	model := '--lib'
-	res := os.execute_or_exit('${expect_exe} ${os.join_path(expect_tests_path, 'init_with_model_arg.expect')} ${vroot} ${model}')
+	res := os.exec_or_exit([expect_exe, os.join_path(expect_tests_path, 'init_with_model_arg.expect'),
+		vexe, '${model}'])
 	assert res.output.contains('Created library project `${test_project_dir_name}`'), res.output
 	project_path := os.join_path(test_path)
 	mod := vmod.from_file(os.join_path(project_path, 'v.mod')) or {

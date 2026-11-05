@@ -20,25 +20,15 @@ type FN_vcleanup_caller = fn ()
 // open loads a given module into the address space of the calling process.
 pub fn open(filename string, flags int) voidptr {
 	res := C.LoadLibrary(filename.to_wide())
-	// Because LoadLibrary has no constructor, this is a workaround
-	if !isnil(res) {
-		vinit_caller := FN_vinit_caller(sym(res, '_vinit_caller'))
-		if !isnil(vinit_caller) {
-			vinit_caller()
-		}
+	if res != unsafe { nil } {
+		register_interface_exports(res)
 	}
 	return res
 }
 
 // close frees the loaded a given module.
 pub fn close(handle voidptr) bool {
-	// Because FreeLibrary has no destructor, this is a workaround
-	if !isnil(handle) {
-		vcleanup_caller := FN_vcleanup_caller(sym(handle, '_vcleanup_caller'))
-		if !isnil(vcleanup_caller) {
-			vcleanup_caller()
-		}
-	}
+	unregister_interface_exports(handle)
 	return C.FreeLibrary(handle)
 }
 
@@ -47,10 +37,10 @@ pub fn sym(handle voidptr, symbol string) voidptr {
 	return C.GetProcAddress(handle, voidptr(symbol.str))
 }
 
-// dlerror provides a text error diagnostic message for functions in `dl`
-// it returns a human-readable string, describing the most recent error
+// dlerror provides a text error diagnostic message for functions in `dl`.
+// It returns a human-readable string, describing the most recent error
 // that occurred from a call to one of the `dl` functions, since the last
-// call to dlerror()
+// call to dlerror().
 pub fn dlerror() string {
 	// https://docs.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror
 	// Unlike dlerror(), GetLastError returns just an error code, that is function specific.

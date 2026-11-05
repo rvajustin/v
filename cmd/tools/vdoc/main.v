@@ -3,19 +3,26 @@ module main
 import os
 import os.cmdline
 import term
-import v.doc
+import document as doc
 import v.vmod
 
 const vexe = os.getenv_opt('VEXE') or { @VEXE }
 
 const vroot = os.dir(vexe)
 
-const allowed_formats = ['md', 'markdown', 'json', 'text', 'ansi', 'html', 'htm']
+const allowed_formats = ['md', 'markdown', 'json', 'text', 'ansi', 'html', 'htm', 'none']
+
+enum RunExampleMode {
+	skip
+	run
+	check
+}
 
 struct Config {
 mut:
 	pub_only         bool = true
 	show_loc         bool // for plaintext
+	show_time        bool // show the total time spend generating content
 	is_color         bool
 	is_multi         bool
 	is_vlib          bool
@@ -31,7 +38,8 @@ mut:
 	input_path       string
 	symbol_name      string
 	platform         doc.Platform
-	run_examples     bool // `-run-examples` will run all `// Example: assert mod.abc() == y` comments in the processed modules
+	run_examples     RunExampleMode // `-unsafe-run-examples` will run all `// Example: assert mod.abc() == y` comments in the processed modules.
+	// -check-examples will only check/validate that they compile, but without running any code.
 	// The options below are useful for generating a more stable HTML, that is easier to regression test:
 	html_only_contents bool // `-html-only-contents` will produce only the content of any given page, without styling tags etc.
 	html_no_vhash      bool // `-html-no-vhash` will remove the version hash from the generated html
@@ -42,9 +50,10 @@ mut:
 }
 
 fn main() {
+	unbuffer_stdout() // avoid the need for flush_stdout() calls
 	if os.args.len < 2 || '-h' in os.args || '-help' in os.args || '--help' in os.args
 		|| os.args[1..] == ['doc', 'help'] {
-		os.system('${os.quoted_path(vexe)} help doc')
+		os.system_args([vexe, 'help', 'doc'])
 		exit(0)
 	}
 	args := os.args[2..].clone()
@@ -55,13 +64,12 @@ fn main() {
 	}
 	// Config is immutable from this point on
 	mut vd := &VDoc{
-		cfg: cfg
+		cfg:      cfg
 		manifest: vmod.Manifest{}
 	}
 	vd.vprintln('Setting output type to "${cfg.output_type}"')
 	vd.generate_docs_from_file()
-	if cfg.run_examples {
-		println('')
+	if cfg.run_examples != .skip {
 		if vd.example_oks == 0 && vd.example_failures == 0 {
 			println(term.colorize(term.bright_yellow, 'Found NO examples.'))
 		} else {
@@ -108,6 +116,7 @@ fn parse_arguments(args []string) Config {
 			}
 			'-theme-dir' {
 				cfg.theme_dir = cmdline.option(current_args, '-theme-dir', default_theme)
+				i++
 			}
 			'-l' {
 				cfg.show_loc = true
@@ -125,10 +134,6 @@ fn parse_arguments(args []string) Config {
 			}
 			'-os' {
 				platform_str := cmdline.option(current_args, '-os', '')
-				if platform_str == 'cross' {
-					eprintln('`v doc -os cross` is not supported yet.')
-					exit(1)
-				}
 				selected_platform := doc.platform_from_string(platform_str) or {
 					eprintln(err.msg())
 					exit(1)
@@ -136,8 +141,19 @@ fn parse_arguments(args []string) Config {
 				cfg.platform = selected_platform
 				i++
 			}
+			'-time' {
+				cfg.show_time = true
+			}
+			'-check-examples' {
+				cfg.run_examples = .check
+			}
+			'-unsafe-run-examples' {
+				cfg.run_examples = .run
+			}
 			'-run-examples' {
-				cfg.run_examples = true
+				eprintln('WARNING: the `-run-examples` option is deprecated, and will be removed after 2025-11-13.')
+				eprintln('  Use `-unsafe-run-examples` instead of `-run-examples` .')
+				cfg.run_examples = .run
 			}
 			'-no-timestamp' {
 				cfg.no_timestamp = true

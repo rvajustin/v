@@ -11,8 +11,9 @@ mut:
 	column_count int = -1
 	// columns
 	buffers [][]char
-	// indicators for each column
-	indicators []C.SQLLEN
+	// indicators for each column. Use a V pointer-sized integer to avoid arrays
+	// of C typedefs in generated code while still matching SQLLEN width.
+	indicators []int
 }
 
 // new_hstmt constructs a new statement handle
@@ -20,11 +21,13 @@ fn new_hstmt(hdbc C.SQLHDBC) !HStmt {
 	mut retcode := C.SQLRETURN(C.SQL_SUCCESS)
 	mut hstmt := C.SQLHSTMT(C.SQL_NULL_HSTMT)
 	// Allocate statement handle
-	retcode = C.SQLAllocHandle(C.SQLSMALLINT(C.SQL_HANDLE_STMT), C.SQLHANDLE(hdbc), unsafe { &C.SQLHANDLE(&hstmt) })
-	check_error(retcode, 'SQLAllocHandle(SQL_HANDLE_STMT)', C.SQLHANDLE(hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
+	retcode = C.SQLAllocHandle(C.SQLSMALLINT(C.SQL_HANDLE_STMT), C.SQLHANDLE(hdbc),
+		unsafe { &C.SQLHANDLE(&hstmt) })
+	check_error(retcode, 'SQLAllocHandle(SQL_HANDLE_STMT)', C.SQLHANDLE(hstmt),
+		C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 
 	return HStmt{
-		hdbc: hdbc
+		hdbc:  hdbc
 		hstmt: hstmt
 	}
 }
@@ -48,7 +51,8 @@ fn (h HStmt) exec(sql_ string) ! {
 // retrieve_affected_rows returns number of rows affected/modified by the last operation. -1 if not applicable.
 fn (h HStmt) retrieve_affected_rows() !int {
 	count_ret := C.SQLLEN(0)
-	retcode := C.SQLRowCount(h.hstmt, &count_ret)
+	// SQLLEN is pointer-wide; bypass the adapter for 32-bit C int out-parameters.
+	retcode := C.SQLRowCount(h.hstmt, voidptr(&count_ret))
 	check_error(retcode, 'SQLRowCount()', C.SQLHANDLE(h.hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 	return int(count_ret)
 }
@@ -57,8 +61,31 @@ fn (h HStmt) retrieve_column_count() !int {
 	mut retcode := C.SQLRETURN(C.SQL_SUCCESS)
 	col_count_buff := C.SQLSMALLINT(0)
 	retcode = C.SQLNumResultCols(h.hstmt, &col_count_buff)
-	check_error(retcode, 'SQLNumResultCols()', C.SQLHANDLE(h.hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
+	check_error(retcode, 'SQLNumResultCols()', C.SQLHANDLE(h.hstmt),
+		C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 	return int(col_count_buff)
+}
+
+fn (h HStmt) read_column_names() ![]string {
+	if h.column_count <= 0 {
+		return []string{}
+	}
+	mut names := []string{cap: h.column_count}
+	for i := 0; i < h.column_count; i++ {
+		mut name_buf := [256]char{}
+		mut name_len := C.SQLSMALLINT(0)
+		mut data_type := C.SQLSMALLINT(0)
+		mut column_size := C.SQLULEN(0)
+		mut decimal_digits := C.SQLSMALLINT(0)
+		mut nullable := C.SQLSMALLINT(0)
+		retcode := C.SQLDescribeCol(h.hstmt, C.SQLUSMALLINT(i + 1), &C.SQLCHAR(&name_buf[0]),
+			C.SQLSMALLINT(name_buf.len), &name_len, &data_type, &column_size, &decimal_digits,
+			&nullable)
+		check_error(retcode, 'SQLDescribeCol()', C.SQLHANDLE(h.hstmt),
+			C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
+		names << unsafe { (&name_buf[0]).vstring() }
+	}
+	return names
 }
 
 // allocate buffers and bind them to drivers
@@ -69,15 +96,16 @@ fn (mut h HStmt) prepare_read() ! {
 	h.column_count = column_count // remember the count because read will need it
 
 	h.buffers = [][]char{len: h.column_count}
-	h.indicators = []C.SQLLEN{len: h.column_count}
+	h.indicators = []int{len: h.column_count}
 
 	for i := 0; i < h.column_count; i++ {
 		i_col := C.SQLUSMALLINT(i + 1) // col number starts with 1
 		size_ret := C.SQLLEN(0)
 		// find out buffer size needed to read data in this column
 		retcode = C.SQLColAttribute(h.hstmt, i_col, C.SQLUSMALLINT(C.SQL_DESC_LENGTH),
-			C.SQLPOINTER(0), C.SQLSMALLINT(0), C.SQLSMALLINT(0), &size_ret)
-		check_error(retcode, 'SQLColAttribute()', C.SQLHANDLE(h.hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
+			C.SQLPOINTER(0), C.SQLSMALLINT(0), C.SQLSMALLINT(0), voidptr(&size_ret))
+		check_error(retcode, 'SQLColAttribute()', C.SQLHANDLE(h.hstmt),
+			C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 
 		// buffer allocation is the size + 1 to include termination char, since SQL_DESC_LENGTH does not include it.
 		allocate_size := size_ret + C.SQLLEN(1)
@@ -86,7 +114,7 @@ fn (mut h HStmt) prepare_read() ! {
 
 		// bind the buffer
 		retcode = C.SQLBindCol(h.hstmt, C.SQLUSMALLINT(i_col), C.SQLSMALLINT(C.SQL_C_CHAR),
-			C.SQLPOINTER(&buff[0]), allocate_size, &h.indicators[i])
+			C.SQLPOINTER(&buff[0]), allocate_size, unsafe { &C.SQLLEN(&h.indicators[i]) })
 		check_error(retcode, 'SQLBindCol()', C.SQLHANDLE(h.hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 
 		// record the buffer in HStmt
@@ -116,7 +144,8 @@ fn (h HStmt) read_rows() ![][]string {
 			}
 		} else {
 			if retcode != C.SQLRETURN(C.SQL_NO_DATA) {
-				check_error(retcode, 'SQLFetch()', C.SQLHANDLE(h.hstmt), C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
+				check_error(retcode, 'SQLFetch()', C.SQLHANDLE(h.hstmt),
+					C.SQLSMALLINT(C.SQL_HANDLE_STMT))!
 			} else {
 				break
 			}

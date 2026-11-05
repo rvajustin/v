@@ -73,18 +73,17 @@ fn main() {
 	pass_action.colors[0] = color_action
 	state := &AppState{
 		pass_action: pass_action
-		fons: unsafe { nil } // &fontstash.Context(0)
+		fons:        unsafe { nil } // &fontstash.Context(0)
 	}
 	title := 'V Metal/GL Text Rendering'
 	desc := sapp.Desc{
-		user_data: state
-		init_userdata_cb: init
+		user_data:         state
+		init_userdata_cb:  init
 		frame_userdata_cb: frame
-		window_title: title.str
-		html5_canvas_name: title.str
-		width: 600
-		height: 700
-		high_dpi: true
+		window_title:      &char(title.str)
+		width:             600
+		height:            700
+		high_dpi:          true
 	}
 	sapp.run(&desc)
 }
@@ -100,7 +99,7 @@ fn init(mut state AppState) {
 		'RobotoMono-Regular.ttf')))
 	{
 		println('loaded font: ${bytes.len}')
-		state.font_normal = state.fons.add_font_mem('sans', bytes, false)
+		state.font_normal = state.fons.add_font_mem('sans', bytes.clone(), true)
 	}
 }
 
@@ -137,12 +136,4 @@ fn (mut state AppState) render_font() {
 		dy += lh
 	}
 	sfons.flush(fons)
-}
-
-fn line(sx f32, sy f32, ex f32, ey f32) {
-	sgl.begin_lines()
-	sgl.c4b(255, 255, 0, 128)
-	sgl.v2f(sx, sy)
-	sgl.v2f(ex, ey)
-	sgl.end()
 }

@@ -1,14 +1,13 @@
 module websocket
 
 import net
-import net.ssl
 import log
 import time
 import rand
 
 pub struct ServerState {
 mut:
-	ping_interval int   = 30 // interval for sending ping to clients (seconds)
+	ping_interval int   = 30      // interval for sending ping to clients (seconds)
 	state         State = .closed // current state of connection
 pub mut:
 	clients map[string]&ServerClient // clients connected to this server
@@ -19,7 +18,8 @@ pub struct Server {
 mut:
 	logger                  &log.Logger      = default_logger
 	ls                      &net.TcpListener = unsafe { nil } // listener used to get incoming connection to socket
-	accept_client_callbacks []AcceptClientFn      // accept client callback functions
+	accept_client_callbacks []AcceptClientFn // accept client callback functions
+	attached_callbacks      []AttachedEventHandler
 	message_callbacks       []MessageEventHandler // new message callback functions
 	close_callbacks         []CloseEventHandler   // close message callback functions
 pub:
@@ -49,9 +49,9 @@ pub:
 // new_server instance a new websocket server on provided port and route
 pub fn new_server(family net.AddrFamily, port int, route string, opt ServerOpt) &Server {
 	return &Server{
-		ls: unsafe { nil }
+		ls:     unsafe { nil }
 		family: family
-		port: port
+		port:   port
 		logger: opt.logger
 	}
 }
@@ -143,21 +143,21 @@ pub fn (mut s Server) handle_handshake(mut conn net.TcpConn, key string) !&Serve
 	mut logger := &log.Log{}
 	logger.set_level(.debug)
 	mut c := &Client{
-		is_server: true
-		conn: conn
-		is_ssl: false
-		logger: logger
+		is_server:    true
+		conn:         conn
+		is_ssl:       false
+		logger:       logger
 		client_state: ClientState{
 			state: .open
 		}
 		last_pong_ut: time.now().unix()
-		id: rand.uuid_v4()
+		id:           rand.uuid_v4()
 	}
 	mut server_client := &ServerClient{
 		resource_name: 'GET'
-		client_key: key
-		client: unsafe { c }
-		server: unsafe { &s }
+		client_key:    key
+		client:        unsafe { c }
+		server:        unsafe { &s }
 	}
 	digest := create_key_challenge_response(key)!
 	handshake_response := 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${digest}\r\n\r\n'
@@ -183,6 +183,13 @@ fn (mut s Server) attach_client(mut server_client ServerClient, handshake_respon
 		s.server_state.clients[server_client.client.id] = unsafe { server_client }
 	}
 	s.setup_callbacks(mut server_client)
+	s.send_attached_event(mut server_client) or {
+		lock s.server_state {
+			s.server_state.clients.delete(server_client.client.id)
+		}
+		server_client.client.shutdown_socket() or {}
+		return err
+	}
 }
 
 // setup_callbacks initialize all callback functions
@@ -206,27 +213,28 @@ fn (mut s Server) setup_callbacks(mut sc ServerClient) {
 		}
 	}
 	// set standard close so we can remove client if closed
-	sc.client.on_close_ref(fn (mut c Client, code int, reason string, mut sc ServerClient) ! {
-		c.logger.debug('server-> Delete client')
-		lock sc.server.server_state {
-			sc.server.server_state.clients.delete(sc.client.id)
-		}
-	}, sc)
+	sc.client.on_close_ref(delete_client_cb, sc)
+}
+
+fn delete_client_cb(mut c Client, _code int, _reason string, mut sc ServerClient) ! {
+	c.logger.debug('server-> Delete client')
+	lock sc.server.server_state {
+		sc.server.server_state.clients.delete(sc.client.id)
+	}
 }
 
 // accept_new_client creates a new client instance for client that connects to the socket
 fn (mut s Server) accept_new_client() !&Client {
 	mut new_conn := s.ls.accept()!
 	c := &Client{
-		is_server: true
-		conn: new_conn
-		ssl_conn: ssl.new_ssl_conn()!
-		logger: s.logger
+		is_server:    true
+		conn:         new_conn
+		logger:       s.logger
 		client_state: ClientState{
 			state: .open
 		}
 		last_pong_ut: time.now().unix()
-		id: rand.uuid_v4()
+		id:           rand.uuid_v4()
 	}
 	return c
 }
@@ -239,7 +247,7 @@ pub fn (mut s Server) set_state(state State) {
 }
 
 // get_state return current state in a thread safe way
-pub fn (s Server) get_state() State {
+pub fn (s &Server) get_state() State {
 	return rlock s.server_state {
 		s.server_state.state
 	}

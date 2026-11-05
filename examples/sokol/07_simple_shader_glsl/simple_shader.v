@@ -1,5 +1,6 @@
 // Copyright(C) 2022 Lars Pontoppidan. All rights reserved.
 // Use of this source code is governed by an MIT license file distributed with this software package
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 module main
 
 // Example shader triangle adapted to V from https://github.com/floooh/sokol-samples/blob/1f2ad36/sapp/triangle-sapp.c
@@ -9,7 +10,7 @@ import sokol.gfx
 // Use `v shader` or `sokol-shdc` to generate the necessary `.h` file
 // Using `v shader -v .` in this directory will show some additional
 // info - and what you should include to make things work.
-#include "@VMODROOT/simple_shader.h" # # It should be generated with `v shader .`
+#include "@VMODROOT/simple_shader.h" # It should be generated with `v shader .`
 
 // simple_shader_desc is a C function declaration defined by
 // the `@program` entry in the `simple_shader.glsl` shader file.
@@ -34,8 +35,8 @@ struct Vertex_t {
 
 fn main() {
 	mut app := &App{
-		width: 800
-		height: 400
+		width:       800
+		height:      400
 		pass_action: gfx.create_clear_pass_action(0.0, 0.0, 0.0, 1.0) // This will create a black color as a default pass (window background color)
 	}
 	app.run()
@@ -53,15 +54,14 @@ mut:
 fn (mut a App) run() {
 	title := 'V Simple Shader Example'
 	desc := sapp.Desc{
-		width: a.width
-		height: a.height
-		user_data: a
-		init_userdata_cb: init
-		frame_userdata_cb: frame
-		window_title: title.str
-		html5_canvas_name: title.str
+		width:               a.width
+		height:              a.height
+		user_data:           a
+		init_userdata_cb:    init
+		frame_userdata_cb:   frame
+		window_title:        &char(title.str)
 		cleanup_userdata_cb: cleanup
-		sample_count: 4 // Enables MSAA (Multisample anti-aliasing) x4 on rendered output, this can be omitted.
+		sample_count:        4 // Enables MSAA (Multisample anti-aliasing) x4 on rendered output, this can be omitted.
 	}
 	sapp.run(&desc)
 }
@@ -98,9 +98,9 @@ fn init(user_data voidptr) {
 	}
 	unsafe { vmemset(&vertex_buffer_desc, 0, int(sizeof(vertex_buffer_desc))) }
 
-	vertex_buffer_desc.size = usize(vertices.len * int(sizeof(Vertex_t)))
+	vertex_buffer_desc.size = uint(vertices.len * int(sizeof(Vertex_t)))
 	vertex_buffer_desc.data = gfx.Range{
-		ptr: vertices.data
+		ptr:  vertices.data
 		size: vertex_buffer_desc.size
 	}
 
@@ -110,7 +110,7 @@ fn init(user_data voidptr) {
 	// Note the function `C.simple_shader_desc()` (also defined above) - this is
 	// the function that returns the compiled shader code/desciption we have
 	// written in `simple_shader.glsl` and compiled with `v shader .` (`sokol-shdc`).
-	shader := gfx.make_shader(C.simple_shader_desc(gfx.query_backend()))
+	shader := gfx.make_shader(voidptr(C.simple_shader_desc(gfx.query_backend())))
 
 	// Create a pipeline object (default render states are fine for triangle)
 	mut pipeline_desc := gfx.PipelineDesc{}
@@ -136,7 +136,7 @@ fn init(user_data voidptr) {
 	app.shader_pipeline = gfx.make_pipeline(&pipeline_desc)
 }
 
-fn cleanup(user_data voidptr) {
+fn cleanup(_user_data voidptr) {
 	gfx.shutdown()
 }
 

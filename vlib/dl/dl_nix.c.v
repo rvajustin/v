@@ -13,21 +13,26 @@ pub const rtld_local = C.RTLD_LOCAL
 pub const rtld_nodelete = C.RTLD_NODELETE
 pub const rtld_noload = C.RTLD_NOLOAD
 
-fn C.dlopen(filename &char, flags int) voidptr
+fn C.dlopen(filename &char, flags i32) voidptr
 
 fn C.dlsym(handle voidptr, symbol &char) voidptr
 
-fn C.dlclose(handle voidptr) int
+fn C.dlclose(handle voidptr) i32
 
 fn C.dlerror() &char
 
 // open loads a given dynamic shared object.
 pub fn open(filename string, flags int) voidptr {
-	return C.dlopen(&char(filename.str), flags)
+	handle := C.dlopen(&char(filename.str), flags)
+	if handle != unsafe { nil } {
+		register_interface_exports(handle)
+	}
+	return handle
 }
 
 // close frees a given shared object.
 pub fn close(handle voidptr) bool {
+	unregister_interface_exports(handle)
 	return C.dlclose(handle) == 0
 }
 
@@ -36,10 +41,10 @@ pub fn sym(handle voidptr, symbol string) voidptr {
 	return C.dlsym(handle, &char(symbol.str))
 }
 
-// dlerror provides a text error diagnostic message for functions in `dl`
-// it returns a human-readable string, describing the most recent error
+// dlerror provides a text error diagnostic message for functions in `dl`.
+// It returns a human-readable string, describing the most recent error
 // that occurred from a call to one of the `dl` functions, since the last
-// call to dlerror()
+// call to dlerror().
 pub fn dlerror() string {
 	sptr := C.dlerror()
 	if sptr == unsafe { nil } {

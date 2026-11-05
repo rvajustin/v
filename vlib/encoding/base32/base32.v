@@ -40,7 +40,7 @@ pub fn decode_to_string(src []u8) !string {
 // decode decodes a byte array `src` using Base32
 // and returns the decoded bytes or a `corrupt_input_error_msg` error.
 pub fn decode(src []u8) ![]u8 {
-	mut e := new_encoding(base32.std_alphabet)
+	mut e := new_encoding(std_alphabet)
 	return e.decode(src)
 }
 
@@ -59,7 +59,7 @@ pub fn encode_to_string(src []u8) string {
 // encode encodes a byte array `src` using Base32 and returns the
 // encoded bytes.
 pub fn encode(src []u8) []u8 {
-	e := new_encoding(base32.std_alphabet)
+	e := new_encoding(std_alphabet)
 	return e.encode(src)
 }
 
@@ -78,7 +78,7 @@ pub fn (enc &Encoding) encode_string_to_string(src string) string {
 // new_std_encoding creates a standard Base32 `Encoding` as defined in
 // RFC 4648.
 pub fn new_std_encoding() Encoding {
-	return new_encoding_with_padding(base32.std_alphabet, base32.std_padding)
+	return new_encoding_with_padding(std_alphabet, std_padding)
 }
 
 // new_std_encoding creates a standard Base32 `Encoding` identical to
@@ -88,40 +88,58 @@ pub fn new_std_encoding() Encoding {
 // be contained in the `Encoding`'s alphabet and must be a rune equal or
 // below '\xff'.
 pub fn new_std_encoding_with_padding(padding u8) Encoding {
-	return new_encoding_with_padding(base32.std_alphabet, padding)
+	return new_encoding_with_padding(std_alphabet, padding)
 }
 
 // new_encoding returns a Base32 `Encoding` with standard
 // `alphabet`s and standard padding.
 pub fn new_encoding(alphabet []u8) Encoding {
-	return new_encoding_with_padding(alphabet, base32.std_padding)
+	return new_encoding_with_padding(alphabet, std_padding)
 }
 
 // new_encoding_with_padding returns a Base32 `Encoding` with specified
 // encoding `alphabet`s and a specified `padding_char`.
+// Panics unless the alphabet has exactly 32 distinct bytes without CR or LF.
 // The `padding_char` must not be '\r' or '\n', must not
 // be contained in the `Encoding`'s alphabet and must be a rune equal or
 // below '\xff'.
 pub fn new_encoding_with_padding(alphabet []u8, padding_char u8) Encoding {
-	if padding_char == `\r` || padding_char == `\n` || padding_char > 0xff {
-		panic('invalid padding')
-	}
-
-	for i := 0; i < alphabet.len; i++ {
-		if alphabet[i] == padding_char {
-			panic('padding contained in alphabet')
-		}
-	}
+	validate_encoding_alphabet(alphabet, padding_char) or { panic(err) }
 
 	mut decode_map := [256]u8{}
+	for i in 0 .. decode_map.len {
+		decode_map[i] = 0xff
+	}
 	for i in 0 .. alphabet.len {
 		decode_map[alphabet[i]] = u8(i)
 	}
 
 	return Encoding{
-		alphabet: alphabet
+		alphabet:     alphabet
 		padding_char: padding_char
-		decode_map: decode_map
+		decode_map:   decode_map
+	}
+}
+
+fn validate_encoding_alphabet(alphabet []u8, padding_char u8) ! {
+	if alphabet.len != 32 {
+		return error('base32: alphabet must contain 32 bytes')
+	}
+	if padding_char in [`\r`, `\n`] {
+		return error('invalid padding')
+	}
+	mut seen := [256]bool{}
+	for ch in alphabet {
+		if ch in [`\r`, `\n`] {
+			return error('base32: alphabet must not contain newline characters')
+		}
+		if ch == padding_char {
+			return error('padding contained in alphabet')
+		}
+		if seen[ch] {
+			return error('base32: alphabet must not contain repeated bytes')
+		}
+		seen[ch] = true
 	}
 }
 
@@ -193,7 +211,7 @@ fn (enc &Encoding) encode_(src_ []u8, mut dst []u8) {
 
 		// Pad the final quantum
 		if src.len < 5 {
-			if enc.padding_char == base32.no_padding {
+			if enc.padding_char == no_padding {
 				break
 			}
 
@@ -218,7 +236,7 @@ fn (enc &Encoding) encode_(src_ []u8, mut dst []u8) {
 }
 
 fn (enc &Encoding) encoded_len(n int) int {
-	if enc.padding_char == base32.no_padding {
+	if enc.padding_char == no_padding {
 		return (n * 8 + 4) / 5
 	}
 	return (n + 4) / 5 * 8
@@ -245,13 +263,11 @@ pub fn (enc &Encoding) decode_string_to_string(src string) !string {
 // decode decodes `src` using the encoding `enc`. It returns the decoded bytes
 // written or a `corrupt_input_error_msg` error.
 // New line characters (\r and \n) are ignored.
+// Without padding, final groups of 1, 3 or 6 symbols are invalid.
 pub fn (enc &Encoding) decode(src []u8) ![]u8 {
-	mut buf := []u8{len: src.len}
-	// mut dst := unsafe { buf }
-	// l := strip_newlines(mut dst, src)
-	// n, _ := enc.decode_(src[..l], mut dst) or {
-	// src := strip_newlines(src_)
-	n, _ := enc.decode_(src, mut buf) or { return err }
+	stripped := strip_newlines(src)
+	mut buf := []u8{len: stripped.len}
+	n, _ := enc.decode_(stripped, mut buf) or { return err }
 	return buf[..n]
 }
 
@@ -276,18 +292,23 @@ fn (enc &Encoding) decode_(src_ []u8, mut dst []u8) !(int, bool) {
 
 		for j := 0; j < 8; {
 			if src.len == 0 {
-				if enc.padding_char != base32.no_padding {
+				if enc.padding_char != no_padding {
 					// We have reached the end and are missing padding
 					// return n, false, corrupt_input_error(olen - src.len - j)
 					return error(corrupt_input_error_msg(olen - src.len - j))
 				}
 				// We have reached the end and are not expecting any padding
+				if j == 1 || j == 3 || j == 6 {
+					return error(corrupt_input_error_msg(olen - j))
+				}
 				dlen, end = j, true
 				break
 			}
 			in0 := src[0]
-			src = src[1..]
-			if in0 == enc.padding_char && j >= 2 && src.len < 8 {
+			unsafe {
+				src = src[1..]
+			}
+			if enc.padding_char != no_padding && in0 == enc.padding_char && j >= 2 && src.len < 8 {
 				// We`ve reached the end and there`s padding
 				if src.len + j < 8 - 1 {
 					// not enough padding

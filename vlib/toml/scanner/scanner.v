@@ -6,6 +6,7 @@ module scanner
 import toml.input
 import toml.token
 import toml.util
+import strings
 
 pub const digit_extras = [`_`, `.`, `x`, `o`, `b`, `e`, `E`]
 pub const end_of_text = u32(~0)
@@ -48,7 +49,7 @@ pub:
 pub fn new_scanner(config Config) !&Scanner {
 	mut s := &Scanner{
 		config: config
-		text: config.input.read_input()!
+		text:   config.input.read_input()!
 	}
 	return s
 }
@@ -57,7 +58,7 @@ pub fn new_scanner(config Config) !&Scanner {
 pub fn new_simple(config Config) !Scanner {
 	return Scanner{
 		config: config
-		text: config.input.read_input()!
+		text:   config.input.read_input()!
 	}
 }
 
@@ -72,7 +73,7 @@ pub fn new_simple_text(text string) !Scanner {
 	}
 	return Scanner{
 		config: config
-		text: config.input.read_input()!
+		text:   config.input.read_input()!
 	}
 }
 
@@ -87,7 +88,7 @@ pub fn new_simple_file(path string) !Scanner {
 	}
 	return Scanner{
 		config: config
-		text: config.input.read_input()!
+		text:   config.input.read_input()!
 	}
 }
 
@@ -99,7 +100,7 @@ pub fn (mut s Scanner) scan() !token.Token {
 	for {
 		c := s.next()
 		byte_c := u8(c)
-		if c == scanner.end_of_text {
+		if c == end_of_text {
 			s.inc_line_number()
 			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'reached EOF')
 			return s.new_token(.eof, '', 1)
@@ -126,25 +127,29 @@ pub fn (mut s Scanner) scan() !token.Token {
 			&& peek_2 == `f`
 		if !s.is_left_of_assign && (is_nan || is_inf || is_signed_nan || is_signed_inf) {
 			num := s.extract_nan_or_inf_number()!
-			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a special number "${num}" (${num.len})')
+			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+				'identified a special number "${num}" (${num.len})')
 			return s.new_token(.number, num, num.len)
 		}
 
-		is_signed_number := is_sign && u8(s.at()).is_digit() && !u8(s.peek(-1)).is_digit()
+		is_signed_number := is_sign && u8(s.at()).is_digit() && !u8(s.peek(-2)).is_digit()
 		is_digit := byte_c.is_digit()
 		if is_digit || is_signed_number {
 			num := s.extract_number()!
-			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a number "${num}" (${num.len})')
+			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+				'identified a number "${num}" (${num.len})')
 			return s.new_token(.number, num, num.len)
 		}
 
 		if util.is_key_char(byte_c) {
 			key := s.extract_key()
 			if u8(s.peek(1)) != `=` && (key == 'true' || key == 'false') {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a boolean "${key}" (${key.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified a boolean "${key}" (${key.len})')
 				return s.new_token(.boolean, key, key.len)
 			}
-			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified a bare key "${key}" (${key.len})')
+			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+				'identified a bare key "${key}" (${key.len})')
 			return s.new_token(.bare, key, key.len)
 		}
 
@@ -152,13 +157,21 @@ pub fn (mut s Scanner) scan() !token.Token {
 			` `, `\t`, `\n`, `\r` {
 				if c == `\n` {
 					s.inc_line_number()
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'incremented line nr to ${s.line_nr}')
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'incremented line nr to ${s.line_nr}')
+				} else if c == `\r` {
+					// CR should always be followed by a `\n`
+					if s.at() != `\n` {
+						return error(@MOD + '.' + @STRUCT + '.' + @FN +
+							' missing newline/linefeed character after "\\c" carriage return at (${s.line_nr},${s.col}) "${ascii}" near ...${s.excerpt(s.pos, 5)}...')
+					}
 				}
 				// Date-Time in RFC 3339 is allowed to have a space between the date and time in supplement to the 'T'
 				// so we allow space characters to slip through to the parser if the space is between two digits...
-				// util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, '"'+u8(s.peek(-1)).ascii_str()+'" < "$ascii" > "'+u8(s.at()).ascii_str()+'"')
-				if c == ` ` && u8(s.peek(-1)).is_digit() && u8(s.at()).is_digit() {
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified, what could be, a space between a RFC 3339 date and time ("${ascii}") (${ascii.len})')
+				// util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, '"'+u8(s.peek(-2)).ascii_str()+'" < "${ascii}" > "'+u8(s.at()).ascii_str()+'"')
+				if c == ` ` && u8(s.peek(-2)).is_digit() && u8(s.at()).is_digit() {
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'identified, what could be, a space between a RFC 3339 date and time ("${ascii}") (${ascii.len})')
 					return s.new_token(token.Kind.whitespace, ascii, ascii.len)
 				}
 				if s.config.tokenize_formatting {
@@ -170,66 +183,81 @@ pub fn (mut s Scanner) scan() !token.Token {
 					} else if c == `\n` {
 						kind = token.Kind.nl
 					}
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified formatting character ("${ascii}") (${ascii.len})')
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'identified formatting character ("${ascii}") (${ascii.len})')
 					return s.new_token(kind, ascii, ascii.len)
 				} else {
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'skipping " ", "\\t" or "\\n" ("${ascii}") (${ascii.len})')
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'skipping " ", "\\t" or "\\n" ("${ascii}") (${ascii.len})')
 				}
 				continue
 			}
 			`-` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified minus "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified minus "${ascii}" (${ascii.len})')
 				return s.new_token(.minus, ascii, ascii.len)
 			}
 			`_` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified underscore "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified underscore "${ascii}" (${ascii.len})')
 				return s.new_token(.underscore, ascii, ascii.len)
 			}
 			`+` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified plus "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified plus "${ascii}" (${ascii.len})')
 				return s.new_token(.plus, ascii, ascii.len)
 			}
 			`=` {
 				s.is_left_of_assign = false
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified assignment "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified assignment "${ascii}" (${ascii.len})')
 				return s.new_token(.assign, ascii, ascii.len)
 			}
 			`"`, `'` { // ... some string "/'
 				ident_string := s.extract_string()!
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified quoted string `${ident_string}`')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified quoted string `${ident_string}`')
 				return s.new_token(.quoted, ident_string, ident_string.len)
 			}
 			`#` {
 				hash := s.ignore_line()!
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified comment hash "${hash}" (${hash.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified comment hash "${hash}" (${hash.len})')
 				return s.new_token(.hash, hash, hash.len + 1)
 			}
 			`{` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified left curly bracket "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified left curly bracket "${ascii}" (${ascii.len})')
 				return s.new_token(.lcbr, ascii, ascii.len)
 			}
 			`}` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified right curly bracket "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified right curly bracket "${ascii}" (${ascii.len})')
 				return s.new_token(.rcbr, ascii, ascii.len)
 			}
 			`[` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified left square bracket "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified left square bracket "${ascii}" (${ascii.len})')
 				return s.new_token(.lsbr, ascii, ascii.len)
 			}
 			`]` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified right square bracket "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified right square bracket "${ascii}" (${ascii.len})')
 				return s.new_token(.rsbr, ascii, ascii.len)
 			}
 			`:` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified colon "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified colon "${ascii}" (${ascii.len})')
 				return s.new_token(.colon, ascii, ascii.len)
 			}
 			`,` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified comma "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified comma "${ascii}" (${ascii.len})')
 				return s.new_token(.comma, ascii, ascii.len)
 			}
 			`.` {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified period "${ascii}" (${ascii.len})')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'identified period "${ascii}" (${ascii.len})')
 				return s.new_token(.period, ascii, ascii.len)
 			}
 			else {
@@ -238,8 +266,7 @@ pub fn (mut s Scanner) scan() !token.Token {
 			}
 		}
 	}
-	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'unknown character code at ${s.pos} (${s.line_nr},${s.col}) near ...${s.excerpt(s.pos,
-		5)}...')
+	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'unknown character code at ${s.pos} (${s.line_nr},${s.col}) near ...${s.excerpt(s.pos, 5)}...')
 	return s.new_token(.unknown, '', 0)
 }
 
@@ -268,7 +295,7 @@ pub fn (mut s Scanner) next() u32 {
 		c := s.text[opos]
 		return c
 	}
-	return scanner.end_of_text
+	return end_of_text
 }
 
 // skip skips one character ahead.
@@ -300,28 +327,24 @@ pub fn (s &Scanner) at() u32 {
 	if s.pos < s.text.len {
 		return s.text[s.pos]
 	}
-	return scanner.end_of_text
+	return end_of_text
 }
 
 // at_crlf returns `true` if the scanner is at a `\r` character
 // and the next character is a `\n`.
-fn (s Scanner) at_crlf() bool {
+fn (s &Scanner) at_crlf() bool {
 	return s.at() == `\r` && s.peek(1) == `\n`
 }
 
 // peek returns the character code from the input text at position + `n`.
-// peek returns `end_of_text` if it can't peek `n` characters ahead.
+// Negative offsets look behind the current position; out-of-range offsets return `end_of_text`.
 @[direct_array_access; inline]
 pub fn (s &Scanner) peek(n int) u32 {
-	if s.pos + n < s.text.len {
-		// Allow peeking back - needed for spaces between date and time in RFC 3339 format :/
-		if n - 1 < 0 && s.pos + n - 1 >= 0 {
-			// util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'LOOKING BAAAA-AACK - OOOVER MY SHOOOOULDEEEER "${s.text[s.pos + n-1]}"')
-			return s.text[s.pos + n - 1]
-		}
-		return s.text[s.pos + n]
+	// Check the offset before adding it, including extreme positive/negative offsets.
+	if n < -s.pos || n >= s.text.len - s.pos {
+		return end_of_text
 	}
-	return scanner.end_of_text
+	return s.text[s.pos + n]
 }
 
 // reset resets the internal state of the scanner.
@@ -335,18 +358,18 @@ pub fn (mut s Scanner) reset() {
 // new_token returns a new `token.Token`.
 @[inline]
 fn (mut s Scanner) new_token(kind token.Kind, lit string, len int) token.Token {
-	// println('new_token($lit)')
+	// println('new_token(${lit})')
 	mut col := s.col - len + 1
 	if s.line_nr == 1 {
 		col -= s.header_len
 	}
 	return token.Token{
-		kind: kind
-		lit: lit
-		col: if col < 1 { 1 } else { col }
+		kind:    kind
+		lit:     lit
+		col:     if col < 1 { 1 } else { col }
 		line_nr: s.line_nr + 1
-		pos: s.pos - s.header_len - len + 1
-		len: len
+		pos:     s.pos - s.header_len - len + 1
+		len:     len
 	}
 }
 
@@ -355,7 +378,7 @@ fn (mut s Scanner) new_token(kind token.Kind, lit string, len int) token.Token {
 fn (mut s Scanner) ignore_line() !string {
 	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, ' ignoring until EOL...')
 	start := s.pos
-	for c := s.at(); c != scanner.end_of_text && c != `\n`; c = s.at() {
+	for c := s.at(); c != end_of_text && c != `\n`; c = s.at() {
 		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'skipping "${u8(c).ascii_str()} / ${c}"')
 		if s.at_crlf() {
 			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'letting `\\r\\n` slip through')
@@ -403,14 +426,14 @@ fn (mut s Scanner) extract_string() !string {
 	s.col--
 	quote := u8(s.at())
 	start := s.pos
-	mut lit := quote.ascii_str()
 
 	is_multiline := s.text[s.pos + 1] == quote && s.text[s.pos + 2] == quote
 	// Check for escaped multiline quote
 	if is_multiline {
-		mls := s.extract_multiline_string()!
-		return mls
+		return s.extract_multiline_string()
 	}
+
+	mut has_newline := false
 
 	for {
 		s.pos++
@@ -422,12 +445,13 @@ fn (mut s Scanner) extract_string() !string {
 		}
 
 		c := u8(s.at())
-		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'c: `${c.ascii_str()}` / ${c} (quote type: ${quote}/${quote.ascii_str()})')
+		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+			'c: `${c.ascii_str()}` / ${c} (quote type: ${quote}/${quote.ascii_str()})')
 
 		// Check for escaped chars
 		if c == u8(92) {
 			esc, skip := s.handle_escapes(quote, is_multiline)
-			lit += esc
+			has_newline = has_newline || esc.contains('\n')
 			if skip > 0 {
 				s.pos += skip
 				s.col += skip
@@ -443,18 +467,18 @@ fn (mut s Scanner) extract_string() !string {
 		if c == quote {
 			s.pos++
 			s.col++
-			return lit + quote.ascii_str()
+			return s.text[start..s.pos]
 		}
 
-		lit += c.ascii_str()
+		has_newline = has_newline || c == `\n`
 
 		// Don't eat multiple lines in single-line mode
-		if lit.contains('\n') {
+		if has_newline {
 			return error(@MOD + '.' + @STRUCT + '.' + @FN +
 				' unfinished single-line string literal `${quote.ascii_str()}` started at ${start} (${s.line_nr},${s.col}) "${u8(s.at()).ascii_str()}" near ...${s.excerpt(s.pos, 5)}...')
 		}
 	}
-	return lit
+	return s.text[start..s.pos]
 }
 
 // extract_multiline_string collects and returns a string containing
@@ -466,10 +490,15 @@ fn (mut s Scanner) extract_multiline_string() !string {
 	// characters is the quotes
 	quote := u8(s.at())
 	start := s.pos
-	mut lit := quote.ascii_str() + quote.ascii_str() + quote.ascii_str()
+	mut lit := strings.new_builder(64)
+	defer {
+		unsafe { lit.free() }
+	}
+	lit.write_u8(quote)
+	lit.write_u8(quote)
+	lit.write_u8(quote)
 
-	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'multi-line `${quote.ascii_str()}${s.text[
-		s.pos + 1].ascii_str()}${s.text[s.pos + 2].ascii_str()}` string started at pos ${start} (${s.line_nr},${s.col}) (quote type: ${quote.ascii_str()} / ${quote})')
+	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'multi-line `${quote.ascii_str()}${s.text[s.pos + 1].ascii_str()}${s.text[s.pos + 2].ascii_str()}` string started at pos ${start} (${s.line_nr},${s.col}) (quote type: ${quote.ascii_str()} / ${quote})')
 
 	s.pos += 2
 	s.col += 2
@@ -484,18 +513,22 @@ fn (mut s Scanner) extract_multiline_string() !string {
 		}
 
 		c := u8(s.at())
-		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'c: `${c.ascii_str()}` / ${c} (quote type: ${quote}/${quote.ascii_str()})')
+		util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+			'c: `${c.ascii_str()}` / ${c} (quote type: ${quote}/${quote.ascii_str()})')
 
+		if c == `\r` && s.peek(1) == `\n` {
+			continue
+		}
 		if c == `\n` {
 			s.inc_line_number()
-			lit += c.ascii_str()
+			lit.write_u8(c)
 			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'c: `\\n` / ${c}')
 			continue
 		}
 		// Check for escaped chars
 		if c == u8(92) {
 			esc, skip := s.handle_escapes(quote, true)
-			lit += esc
+			lit.write_string(esc)
 			if skip > 0 {
 				s.pos += skip
 				s.col += skip
@@ -510,26 +543,36 @@ fn (mut s Scanner) extract_multiline_string() !string {
 
 		if c == quote {
 			if s.peek(1) == quote && s.peek(2) == quote {
-				if s.peek(3) == scanner.end_of_text {
+				if s.peek(3) == end_of_text {
 					s.pos += 3
 					s.col += 3
-					lit += quote.ascii_str() + quote.ascii_str() + quote.ascii_str()
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'returning at ${c.ascii_str()} `${lit}`')
-					return lit
+					lit.write_u8(quote)
+					lit.write_u8(quote)
+					lit.write_u8(quote)
+					// `str()` empties the builder, so the result is taken once and reused.
+					result := lit.str()
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'returning at ${c.ascii_str()} `${result}`')
+					return result
 				} else if s.peek(3) != quote {
 					// lit += c.ascii_str()
 					// lit += quote.ascii_str()
 					s.pos += 3
 					s.col += 3
-					lit += quote.ascii_str() + quote.ascii_str() + quote.ascii_str()
-					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'returning at ${c.ascii_str()} `${lit}`')
-					return lit
+					lit.write_u8(quote)
+					lit.write_u8(quote)
+					lit.write_u8(quote)
+					// `str()` empties the builder, so the result is taken once and reused.
+					result := lit.str()
+					util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+						'returning at ${c.ascii_str()} `${result}`')
+					return result
 				}
 			}
 		}
-		lit += c.ascii_str()
+		lit.write_u8(c)
 	}
-	return lit
+	return lit.str()
 }
 
 // handle_escapes returns any escape character sequence.
@@ -547,7 +590,8 @@ fn (mut s Scanner) handle_escapes(quote u8, is_multiline bool) (string, int) {
 		} else if s.peek(1) == quote {
 			if (!is_multiline && s.peek(2) == `\n`)
 				|| (is_multiline && s.peek(2) == quote && s.peek(3) == quote && s.peek(4) == `\n`) {
-				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'ignore special case escaped `${lit}` at end of string')
+				util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+					'ignore special case escaped `${lit}` at end of string')
 				return '', 0
 			}
 			lit += quote.ascii_str()
@@ -557,7 +601,8 @@ fn (mut s Scanner) handle_escapes(quote u8, is_multiline bool) (string, int) {
 	}
 	if is_literal_string {
 		if s.peek(1) == quote {
-			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'ignore escape `${lit}${u8(s.peek(1)).ascii_str()}` in literal string')
+			util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+				'ignore escape `${lit}${u8(s.peek(1)).ascii_str()}` in literal string')
 			return '', 0
 		}
 	}
@@ -593,7 +638,7 @@ fn (mut s Scanner) extract_number() !string {
 		mut float_precision := 0
 		if c == `.` {
 			mut i := 1
-			for c_ := u8(s.peek(i)); c_ != scanner.end_of_text && c_ != `\n`; c_ = u8(s.peek(i)) {
+			for c_ := u8(s.peek(i)); c_ != end_of_text && c_ != `\n`; c_ = u8(s.peek(i)) {
 				if !c_.is_digit() && c_ != `,` {
 					float_precision = 0
 					break
@@ -610,14 +655,15 @@ fn (mut s Scanner) extract_number() !string {
 			s.col += 2
 		}
 		c = s.at()
-		if !(u8(c).is_hex_digit() || c in scanner.digit_extras) || (c == `.` && s.is_left_of_assign) {
+		if !(u8(c).is_hex_digit() || c in digit_extras) || (c == `.` && s.is_left_of_assign) {
 			break
 		}
 		s.pos++
 		s.col++
 	}
 	key := s.text[start..s.pos]
-	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified number "${key}" in range [${start} .. ${s.pos}]')
+	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+		'identified number "${key}" in range [${start} .. ${s.pos}]')
 	return key
 }
 
@@ -647,29 +693,33 @@ fn (mut s Scanner) extract_nan_or_inf_number() !string {
 		s.col++
 	}
 	key := s.text[start..s.pos]
-	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN, 'identified special number "${key}" in range [${start} .. ${s.pos}]')
+	util.printdbg(@MOD + '.' + @STRUCT + '.' + @FN,
+		'identified special number "${key}" in range [${start} .. ${s.pos}]')
 	return key
 }
 
 // excerpt returns a string excerpt of the input text centered
 // at `pos`. The `margin` argument defines how many chacters
 // on each side of `pos` is returned
-pub fn (s Scanner) excerpt(pos int, margin int) string {
+pub fn (s &Scanner) excerpt(pos int, margin int) string {
 	start := if pos > 0 && pos >= margin { pos - margin } else { 0 }
 	end := if pos + margin < s.text.len { pos + margin } else { s.text.len }
 	return s.text[start..end].replace('\n', r'\n')
 }
 
 // state returns a read-only view of the scanner's internal state.
-pub fn (s Scanner) state() State {
+pub fn (s &Scanner) state() State {
 	return State{
-		col: s.col
+		col:     s.col
 		line_nr: s.line_nr
-		pos: s.pos
+		pos:     s.pos
 	}
 }
 
 fn (mut s Scanner) validate_and_skip_headers() ! {
+	if s.pos != 0 {
+		return
+	}
 	// UTF-16 / UTF-32 headers (BE/LE)
 	s.check_utf16_or_32_bom()!
 

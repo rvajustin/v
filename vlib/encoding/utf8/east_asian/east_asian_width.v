@@ -26,6 +26,7 @@ pub fn display_width(s string, ambiguous_width int) int {
 			.full, .wide { int(2) }
 			else { int(1) }
 		}
+
 		i += c_len
 	}
 	return n
@@ -33,11 +34,11 @@ pub fn display_width(s string, ambiguous_width int) int {
 
 // width_property_at returns the East Asian Width properties at string[index]
 pub fn east_asian_width_property_at(s string, index int) EastAsianWidthProperty {
-	codepoint := utf8.get_uchar(s, index)
-	mut left, mut right := 0, east_asian.east_asian_width_data.len - 1
+	codepoint := utf8.get_rune(s, index)
+	mut left, mut right := 0, east_asian_width_data.len - 1
 	for left <= right {
 		middle := left + ((right - left) / 2)
-		entry := east_asian.east_asian_width_data[middle]
+		entry := east_asian_width_data[middle]
 		if codepoint < entry.point {
 			right = middle - 1
 			continue
@@ -56,8 +57,8 @@ pub fn east_asian_width_property_at(s string, index int) EastAsianWidthProperty 
 
 struct EAWEntry {
 	property EastAsianWidthProperty
-	point    int
-	len      int
+	point    u32
+	len      u32
 }
 
 // EastAsianWidth-13.0.0.txt

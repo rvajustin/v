@@ -2,6 +2,8 @@ name: Upgrading from a previous release with v up works
 
 on:
   push:
+    branches:
+      - master
     paths-ignore:
       - '**.md'
       - '**.yml'
@@ -9,18 +11,14 @@ on:
       - '**.out'
       - '!**/vup_works.yml'
       - '!cmd/tools/vup.v'
-  pull_request:
-    paths-ignore:
-      - '**.md'
-      - '**.yml'
-      - '**.vv'
-      - '**.out'
-      - '!**/vup_works.yml'
-      - '!cmd/tools/vup.v'
+      - 'cmd/tools/vrepl.v'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  group: vup-${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   v-up-works-nix:
@@ -28,56 +26,75 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             zip: v_linux.zip
-          - os: macos-13
+          - os: macos-15-intel
             zip: v_macos_x86_64.zip
-          - os: macos-14
+          - os: macos-latest
             zip: v_macos_arm64.zip
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 45
     env:
       VDIR: /tmp/v_from_release_zip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Build v
         run: make && ./v symlink && ./v version
 
+      - name: Build the current updater
+        # The current updater imports newer stdlib modules that are absent from older ZIPs.
+        # Keep its executable outside the extracted checkout so updating cannot replace it.
+        run: ./v -o "$RUNNER_TEMP/vup-current" cmd/tools/vup.v
+
       - name: Download latest release ZIP
-        run: wget https://github.com/vlang/v/releases/latest/download/${{ matrix.zip }}
+        run: |
+          curl --fail --location --silent --show-error \
+            --connect-timeout 15 \
+            --max-time 180 \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            --retry-max-time 600 \
+            --output "${{ matrix.zip }}" \
+            "https://github.com/vlang/v/releases/latest/download/${{ matrix.zip }}"
+          shasum -a 256 "${{ matrix.zip }}"
 
       - name: Extract ZIP 1, no changes
         run: |
-          rm -rf $VDIR && unzip -q -d v_from_release/ ${{ matrix.zip }} && mv v_from_release $VDIR
-          cd $VDIR/v
+          rm -rf "$VDIR"
+          bash .github/workflows/extract_v_release.sh "${{ matrix.zip }}" "$VDIR"
+          cd "$VDIR/v"
           ./v version
           ./v up
           echo "Updated ./v version: $(./v version) | Current   v version: $(v version)"
 
       - name: Extract ZIP 2, with local changes
         run: |
-          rm -rf $VDIR && unzip -q -d v_from_release/ ${{ matrix.zip }} && mv v_from_release $VDIR
-          touch $VDIR/v/vlib/v/pref/local_file_not_present_in_master.c.v && rm $VDIR/v/examples/hello_world.v
-          cd $VDIR/v
+          rm -rf "$VDIR"
+          bash .github/workflows/extract_v_release.sh "${{ matrix.zip }}" "$VDIR"
+          touch "$VDIR/v/vlib/v/pref/local_file_not_present_in_master.c.v" && rm "$VDIR/v/examples/hello_world.v"
+          cd "$VDIR/v"
           ./v version
           ./v up
           echo "Updated ./v version: $(./v version) | Current   v version: $(v version)"
 
-      - name: Extract ZIP 3, with current vup.v in the extract
+      - name: Extract ZIP 3, run the current updater on the released compiler
         run: |
-          rm -rf $VDIR && unzip -q -d v_from_release/ ${{ matrix.zip }} && mv v_from_release $VDIR
-          rm -rf $VDIR/v/cmd/tools/vup && cp cmd/tools/vup.v $VDIR/v/cmd/tools/vup.v
-          cd $VDIR/v
+          rm -rf "$VDIR"
+          bash .github/workflows/extract_v_release.sh "${{ matrix.zip }}" "$VDIR"
+          cd "$VDIR/v"
           ./v version
-          ./v up
+          VEXE="$PWD/v" "$RUNNER_TEMP/vup-current"
           echo "Updated ./v version: $(./v version) | Current   v version: $(v version)"
 
-      - name: Extract ZIP 4, with local changes, and with current vup.v
+      - name: Extract ZIP 4, run the current updater with local changes
         run: |
-          rm -rf $VDIR && unzip -q -d v_from_release/ ${{ matrix.zip }} && mv v_from_release $VDIR
-          rm -rf $VDIR/v/cmd/tools/vup && cp cmd/tools/vup.v $VDIR/v/cmd/tools/vup.v
-          touch $VDIR/v/vlib/v/pref/local_file_not_present_in_master.c.v && rm $VDIR/v/examples/hello_world.v
-          cd $VDIR/v
+          rm -rf "$VDIR"
+          bash .github/workflows/extract_v_release.sh "${{ matrix.zip }}" "$VDIR"
+          touch "$VDIR/v/vlib/v/pref/local_file_not_present_in_master.c.v" && rm "$VDIR/v/examples/hello_world.v"
+          cd "$VDIR/v"
           ./v version
-          ./v up
+          VEXE="$PWD/v" "$RUNNER_TEMP/vup-current"
           echo "Updated ./v version: $(./v version) | Current   v version: $(v version)"

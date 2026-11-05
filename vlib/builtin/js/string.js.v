@@ -1,19 +1,20 @@
 module builtin
 
+import strings
+
 pub struct string {
 pub:
 	str JS.String
 	len int
 }
 
+interface TosSource {}
+
 pub fn (s string) runes() []rune {
-	mut runes := []rune{}
-	for i := 0; i < s.len; i++ {
-		mut r := rune(`0`)
-		#r = new rune(s.str[i.val].charCodeAt())
-		runes << r
-	}
-	return runes
+	ret := JS.makeEmptyArray()
+	#for (r of s.str) array_push(ret,new rune(r),false);
+
+	return ret
 }
 
 pub fn (s string) slice(a int, b int) string {
@@ -24,8 +25,17 @@ pub fn (s string) substr(start int, end int) string {
 	return s.slice(start, end)
 }
 
+// after returns the contents after the last occurrence of `dot`, or the source when absent.
+// An empty delimiter leaves the source unchanged.
 pub fn (s string) after(dot string) string {
-	return string(s.str.slice(JS.Number(int(s.str.lastIndexOf(dot.str)) + 1), s.str.length))
+	if dot.len == 0 {
+		return s.clone()
+	}
+	pos := int(s.str.lastIndexOf(dot.str))
+	if pos == -1 {
+		return s.clone()
+	}
+	return string(s.str.slice(JS.Number(pos + int(dot.str.length)), s.str.length))
 }
 
 pub fn (s string) after_char(dot u8) string {
@@ -277,7 +287,10 @@ pub fn (s string) int() int {
 
 // i64 returns the value of the string as i64 `'1'.i64() == i64(1)`.
 pub fn (s string) i64() i64 {
-	return i64(JS.parseInt(s.str))
+	mut res := i64(0)
+	#res = new i64(BigInt(s.str))
+
+	return res
 }
 
 // i8 returns the value of the string as i8 `'1'.i8() == i8(1)`.
@@ -288,6 +301,11 @@ pub fn (s string) i8() i8 {
 // i16 returns the value of the string as i16 `'1'.i16() == i16(1)`.
 pub fn (s string) i16() i16 {
 	return i16(JS.parseInt(s.str))
+}
+
+// i32 returns the value of the string as i32 `'1'.i32() == i32(1)`.
+pub fn (s string) i32() i32 {
+	return i32(JS.parseInt(s.str))
 }
 
 // f32 returns the value of the string as f32 `'1.0'.f32() == f32(1)`.
@@ -313,14 +331,14 @@ pub fn (s string) u32() u32 {
 
 // u64 returns the value of the string as u64 `'1'.u64() == u64(1)`.
 pub fn (s string) u64() u64 {
-	return u64(JS.parseInt(s.str))
-}
-
-pub fn (s string) u8() u64 {
-	res := u8(0)
-	#res.val = u8(JS.parseInt(s.str))
+	mut res := u64(0)
+	#res = new u64(BigInt(s.str))
 
 	return res
+}
+
+pub fn (s string) u8() u8 {
+	return u8(JS.parseInt(s.str))
 }
 
 // trim_right strips any of the characters given in `cutset` from the right of the string.
@@ -483,7 +501,7 @@ pub fn (mut s []string) sort_by_len() {
 	s.sort_with_compare(compare_strings_by_len)
 }
 
-// str returns a copy of the string
+// str returns a copy of the string.
 pub fn (s string) str() string {
 	return s.clone()
 }
@@ -707,7 +725,7 @@ pub fn (s string) replace_each(vals []string) string {
 		with_ = with_
 
 		for {
-			idx = s_.index_after(rep, idx)
+			idx = s_.index_after_(rep, idx)
 			if idx == -1 {
 				break
 			}
@@ -719,7 +737,7 @@ pub fn (s string) replace_each(vals []string) string {
 			}
 
 			rep_idx := RepIndex{
-				idx: 0
+				idx:     0
 				val_idx: 0
 			}
 			// todo: primitives should always be copied
@@ -770,9 +788,72 @@ pub fn (s string) replace_each(vals []string) string {
 	return b
 }
 
-// last_index returns the position of the last occurrence of the input string.
+// format replaces positional placeholders like `{0}` and `{1}` in `s`
+// with the corresponding values from `args`.
+// Use `{{` and `}}` to output literal braces.
+@[direct_array_access]
+pub fn (s string) format(args ...string) string {
+	if s.len == 0 {
+		return ''
+	}
+	mut out := strings.new_builder(s.len)
+	mut i := 0
+	for i < s.len {
+		ch := s[i]
+		if ch == `{` {
+			if i + 1 < s.len && s[i + 1] == `{` {
+				out.write_byte(`{`)
+				i += 2
+				continue
+			}
+			mut j := i + 1
+			if j >= s.len || !s[j].is_digit() {
+				out.write_byte(ch)
+				i++
+				continue
+			}
+			mut idx := 0
+			mut overflowed := false
+			for j < s.len && s[j].is_digit() {
+				digit := int(s[j] - `0`)
+				if idx > (max_int - digit) / 10 {
+					overflowed = true
+					break
+				}
+				idx = idx * 10 + digit
+				j++
+			}
+			if !overflowed && j < s.len && s[j] == `}` {
+				if idx < args.len {
+					out.write_string(args[idx])
+				} else {
+					out.write_string(s[i..j + 1])
+				}
+				i = j + 1
+				continue
+			}
+			out.write_byte(ch)
+			i++
+			continue
+		}
+		if ch == `}` && i + 1 < s.len && s[i + 1] == `}` {
+			out.write_byte(`}`)
+			i += 2
+			continue
+		}
+		out.write_byte(ch)
+		i++
+	}
+	return out.str()
+}
+
+// index_last_ returns the position of the last occurrence of the input string.
+// An empty input string is found at position `s.len`.
 fn (s string) index_last_(p string) int {
-	if p.len > s.len || p.len == 0 {
+	if p.len == 0 {
+		return s.len
+	}
+	if p.len > s.len {
 		return -1
 	}
 	mut i := s.len - p.len
@@ -789,13 +870,8 @@ fn (s string) index_last_(p string) int {
 	return -1
 }
 
-// index_last returns the position of the first character of the *last* occurrence of the `needle` string in `s`.
-@[deprecated: 'use `.last_index(needle string)` instead']
-pub fn (s string) index_last(needle string) ?int {
-	return s.last_index(needle)
-}
-
 // last_index returns the position of the first character of the *last* occurrence of the `needle` string in `s`.
+// An empty needle is found at position `s.len`, including in an empty `s`.
 @[inline]
 pub fn (s string) last_index(needle string) ?int {
 	idx := s.index_last_(needle)
@@ -803,15 +879,6 @@ pub fn (s string) last_index(needle string) ?int {
 		return none
 	}
 	return idx
-}
-
-// index_u8_last returns the index of the *last* occurrence of the byte `c` (if found) in the string.
-// It returns -1, if `c` is not found.
-@[deprecated: 'use `.last_index_u8(c u8)` instead']
-@[deprecated_after: '2024-06-30']
-@[inline]
-pub fn (s string) index_u8_last(c u8) int {
-	return s.last_index_u8(c)
 }
 
 // last_index_u8 returns the index of the last occurrence of byte `c` if it was found in the string.
@@ -832,7 +899,37 @@ pub fn (s string) trim_space() string {
 	return res
 }
 
-pub fn (s string) index_after(p string, start int) int {
+pub fn (s string) index_after(p string, start int) ?int {
+	if p.len > s.len {
+		return none
+	}
+
+	mut strt := start
+	if start < 0 {
+		strt = 0
+	}
+	if start >= s.len {
+		return none
+	}
+	mut i := strt
+
+	for i < s.len {
+		mut j := 0
+		mut ii := i
+		for j < p.len && s[ii] == p[j] {
+			j++
+			ii++
+		}
+
+		if j == p.len {
+			return i
+		}
+		i++
+	}
+	return none
+}
+
+pub fn (s string) index_after_(p string, start int) int {
 	if p.len > s.len {
 		return -1
 	}
@@ -876,9 +973,13 @@ pub fn (s string) split_into_lines() []string {
 }
 
 // replace_once replaces the first occurrence of `rep` with the string passed in `with`.
+// An empty `rep` inserts `with_` at the start of `s`.
 pub fn (s string) replace_once(rep string, with_ string) string {
+	if rep.len == 0 {
+		return with_ + s
+	}
 	s2 := ''
-	#s2.val = s.str.replace(rep.str,with_.str)
+	#s2.str = s.str.replace(rep.str, function() { return with_.str; })
 
 	return s2
 }
@@ -952,7 +1053,7 @@ pub fn (s string) is_capital() bool {
 // Example: assert 'Hello. World.'.starts_with_capital() == true
 @[direct_array_access]
 pub fn (s string) starts_with_capital() bool {
-	if s.len == 0 || !(s[0] >= `A` && s[0] <= `Z`) {
+	if s.len == 0 || !s[0].is_capital() {
 		return false
 	}
 	return true
@@ -1026,6 +1127,7 @@ pub fn (s []string) join(sep string) string {
 
 // There's no better way to find length of JS String in bytes.
 #Object.defineProperty(string.prototype,"len", { get: function() {return new int(new TextEncoder().encode(this.str).length);}, set: function(l) {/* ignore */ } });
+
 // index returns the position of the first character of the input string.
 // It will return `none` if the input string can't be found.
 pub fn (s string) index(search string) ?int {
@@ -1044,9 +1146,43 @@ pub fn (_rune string) utf32_code() int {
 	return res
 }
 
-pub fn tos(jsstr JS.String) string {
-	res := ''
-	#res.str = jsstr
+// tos converts a JS string or an addressable byte range into a V string.
+pub fn tos(source TosSource, lens ...int) string {
+	mut res := ''
+	#const source_value = source instanceof $ref ? source.valueOf() : source
+	if lens.len == 0 {
+		#if (source_value instanceof string) {
+		#res.str = source_value.str
+		#} else if (typeof source_value === 'string' || source_value instanceof String) {
+		#res.str = source_value.toString()
+		#} else {
+		panic('tos(): unsupported source in JS backend')
+		#}
+
+		return res
+	}
+	if lens.len != 1 {
+		panic('tos(): expected exactly one length argument')
+	}
+	len := lens[0]
+	if len < 0 {
+		panic('tos(): negative length')
+	}
+	#if (source_value === null || source_value === undefined) {
+	panic('tos(): nil string')
+	#}
+	#if (source && source._v_array !== undefined && source._v_index !== undefined) {
+	#const start = source._v_index.valueOf()
+	#for (let i = 0; i < len.valueOf(); ++i) res.str += String.fromCharCode(source._v_array.arr.get(new int(start + i)).valueOf())
+	#} else if (source_value.arr !== undefined && typeof source_value.arr.get === 'function') {
+	#for (let i = 0; i < len.valueOf(); ++i) res.str += String.fromCharCode(source_value.arr.get(new int(i)).valueOf())
+	#} else if (source_value instanceof string) {
+	#res.str = source_value.str.slice(0, len.valueOf())
+	#} else if (typeof source_value === 'string' || source_value instanceof String) {
+	#res.str = source_value.toString().slice(0, len.valueOf())
+	#} else {
+	panic('tos(): unsupported source in JS backend')
+	#}
 
 	return res
 }

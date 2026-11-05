@@ -10,7 +10,7 @@ mut:
 
 @[inline]
 fn is_null(data int) bool {
-	return data == html.null_element
+	return data == null_element
 }
 
 @[inline]
@@ -19,11 +19,11 @@ fn (stack Stack) is_empty() bool {
 }
 
 fn (stack Stack) peek() int {
-	return if !stack.is_empty() { stack.elements[stack.size - 1] } else { html.null_element }
+	return if !stack.is_empty() { stack.elements[stack.size - 1] } else { null_element }
 }
 
 fn (mut stack Stack) pop() int {
-	mut to_return := html.null_element
+	mut to_return := null_element
 	if !stack.is_empty() {
 		to_return = stack.elements[stack.size - 1]
 		stack.size--
@@ -52,15 +52,11 @@ fn (mut btree BTree) add_children(tag Tag) int {
 	btree.all_tags << tag
 	if btree.all_tags.len > 1 {
 		for btree.childrens.len <= btree.node_pointer {
-			mut temp_array := btree.childrens.clone()
-			temp_array << []int{}
-			btree.childrens = temp_array
+			btree.childrens << []int{}
 		}
 		btree.childrens[btree.node_pointer] << btree.all_tags.len - 1
 		for btree.parents.len < btree.all_tags.len {
-			mut temp_array := btree.parents.clone()
-			temp_array << 0
-			btree.parents = temp_array
+			btree.parents << 0
 		}
 		btree.parents[btree.all_tags.len - 1] = btree.node_pointer
 	}

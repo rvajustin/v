@@ -12,7 +12,7 @@ const session_id_length = 32
 // new_session_id creates and returns a random session id and its signed version.
 // You can directly use the signed version as a cookie value
 pub fn new_session_id(secret []u8) (string, string) {
-	sid := rand.hex(sessions.session_id_length)
+	sid := rand.hex(session_id_length)
 
 	hashed := hmac.new(secret, sid.bytes(), sha256.sum, sha256.block_size)
 
@@ -20,8 +20,8 @@ pub fn new_session_id(secret []u8) (string, string) {
 	return sid, '${sid}.${base64.url_encode(hashed)}'
 }
 
-// verify_session_id verifies the signed session id with `secret`. This function returns
-// the session id and if the session id is valid
+// verify_session_id verifies the signed session id with `secret`.
+// This function returns the session id and if the session id is valid.
 pub fn verify_session_id(raw_sid string, secret []u8) (string, bool) {
 	parts := raw_sid.split('.')
 	if parts.len != 2 {
@@ -36,12 +36,12 @@ pub fn verify_session_id(raw_sid string, secret []u8) (string, bool) {
 	return sid, hmac.equal(actual_hmac, new_hmac)
 }
 
-// CurrentSession contains the session data during a request. If you use x.vweb you
-// could embed it on your Context struct to have easy access to the session id and data.
-// Example:
+// CurrentSession contains the session data during a request.
+// If you use veb you could embed it on your Context struct to have easy access to the session id and data.
+// Usage example:
 // ```v
-// pub struct Context {
-//     vweb.Context
+// struct Context {
+//     veb.Context
 //     sessions.CurrentSessions[User]
 // }
 // ```
@@ -51,8 +51,7 @@ pub mut:
 	session_data ?T
 }
 
-// CookieOptions contains the default settings for the cookie created in
-// the `Sessions` struct.
+// CookieOptions contains the default settings for the cookie created in the `Sessions` struct.
 pub struct CookieOptions {
 pub:
 	cookie_name string = 'sid'
@@ -63,10 +62,10 @@ pub:
 	secure      bool
 }
 
-// Sessions can be used to easily integrate sessions with x.vweb.
+// Sessions can be used to easily integrate sessions with veb.
 // This struct contains the store that holds all session data it also provides
-// an easy way to manage sessions in your vweb app.
-// Example:
+// an easy way to manage sessions in your veb app.
+// Usage example:
 // ```v
 // pub struct App {
 // pub mut:
@@ -76,31 +75,40 @@ pub:
 @[heap]
 pub struct Sessions[T] {
 pub:
-	secret         []u8          @[required]
+	secret         []u8 @[required]
 	cookie_options CookieOptions
 	// max age of session data and id, default is 30 days
 	max_age time.Duration = time.hour * 24 * 30
-	// set to true if you want to create a session if there isn't any data stored yet.
-	// Also called pre-sessions
+	// create a session cookie in the middleware before any data is saved (pre-sessions).
+	// Explicit save calls create a session in either mode.
 	save_uninitialized bool
 pub mut:
 	store Store[T] @[required]
 }
 
-// set_session_id generates a new session id and set a Set-Cookie header on the response
+// set_session_id generates a new session id and sets its Set-Cookie header on the response.
+// It replaces earlier response cookies with the session cookie name, preserving other cookies.
 pub fn (mut s Sessions[T]) set_session_id[X](mut ctx X) string {
 	sid, signed := new_session_id(s.secret)
 	ctx.CurrentSession.session_id = sid
 
+	// Middleware may have issued a pre-session cookie earlier in this response.
+	cookies := ctx.res.header.values(.set_cookie)
+	ctx.res.header.delete(.set_cookie)
+	for cookie in cookies {
+		if cookie.all_before('=').trim_space() != s.cookie_options.cookie_name {
+			ctx.res.header.add(.set_cookie, cookie)
+		}
+	}
 	ctx.set_cookie(http.Cookie{
-		value: signed
-		max_age: s.max_age
-		domain: s.cookie_options.domain
+		value:     signed
+		max_age:   int(s.max_age / time.second)
+		domain:    s.cookie_options.domain
 		http_only: s.cookie_options.http_only
-		name: s.cookie_options.cookie_name
-		path: s.cookie_options.path
+		name:      s.cookie_options.cookie_name
+		path:      s.cookie_options.path
 		same_site: s.cookie_options.same_site
-		secure: s.cookie_options.secure
+		secure:    s.cookie_options.secure
 	})
 	// indicate that the response should not be cached: we don't want the session id cookie
 	// to be cached by the browser, or any other agent
@@ -110,20 +118,20 @@ pub fn (mut s Sessions[T]) set_session_id[X](mut ctx X) string {
 	return sid
 }
 
-// validate_session validates the current session, returns the session id and the validation status
+// validate_session validates the current session, returns the session id and the validation status.
 pub fn (mut s Sessions[T]) validate_session[X](ctx X) (string, bool) {
 	cookie := ctx.get_cookie(s.cookie_options.cookie_name) or { return '', false }
 
 	return verify_session_id(cookie, s.secret)
 }
 
-// get the data associated with the current session, if it exists
+// get the data associated with the current session, if it exists.
 pub fn (mut s Sessions[T]) get[X](ctx X) !T {
 	sid := s.get_session_id(ctx) or { return error('cannot find session id') }
 	return s.store.get(sid, s.max_age)!
 }
 
-// destroy the data for the current session
+// destroy the data for the current session.
 pub fn (mut s Sessions[T]) destroy[X](mut ctx X) ! {
 	if sid := s.get_session_id(ctx) {
 		s.store.destroy(sid)!
@@ -131,56 +139,61 @@ pub fn (mut s Sessions[T]) destroy[X](mut ctx X) ! {
 	}
 }
 
-// logout destroys the data for the current session and removes
-// the session id Cookie
+// logout destroys the data for the current session and removes the session id Cookie.
 pub fn (mut s Sessions[T]) logout[X](mut ctx X) ! {
 	s.destroy(mut ctx)!
 	ctx.set_cookie(http.Cookie{
-		name: s.cookie_options.cookie_name
-		value: ''
+		name:    s.cookie_options.cookie_name
+		value:   ''
 		expires: time.unix(0)
 	})
 }
 
-// save `data` for the current session
+// save stores `data` for the current session, creating a session if needed.
+// save_uninitialized only controls whether middleware creates a session before data is saved.
 pub fn (mut s Sessions[T]) save[X](mut ctx X, data T) ! {
-	if sid := s.get_session_id(ctx) {
-		s.store.set(sid, data)!
+	sid := s.get_session_id(ctx) or { s.set_session_id(mut ctx) }
+	if _ := s.store.set(sid, data) {
 		ctx.CurrentSession.session_data = data
 	} else {
-		if s.save_uninitialized == false {
-			// no valid session id, but the user only wants to create a session
-			// when data is saved. So we create the session here
-			sid := s.set_session_id(mut ctx)
-			s.store.set(sid, data)!
-			ctx.CurrentSession.session_data = data
-		}
-		eprintln('[vweb.sessions] error: trying to save data without a valid session!')
+		return err
 	}
 }
 
-// resave saves `data` for the current session and reset the session id.
+// resave saves `data` for the current session and resets the session id.
 // You should use this function when the authentication or authorization status changes
 // e.g. when a user signs in or switches between accounts/permissions.
 // This function also destroys the data associated to the old session id.
 pub fn (mut s Sessions[T]) resave[X](mut ctx X, data T) ! {
 	if sid := s.get_session_id(ctx) {
-		s.store.destroy(sid)!
+		if _ := s.store.destroy(sid) {
+		} else {
+			return err
+		}
 	}
 
-	s.save(mut ctx, data)
+	sid := s.set_session_id(mut ctx)
+	if _ := s.store.set(sid, data) {
+		ctx.CurrentSession.session_data = data
+	} else {
+		return err
+	}
 }
 
-// get_session_id retrieves the current session id, if it is set
+// get_session_id retrieves the current session id, if it is set.
+// The HMAC signature is verified when extracting from cookies.
 pub fn (s &Sessions[T]) get_session_id[X](ctx X) ?string {
 	// first check session id from `ctx`
 	sid_from_ctx := ctx.CurrentSession.session_id
 	if sid_from_ctx != '' {
 		return sid_from_ctx
 	} else if cookie := ctx.get_cookie(s.cookie_options.cookie_name) {
-		// check request headers for the session_id cookie
-		a := cookie.split('.')
-		return a[0]
+		// check request headers for the session_id cookie and verify HMAC signature
+		sid, valid := verify_session_id(cookie, s.secret)
+		if valid {
+			return sid
+		}
+		return none
 	} else {
 		// check the Set-Cookie headers on the response for a session id
 		for cookie in ctx.res.cookies() {

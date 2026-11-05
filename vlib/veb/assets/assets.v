@@ -93,7 +93,7 @@ pub fn (mut am AssetManager) add(asset_type AssetType, file_path string, include
 		return error('cannot minify asset of type "all"')
 	}
 	if !os.exists(file_path) {
-		return error('cnanot add asset: file "${file_path}" does not exist')
+		return error('cannot add asset: file "${file_path}" does not exist')
 	}
 
 	last_modified_unix := os.file_last_mod_unix(file_path)
@@ -116,10 +116,10 @@ pub fn (mut am AssetManager) add(asset_type AssetType, file_path string, include
 	}
 
 	asset := Asset{
-		kind: asset_type
-		file_path: real_path
+		kind:          asset_type
+		file_path:     real_path
 		last_modified: time.unix(last_modified_unix)
-		include_name: include_name
+		include_name:  include_name
 	}
 
 	match asset_type {
@@ -167,6 +167,7 @@ fn (mut am AssetManager) minify_and_cache(asset_type AssetType, file_path string
 		.js { minify_js(txt) }
 		else { '' }
 	}
+
 	os.write_file(output_path, minified)!
 
 	am.cached_file_names << output_file
@@ -206,7 +207,7 @@ pub fn (am AssetManager) exists(asset_type AssetType, include_name string) bool 
 }
 
 // include css/js files in your veb app from templates
-// Example:
+// Usage example:
 // ```html
 // @{app.am.include(.css, 'main.css')}
 // ```
@@ -270,8 +271,14 @@ pub fn (mut am AssetManager) combine(asset_type AssetType) !string {
 }
 
 // TODO: implement proper minification
+// minify_css trims lines while preserving selector whitespace and escaped line breaks.
 @[manualfree]
 pub fn minify_css(css string) string {
+	// A string continuation consumes its newline, while an inserted space becomes string data.
+	// Preserve these inputs, including meaningful indentation on the following line.
+	if css.contains('\\\n') || css.contains('\\\r') || css.contains('\\\f') {
+		return css.trim_space()
+	}
 	mut lines := css.split('\n')
 	// estimate arbitrary number of characters for a line of css
 	mut sb := strings.new_builder(lines.len * 20)
@@ -282,6 +289,9 @@ pub fn minify_css(css string) string {
 	for line in lines {
 		trimmed := line.trim_space()
 		if trimmed != '' {
+			if sb.len > 0 {
+				sb.write_u8(` `)
+			}
 			sb.write_string(trimmed)
 		}
 	}
@@ -290,6 +300,7 @@ pub fn minify_css(css string) string {
 }
 
 // TODO: implement proper minification
+// minify_js joins non-empty trimmed lines without trailing whitespace.
 @[manualfree]
 pub fn minify_js(js string) string {
 	mut lines := js.split('\n')
@@ -302,8 +313,10 @@ pub fn minify_js(js string) string {
 	for line in lines {
 		trimmed := line.trim_space()
 		if trimmed != '' {
+			if sb.len > 0 {
+				sb.write_u8(` `)
+			}
 			sb.write_string(trimmed)
-			sb.write_u8(` `)
 		}
 	}
 

@@ -16,10 +16,9 @@ enum State {
 	simple // default - no special interpretation of tags, *at all*!
 	// That is suitable for the general case of text template interpolation,
 	// for example for interpolating arbitrary source code (even V source) templates.
-	//
 	html // default, only when the template extension is .html
-	css // <style>
-	js // <script>
+	css  // <style>
+	js   // <script>
 	// span // span.{
 }
 
@@ -79,10 +78,13 @@ fn is_html_open_tag(name string, s string) bool {
 
 fn replace_placeholders_with_data(line string, data &map[string]DtmMultiTypeMap, state State) string {
 	mut rline := line
+	if data.len == 0 {
+		return rline
+	}
 	mut need_include_html := false
 
 	for key, value in data {
-		mut placeholder := '$${key}'
+		mut placeholder := '\$${key}'
 
 		if placeholder.ends_with(include_html_key_tag) {
 			placeholder = placeholder.all_before_last(include_html_key_tag)
@@ -104,12 +106,13 @@ fn replace_placeholders_with_data(line string, data &map[string]DtmMultiTypeMap,
 				// Checks if the placeholder allows HTML inclusion
 				if need_include_html {
 					if state == State.html {
-						// Iterates over allowed HTML tags for inclusion
+						// Escape the whole value first, then restore only the explicit allow-list.
+						// This preserves the documented opt-in HTML behavior without allowing
+						// arbitrary raw tags through `_#includehtml`.
+						val_str = filter(value)
 						for tag in allowed_tags {
-							// Escapes the HTML tag
 							escaped_tag := filter(tag)
-							// Replaces the escaped tags with actual HTML tags in the value
-							val_str = value.replace(escaped_tag, tag)
+							val_str = val_str.replace(escaped_tag, tag)
 						}
 					} else {
 						val_str = filter(value)
@@ -121,22 +124,19 @@ fn replace_placeholders_with_data(line string, data &map[string]DtmMultiTypeMap,
 				}
 			}
 		}
+
 		rline = rline.replace(placeholder, val_str)
-	}
-	// If no output is found for the placeholder being processed, then the placeholder is escaped
-	if rline.contains('$') {
-		rline = filter(rline)
 	}
 	return rline
 }
 
-fn insert_template_code(fn_name string, tmpl_str_start string, line string, data &map[string]DtmMultiTypeMap, state State) string {
+fn insert_template_code(fn_name string, tmpl_str_start string, line string, data &map[string]DtmMultiTypeMap,
+	state State) string {
 	// HTML, may include `@var`
-	// escaped by cgen, unless it's a `vweb.RawHtml` string
-	trailing_bs := dtm.tmpl_str_end + 'sb_${fn_name}.write_u8(92)\n' + tmpl_str_start
-	round1 := ['\\', '\\\\', r"'", "\\'", r'@', r'$']
-	round2 := [r'$$', r'\@', r'.$', r'.@']
-	mut rline := line.replace_each(round1).replace_each(round2)
+	// escaped by cgen, unless it's a `veb.RawHtml` string
+	trailing_bs := tmpl_str_end + 'sb_${fn_name}.write_u8(92)\n' + tmpl_str_start
+	mut rline := line.replace('\\', '\\\\').replace("'", "\\'").replace('@', '$')
+	rline = rline.replace(r'$$', r'\@').replace(r'.$', r'.@')
 	comptime_call_str := rline.find_between('\${', '}')
 	if comptime_call_str.contains("\\'") {
 		rline = rline.replace(comptime_call_str, comptime_call_str.replace("\\'", r"'"))
@@ -152,10 +152,11 @@ fn insert_template_code(fn_name string, tmpl_str_start string, line string, data
 
 // compile_file compiles the content of a file by the given path as a template
 fn compile_template_file(template_file string, fn_name string, data &map[string]DtmMultiTypeMap) string {
-	mut lines := os.read_lines(template_file) or {
+	template_content := os.read_file(template_file) or {
 		eprintln('${message_signature_error} Template generator can not reading from ${template_file} file')
 		return internat_server_error
 	}
+	mut lines := template_content.split_into_lines()
 
 	basepath := os.dir(template_file)
 
@@ -203,7 +204,7 @@ fn compile_template_file(template_file string, fn_name string, data &map[string]
 			} else {
 				s := '@include '
 				position := line.index(s) or { 0 }
-				eprintln("${message_signature_error} path for @include must be quoted with ' or \" without line breaks or extraneous characters between @include and the quotes, position : ${position}")
+				eprintln('${message_signature_error} path for @include must be quoted with \' or " without line breaks or extraneous characters between @include and the quotes, position : ${position}')
 				return internat_server_error
 			}
 			mut file_ext := os.file_ext(file_name)
@@ -270,6 +271,7 @@ fn compile_template_file(template_file string, fn_name string, data &map[string]
 			source.writeln(insert_template_code(fn_name, tmpl_str_start, line, data, state))
 			continue
 		}
+
 		// The .simple mode ends here. The rest handles .html/.css/.js state transitions.
 
 		if state != .simple {
@@ -293,20 +295,20 @@ fn compile_template_file(template_file string, fn_name string, data &map[string]
 			.html {
 				line_t := line.trim_space()
 				if line_t.starts_with('span.') && line.ends_with('{') {
-					//`span.header {` => `<span class='header'>`
+					// `span.header {` => `<span class='header'>`
 					class := line.find_between('span.', '{').trim_space()
 					source.writeln('<span class="${class}">')
 					in_span = true
 					continue
 				} else if line_t.starts_with('.') && line.ends_with('{') {
-					//`.header {` => `<div class='header'>`
+					// `.header {` => `<div class='header'>`
 					class := line.find_between('.', '{').trim_space()
 					trimmed := line.trim_space()
 					source.write_string(strings.repeat(`\t`, line.len - trimmed.len)) // add the necessary indent to keep <div><div><div> code clean
 					source.writeln('<div class="${class}">')
 					continue
 				} else if line_t.starts_with('#') && line.ends_with('{') {
-					//`#header {` => `<div id='header'>`
+					// `#header {` => `<div id='header'>`
 					class := line.find_between('#', '{').trim_space()
 					source.writeln('<div id="${class}">')
 					continue
@@ -323,13 +325,12 @@ fn compile_template_file(template_file string, fn_name string, data &map[string]
 			}
 			.js {
 				// if line.contains('//V_TEMPLATE') {
-				source.writeln(insert_template_code(fn_name, tmpl_str_start, line, data,
-					state))
-				//} else {
+				source.writeln(insert_template_code(fn_name, tmpl_str_start, line, data, state))
+				// } else {
 				// replace `$` to `\$` at first to escape JavaScript template literal syntax
 				// source.writeln(line.replace(r'$', r'\$').replace(r'$$', r'@').replace(r'.$',
 				// r'.@').replace(r"'", r"\'"))
-				//}
+				// }
 				continue
 			}
 			.css {
@@ -340,6 +341,7 @@ fn compile_template_file(template_file string, fn_name string, data &map[string]
 			}
 			else {}
 		}
+
 		// by default, just copy 1:1
 		source.writeln(insert_template_code(fn_name, tmpl_str_start, line, data, state))
 	}

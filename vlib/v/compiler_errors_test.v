@@ -1,3 +1,4 @@
+// vtest build: !self_sandboxed_packaging? && !sanitized_job?
 import os
 import term
 import v.util.diff
@@ -8,17 +9,19 @@ import benchmark
 
 const skip_files = [
 	'non_existing.vv', // minimize commit diff churn, do not remove
+	'vlib/v/checker/tests/var_duplicate_const.vv', // produces non-deterministic C error output
 ]
 
 const skip_on_cstrict = [
 	'vlib/v/checker/tests/missing_c_lib_header_1.vv',
 	'vlib/v/checker/tests/missing_c_lib_header_with_explanation_2.vv',
+	'vlib/v/checker/tests/comptime_value_d_in_include_errors.vv',
+	'vlib/v/checker/tests/missing_shader_header_1.vv',
 ]
 
 const skip_on_ubuntu_musl = [
-	'vlib/v/checker/tests/vweb_tmpl_used_var.vv',
-	'vlib/v/checker/tests/vweb_routing_checks.vv',
 	'vlib/v/checker/tests/orm_op_with_option_and_none.vv',
+	'vlib/v/checker/tests/orm_unused_var.vv',
 	'vlib/v/tests/skip_unused/gg_code.vv',
 ]
 
@@ -28,6 +31,7 @@ const skip_on_ci_musl = [
 
 const vexe = os.getenv('VEXE')
 
+@[markused]
 const turn_off_vcolors = os.setenv('VCOLORS', 'never', true)
 
 const show_cmd = os.getenv('VTEST_SHOW_CMD') != ''
@@ -38,7 +42,11 @@ const turn_on_normal_test_runner = os.setenv('VTEST_RUNNER', 'normal', true)
 
 const should_autofix = os.getenv('VAUTOFIX') != ''
 
+const is_silent = $if silent ? { true } $else { false }
+
 const github_job = os.getenv('GITHUB_JOB')
+
+const should_show_details = !is_silent && github_job == ''
 
 const v_ci_ubuntu_musl = os.getenv('V_CI_UBUNTU_MUSL').len > 0
 
@@ -86,71 +94,62 @@ fn test_all() {
 	global_dir := '${checker_dir}/globals'
 	global_run_dir := '${checker_dir}/globals_run'
 	run_dir := '${checker_dir}/run'
-	skip_unused_dir := 'vlib/v/tests/skip_unused'
-	//
-	checker_tests := get_tests_in_dir(checker_dir, false).filter(!it.contains('with_check_option'))
+	su_dir := 'vlib/v/tests/skip_unused'
+	no_closures_dir := 'vlib/v/tests/no_closures'
+	js_checker_tests := ['index_expr_implicit_int_downcast_err.vv',
+		'js_number_requires_explicit_cast.vv']
+	raw_asm_checker_tests := ['asm_raw_label_ok.vv']
+	disable_explicit_mutability_tests := ['disable_explicit_mutability.vv']
+
+	checker_tests := get_tests_in_dir(checker_dir, false).filter(!it.contains('with_check_option')
+		&& it !in js_checker_tests && it !in raw_asm_checker_tests
+		&& it !in disable_explicit_mutability_tests)
 	parser_tests := get_tests_in_dir(parser_dir, false)
 	scanner_tests := get_tests_in_dir(scanner_dir, false)
 	global_tests := get_tests_in_dir(global_dir, false)
 	global_run_tests := get_tests_in_dir(global_run_dir, false)
-	module_tests := get_tests_in_dir(module_dir, true)
+	// These fixtures exercise V3's checks of uninstantiated generic bodies.
+	v3_module_tests := ['generic_fn_own_module_private_access', 'generic_fn_private_access_err']
+	module_tests := get_tests_in_dir(module_dir, true).filter(it !in v3_module_tests)
 	run_tests := get_tests_in_dir(run_dir, false)
-	skip_unused_dir_tests := get_tests_in_dir(skip_unused_dir, false)
-	checker_with_check_option_tests := get_tests_in_dir(checker_with_check_option_dir,
-		false)
-	mut tasks := Tasks{
-		vexe: vexe
-		label: 'all tests'
-	}
-	tasks.add('', parser_dir, '', '.out', parser_tests, false)
-	tasks.add('', checker_dir, '', '.out', checker_tests, false)
-	tasks.add('', scanner_dir, '', '.out', scanner_tests, false)
-	tasks.add('', checker_dir, '-enable-globals run', '.run.out', ['globals_error.vv'],
-		false)
-	tasks.add('', global_run_dir, '-enable-globals run', '.run.out', global_run_tests,
-		false)
-	tasks.add('', global_dir, '-enable-globals', '.out', global_tests, false)
-	tasks.add('', module_dir, '-prod run', '.out', module_tests, true)
-	tasks.add('', run_dir, 'run', '.run.out', run_tests, false)
-	tasks.add('', checker_with_check_option_dir, '-check', '.out', checker_with_check_option_tests,
-		false)
-	tasks.run()
-	//
+	su_dir_tests := get_tests_in_dir(su_dir, false)
+	no_closures_tests := get_tests_in_dir(no_closures_dir, false)
+	checker_with_check_option_tests := get_tests_in_dir(checker_with_check_option_dir, false)
+
 	if os.user_os() == 'linux' {
-		mut skip_unused_tasks := Tasks{
-			vexe: vexe
+		mut su_tasks := Tasks{
+			vexe:          vexe
 			parallel_jobs: 1
-			label: '-skip-unused tests'
+			label:         '-skip-unused tests'
 		}
-		skip_unused_tasks.add('', skip_unused_dir, 'run', '.run.out', skip_unused_dir_tests,
-			false)
-		skip_unused_tasks.add('', skip_unused_dir, '-d no_backtrace -skip-unused run',
-			'.skip_unused.run.out', skip_unused_dir_tests, false)
-		skip_unused_tasks.run()
+		su_tasks.add('', su_dir, ' run ', '.run.out', su_dir_tests, false)
+		su_tasks.run()
 	}
-	//
+
 	if github_job == 'ubuntu-tcc' {
 		// This is done with tcc only, because the error output is compiler specific.
 		// Note: the tasks should be run serially, since they depend on
 		// setting and using environment variables.
 		mut cte_tasks := Tasks{
-			vexe: vexe
+			vexe:          vexe
 			parallel_jobs: 1
-			label: 'comptime env tests'
+			label:         'comptime env tests'
 		}
 		cte_dir := '${checker_dir}/comptime_env'
 		files := get_tests_in_dir(cte_dir, false)
 		cte_tasks.add('', cte_dir, '-no-retry-compilation run', '.run.out', files, false)
-		cte_tasks.add_evars('VAR=/usr/include', '', cte_dir, '-no-retry-compilation run',
-			'.var.run.out', ['using_comptime_env.vv'], false)
-		cte_tasks.add_evars('VAR=/opt/invalid/path', '', cte_dir, '-no-retry-compilation run',
-			'.var_invalid.run.out', ['using_comptime_env.vv'], false)
+		cte_tasks.add_evars('VAR=/usr/include', '', cte_dir, '-no-retry-compilation run', '.var.run.out', [
+			'using_comptime_env.vv',
+		], false)
+		cte_tasks.add_evars('VAR=/opt/invalid/path', '', cte_dir, '-no-retry-compilation run', '.var_invalid.run.out', [
+			'using_comptime_env.vv',
+		], false)
 		cte_tasks.run()
 	}
 	mut ct_tasks := Tasks{
-		vexe: vexe
+		vexe:          vexe
 		parallel_jobs: 1
-		label: 'comptime define tests'
+		label:         'comptime define tests'
 	}
 	ct_tasks.add_checked_run('-d mysymbol run', '.mysymbol.run.out', [
 		'custom_comptime_define_error.vv',
@@ -175,6 +174,30 @@ fn test_all() {
 		'custom_comptime_define_if_debug.vv',
 	])
 	ct_tasks.run()
+
+	mut tasks := Tasks{
+		vexe:  vexe
+		label: 'all tests'
+	}
+	tasks.add('', parser_dir, '', '.out', parser_tests, false)
+	tasks.add('', checker_dir, '', '.out', checker_tests, false)
+	tasks.add('', checker_dir, '-b js', '.js.out', js_checker_tests, false)
+	// Keep raw assembly on the compiler selected for this test and its skip rules.
+	tasks.add('', checker_dir, '-cc ${@CCOMPILER}', '.out', raw_asm_checker_tests, false)
+	tasks.add('', scanner_dir, '', '.out', scanner_tests, false)
+	tasks.add('', checker_dir, '-enable-globals run', '.run.out', ['globals_error.vv'], false)
+	tasks.add('', global_run_dir, '-enable-globals run', '.run.out', global_run_tests, false)
+	tasks.add('', global_dir, '-enable-globals', '.out', global_tests, false)
+	// TinyCC rejects -prod. Keep these fixtures on the selected compiler;
+	// optimizing compiler jobs still cover production mode.
+	module_options := $if tinyc { 'run' } $else { '-prod run' }
+	tasks.add('', module_dir, module_options, '.out', module_tests, true)
+	tasks.add('', module_dir, '-new-compiler ${module_options}', '.out', v3_module_tests, true)
+	tasks.add('', run_dir, 'run', '.run.out', run_tests, false)
+	tasks.add('', checker_dir, '-disable-explicit-mutability run', '.disable_explicit_mutability.run.out', disable_explicit_mutability_tests, false)
+	tasks.add('', checker_with_check_option_dir, '-check', '.out', checker_with_check_option_tests, false)
+	tasks.add('', no_closures_dir, '-no-closures run', '.out', no_closures_tests, false)
+	tasks.run()
 }
 
 fn (mut tasks Tasks) add_checked_run(voptions string, result_extension string, tests []string) {
@@ -182,23 +205,25 @@ fn (mut tasks Tasks) add_checked_run(voptions string, result_extension string, t
 	tasks.add('', checker_dir, voptions, result_extension, tests, false)
 }
 
-fn (mut tasks Tasks) add(custom_vexe string, dir string, voptions string, result_extension string, tests []string, is_module bool) {
+fn (mut tasks Tasks) add(custom_vexe string, dir string, voptions string, result_extension string, tests []string,
+	is_module bool) {
 	tasks.add_evars('', custom_vexe, dir, voptions, result_extension, tests, is_module)
 }
 
-fn (mut tasks Tasks) add_evars(evars string, custom_vexe string, dir string, voptions string, result_extension string, tests []string, is_module bool) {
+fn (mut tasks Tasks) add_evars(evars string, custom_vexe string, dir string, voptions string, result_extension string,
+	tests []string, is_module bool) {
 	max_ntries := get_max_ntries()
 	paths := vtest.filter_vtest_only(tests, basepath: dir)
 	for path in paths {
 		tasks.all << TaskDescription{
-			evars: evars
-			vexe: if custom_vexe != '' { custom_vexe } else { tasks.vexe }
-			dir: dir
-			voptions: voptions
+			evars:            evars
+			vexe:             if custom_vexe != '' { custom_vexe } else { tasks.vexe }
+			dir:              dir
+			voptions:         voptions
 			result_extension: result_extension
-			path: path
-			is_module: is_module
-			max_ntries: max_ntries
+			path:             path
+			is_module:        is_module
+			max_ntries:       max_ntries
 		}
 	}
 }
@@ -238,16 +263,22 @@ fn (mut tasks Tasks) run() {
 		m_skip_files << 'vlib/v/checker/tests/missing_c_lib_header_1.vv'
 		m_skip_files << 'vlib/v/checker/tests/missing_c_lib_header_with_explanation_2.vv'
 		m_skip_files << 'vlib/v/checker/tests/comptime_value_d_in_include_errors.vv'
+		m_skip_files << 'vlib/v/checker/tests/missing_shader_header_1.vv'
+		// tcc has no `%=` operand in inline assembly templates.
+		m_skip_files << 'vlib/v/checker/tests/asm_raw_label_ok.vv'
 	}
 	$if msvc {
 		m_skip_files << 'vlib/v/checker/tests/asm_alias_does_not_exist.vv'
 		m_skip_files << 'vlib/v/checker/tests/asm_immutable_err.vv'
+		m_skip_files << 'vlib/v/checker/tests/asm_raw_label_ok.vv'
 		// TODO: investigate why MSVC regressed
 		m_skip_files << 'vlib/v/checker/tests/missing_c_lib_header_1.vv'
 		m_skip_files << 'vlib/v/checker/tests/missing_c_lib_header_with_explanation_2.vv'
 		m_skip_files << 'vlib/v/checker/tests/comptime_value_d_in_include_errors.vv'
+		m_skip_files << 'vlib/v/checker/tests/missing_shader_header_1.vv'
 	}
 	$if windows {
+		m_skip_files << 'vlib/v/checker/tests/invalid_utf8_string.vv'
 		m_skip_files << 'vlib/v/checker/tests/modules/deprecated_module'
 	}
 	for i in 0 .. tasks.all.len {
@@ -260,7 +291,7 @@ fn (mut tasks Tasks) run() {
 	for _ in 0 .. vjobs {
 		spawn work_processor(work, results)
 	}
-	if github_job == '' {
+	if should_show_details {
 		println('')
 	}
 	mut line_can_be_erased := true
@@ -271,8 +302,10 @@ fn (mut tasks Tasks) run() {
 		bench.step()
 		if task.is_skipped {
 			bench.skip()
-			eprintln(bstep_message(mut bench, benchmark.b_skip, task.path, task.took))
-			line_can_be_erased = false
+			if should_show_details {
+				eprintln(bstep_message(mut bench, benchmark.b_skip, task.path, task.took))
+				line_can_be_erased = false
+			}
 			continue
 		}
 		if task.is_error {
@@ -296,20 +329,23 @@ fn (mut tasks Tasks) run() {
 			assert true
 			if tasks.show_cmd {
 				eprintln(bstep_message(mut bench, benchmark.b_ok, '${task.cli_cmd}', task.took))
+				line_can_be_erased = true
 			} else {
-				if github_job == '' {
+				if should_show_details {
 					// local mode:
 					if line_can_be_erased {
 						term.clear_previous_line()
 					}
 					println(bstep_message(mut bench, benchmark.b_ok, task.path, task.took))
+					line_can_be_erased = true
 				}
 			}
-			line_can_be_erased = true
 		}
 	}
 	bench.stop()
-	eprintln(term.h_divider('-'))
+	if should_show_details {
+		eprintln(term.h_divider('-'))
+	}
 	eprintln(bench.total_message(tasks.label))
 	if total_errors != 0 {
 		exit(1)
@@ -360,7 +396,13 @@ fn (mut task TaskDescription) execute() {
 		return
 	}
 	cli_cmd := task.get_cli_cmd()
-	res := os.execute(cli_cmd)
+	program := task.path
+	mut command := [task.vexe, ...(os.split_args(task.voptions) or { panic(err) }), program]
+	if task.evars != '' {
+		command.prepend(os.split_args(task.evars) or { panic(err) })
+		command.prepend('env')
+	}
+	res := os.exec(command)
 	expected_out_path := task.path.replace('.vv', '') + task.result_extension
 	task.expected_out_path = expected_out_path
 	task.cli_cmd = cli_cmd
@@ -417,8 +459,8 @@ fn diff_content(expected string, found string) {
 		println('expected bytes:\n${chunka(expected.bytes(), 25)}')
 		println('   found bytes:\n${chunka(found.bytes(), 25)}')
 		println('============')
-		println('  expected hex:\n${chunks(expected.bytes().hex(), 80)}')
-		println('     found hex:\n${chunks(found.bytes().hex(), 80)}')
+		println('  expected hex:\n${chunks(expected.hex(), 80)}')
+		println('     found hex:\n${chunks(found.hex(), 80)}')
 	}
 	println('============\n')
 }

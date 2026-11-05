@@ -1,8 +1,9 @@
-// Build this example with
-// v -live bounce.v
+// Run this example with `v watch run bounce.v`, then modify it while
+// it is running to see the changes take effect on restart.
+// (The older `v -live` workflow is described in the Hot code reloading
+// section of doc/docs.md.)
 module main
 
-import gx
 import gg
 import time
 
@@ -24,21 +25,21 @@ const width = 50
 
 fn main() {
 	mut game := &Game{
-		dx: 2
-		dy: 2
-		height: window_height
-		width: window_width
+		dx:      2
+		dy:      2
+		height:  window_height
+		width:   window_width
 		draw_fn: 0
 	}
 	game.gg = gg.new_context(
-		width: window_width
-		height: window_height
-		font_size: 20
-		user_data: game
-		window_title: 'Hot code reloading demo'
+		width:         window_width
+		height:        window_height
+		font_size:     20
+		user_data:     game
+		window_title:  'Hot code reloading demo'
 		create_window: true
-		frame_fn: frame
-		bg_color: gx.white
+		frame_fn:      frame
+		bg_color:      gg.white
 	)
 	// window.onkeydown(key_down)
 	println('Starting the game loop...')
@@ -52,11 +53,10 @@ fn main() {
 fn frame(mut game Game) {
 	game.gg.begin()
 	game.gg.draw_text_def(10, 5, 'Modify examples/hot_reload/bounce.v to get instant updates')
-	game.gg.draw_rect_filled(game.x, game.y, width, width, gx.blue)
-	game.gg.draw_rect_filled(window_width - width - game.x + 10, 200 - game.y + width,
-		width, width, gx.rgb(228, 10, 55))
-	game.gg.draw_rect_filled(game.x - 25, 250 - game.y, width, width, gx.rgb(28, 240,
-		55))
+	game.gg.draw_rect_filled(game.x, game.y, width, width, gg.black)
+	game.gg.draw_rect_filled(window_width - width - game.x + 10, 200 - game.y + width, width,
+		width, gg.rgb(228, 10, 55))
+	game.gg.draw_rect_filled(game.x - 25, 250 - game.y, width, width, gg.rgb(28, 240, 55))
 	game.gg.end()
 }
 

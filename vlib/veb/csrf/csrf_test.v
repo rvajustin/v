@@ -1,3 +1,4 @@
+// vtest build: !windows // fasthttp.Server.run is not implemented on windows yet
 import time
 import net.http
 import net.html
@@ -11,20 +12,38 @@ const exit_after_time = 12000 // milliseconds
 
 const session_id_cookie_name = 'session_id'
 const csrf_config = &csrf.CsrfConfig{
-	secret: 'my-256bit-secret'
-	allowed_hosts: ['*']
+	secret:         'my-256bit-secret'
+	allowed_hosts:  ['*']
 	session_cookie: session_id_cookie_name
 }
 
 const allowed_origin = 'example.com'
 const csrf_config_origin = csrf.CsrfConfig{
-	secret: 'my-256bit-secret'
-	allowed_hosts: [allowed_origin]
+	secret:         'my-256bit-secret'
+	allowed_hosts:  [allowed_origin]
 	session_cookie: session_id_cookie_name
 }
 
 // 			Test CSRF functions
 // =====================================
+
+type RawHtml = string
+
+fn untrusted_html() RawHtml {
+	return '<script>alert(1)</script>'
+}
+
+fn test_token_input_rendering() {
+	ctx := csrf.CsrfContext{
+		config:     csrf.CsrfConfig{ token_name: 'csrf_token' }
+		csrf_token: 'test-token'
+	}
+	expected := '<input type="hidden" name="csrf_token" value="test-token">'
+	assert '${ctx.csrf_token_input()}' == expected
+	assert veb.filter_html(ctx.csrf_token_input()) == expected
+	assert veb.filter_html(veb.raw(expected)) == expected
+	assert veb.filter_html(untrusted_html()) == '&lt;script&gt;alert(1)&lt;/script&gt;'
+}
 
 fn test_set_token() {
 	mut ctx := veb.Context{}
@@ -49,7 +68,7 @@ fn test_protect() {
 		form: {
 			csrf_config.token_name: token
 		}
-		req: http.Request{
+		req:  http.Request{
 			method: .post
 		}
 	}
@@ -62,10 +81,10 @@ fn test_protect() {
 fn test_timeout() {
 	timeout := 1
 	short_time_config := &csrf.CsrfConfig{
-		secret: 'my-256bit-secret'
-		allowed_hosts: ['*']
+		secret:         'my-256bit-secret'
+		allowed_hosts:  ['*']
 		session_cookie: session_id_cookie_name
-		max_age: timeout
+		max_age:        timeout
 	}
 
 	mut ctx := veb.Context{}
@@ -82,7 +101,7 @@ fn test_timeout() {
 		form: {
 			short_time_config.token_name: token
 		}
-		req: http.Request{
+		req:  http.Request{
 			method: .post
 		}
 	}
@@ -107,7 +126,7 @@ fn test_valid_origin() {
 		form: {
 			csrf_config.token_name: token
 		}
-		req: req
+		req:  req
 	}
 
 	mut valid := csrf.protect(mut ctx, csrf_config_origin)
@@ -127,7 +146,7 @@ fn test_invalid_origin() {
 		form: {
 			csrf_config.token_name: token
 		}
-		req: req
+		req:  req
 	}
 
 	mut valid := csrf.protect(mut ctx, csrf_config_origin)
@@ -142,7 +161,7 @@ fn test_invalid_origin() {
 		form: {
 			csrf_config.token_name: token
 		}
-		req: req
+		req:  req
 	}
 
 	valid = csrf.protect(mut ctx, csrf_config_origin)
@@ -156,7 +175,7 @@ fn test_invalid_origin() {
 		form: {
 			csrf_config.token_name: token
 		}
-		req: req
+		req:  req
 	}
 
 	valid = csrf.protect(mut ctx, csrf_config_origin)
@@ -182,6 +201,7 @@ pub fn (mut app App) before_accept_loop() {
 }
 
 fn (app &App) index(mut ctx Context) veb.Result {
+	ctx.config = *csrf_config
 	ctx.set_csrf_token(mut ctx)
 
 	return ctx.html('<form action="/auth" method="post">
@@ -189,6 +209,12 @@ fn (app &App) index(mut ctx Context) veb.Result {
     <label for="password">Your password:</label>
     <input type="text"  id="password" name="password" placeholder="Your password" />
 </form>')
+}
+
+fn (app &App) template(mut ctx Context) veb.Result {
+	ctx.config = *csrf_config
+	ctx.set_csrf_token(mut ctx)
+	return $veb.html('templates/csrf.html')
 }
 
 @[post]
@@ -210,7 +236,7 @@ fn (app &App) exit_gracefully() {
 	exit(0)
 }
 
-fn exit_after_timeout[T](mut app T, timeout_in_ms int) {
+fn exit_after_timeout(mut app App, timeout_in_ms int) {
 	time.sleep(timeout_in_ms * time.millisecond)
 	eprintln('>> webserver: pid: ${os.getpid()}, exiting ...')
 	app.exit_gracefully()
@@ -231,6 +257,18 @@ fn test_run_app_in_background() {
 	_ := <-app.started
 }
 
+fn test_token_input_template() {
+	res := http.get('http://${localserver}/template') or { panic(err) }
+	assert res.status() == .ok
+	assert res.body.starts_with('<form>\n<input type="hidden"'), res.body
+	assert res.body.ends_with('>\n</form>\n'), res.body
+	mut doc := html.parse(res.body)
+	inputs := doc.get_tags_by_attribute_value('type', 'hidden')
+	assert inputs.len == 1
+	assert inputs[0].attributes['name'] == csrf_config.token_name
+	assert inputs[0].attributes['value'].len > 0
+}
+
 fn test_token_input() {
 	res := http.get('http://${localserver}/') or { panic(err) }
 
@@ -240,11 +278,41 @@ fn test_token_input() {
 	assert csrf_config.token_name == inputs[0].attributes['name']
 }
 
+fn test_token_roundtrip_from_index_form() {
+	res := http.get('http://${localserver}/') or { panic(err) }
+	assert res.status() == .ok
+
+	cookies := res.cookies()
+	assert cookies.len == 1
+
+	mut doc := html.parse(res.body)
+	inputs := doc.get_tags_by_attribute_value('type', 'hidden')
+	assert inputs.len == 1
+
+	token := inputs[0].attributes['value']
+	assert token.len != 0
+
+	mut req := http.Request{
+		method: .post
+		url:    'http://${localserver}/auth'
+		data:   http.url_encode_form_data({
+			csrf_config.token_name: token
+		})
+	}
+	for cookie in cookies {
+		req.add_cookie(cookie)
+	}
+
+	post_res := req.do() or { panic(err) }
+	assert post_res.status() == .ok
+	assert post_res.body == 'authenticated'
+}
+
 // utility function to check whether the route at `path` is protected against csrf
 fn protect_route_util(path string) {
 	mut req := http.Request{
 		method: .post
-		url: 'http://${localserver}/${path}'
+		url:    'http://${localserver}/${path}'
 	}
 	mut res := req.do() or { panic(err) }
 	assert res.status() == .forbidden
@@ -272,8 +340,8 @@ fn protect_route_util(path string) {
 
 	req = http.Request{
 		method: .post
-		url: 'http://${localserver}/${path}'
-		data: formdata
+		url:    'http://${localserver}/${path}'
+		data:   formdata
 		header: header
 	}
 	req.add_cookie(name: csrf_config.cookie_name, value: cookie)
@@ -282,11 +350,10 @@ fn protect_route_util(path string) {
 	res = req.do() or { panic(err) }
 	assert res.status() == .forbidden
 
-	//
 	req = http.Request{
 		method: .post
-		url: 'http://${localserver}/${path}'
-		data: formdata
+		url:    'http://${localserver}/${path}'
+		data:   formdata
 		header: header
 	}
 	req.add_cookie(name: csrf_config.cookie_name, value: cookie)

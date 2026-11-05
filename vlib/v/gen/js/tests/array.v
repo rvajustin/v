@@ -20,6 +20,17 @@ fn vararg_test() {
 fn main() {
 	vararg_test()
 
+	// index initializations
+	list1 := []string{len: 3, init: 'Item ${index}'}
+	list2 := []string{len: 3, init: 'Item ${index}'}
+	list3 := []int{len: 3, init: index}
+	list4 := []string{len: 4, init: '${index}:${index * 2}'}
+	println(list1)
+	println(list2)
+	println(list1 == list2)
+	println(list3)
+	println(list4)
+
 	arr1 := ['Hello', 'JS', 'Backend']
 	mut arr2 := [1, 2, 3, 4, 5]
 
@@ -53,6 +64,7 @@ fn main() {
 	idx2 := slice4[0]
 	print('66\t=> ')
 	println(idx2)
+
 	// TODO:
 	// slice4[3] = `c`
 
@@ -75,7 +87,8 @@ fn main() {
 	println('badkey' !in m)
 
 	// for in
-	for _ in arr1 {}
+	for _ in arr1 {
+	}
 	println('0 to 8\t=>')
 	for i, _ in arr2 {
 		println(i)

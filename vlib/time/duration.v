@@ -3,6 +3,7 @@ module time
 // A lot of these are taken from the Go library.
 pub type Duration = i64
 
+@[markused]
 pub const nanosecond = Duration(1)
 pub const microsecond = Duration(1000 * nanosecond)
 pub const millisecond = Duration(1000 * microsecond)
@@ -10,6 +11,7 @@ pub const second = Duration(1000 * millisecond)
 pub const minute = Duration(60 * second)
 pub const hour = Duration(60 * minute)
 //	day         = Duration(24 * hour)
+// infinite is the maximum i64 duration, used by APIs that support waiting forever.
 pub const infinite = Duration(i64(9223372036854775807))
 
 // nanoseconds returns the duration as an integer number of nanoseconds.
@@ -19,37 +21,54 @@ pub fn (d Duration) nanoseconds() i64 {
 
 // microseconds returns the duration as an integer number of microseconds.
 pub fn (d Duration) microseconds() i64 {
-	return i64(d) / time.microsecond
+	return i64(d) / microsecond
 }
 
 // milliseconds returns the duration as an integer number of milliseconds.
 pub fn (d Duration) milliseconds() i64 {
-	return i64(d) / time.millisecond
+	return i64(d) / millisecond
 }
 
 // The following functions return floating point numbers because it's common to
 // consider all of them in sub-one intervals
 // seconds returns the duration as a floating point number of seconds.
 pub fn (d Duration) seconds() f64 {
-	return f64(d) / f64(time.second)
+	return f64(d) / f64(second)
 }
 
 // minutes returns the duration as a floating point number of minutes.
 pub fn (d Duration) minutes() f64 {
-	return f64(d) / f64(time.minute)
+	return f64(d) / f64(minute)
 }
 
 // hours returns the duration as a floating point number of hours.
 pub fn (d Duration) hours() f64 {
-	return f64(d) / f64(time.hour)
+	return f64(d) / f64(hour)
 }
 
 // days returns the duration as a floating point number of days.
 pub fn (d Duration) days() f64 {
-	return f64(d) / f64(time.hour * 24)
+	return f64(d) / f64(hour * 24)
 }
 
-// str pretty prints the duration
+fn duration_pad2(n u64) string {
+	if n < 10 {
+		return '0' + n.str()
+	}
+	return n.str()
+}
+
+fn duration_pad3(n u64) string {
+	if n < 10 {
+		return '00' + n.str()
+	}
+	if n < 100 {
+		return '0' + n.str()
+	}
+	return n.str()
+}
+
+// str pretty prints the duration over the full i64 range, including infinite.
 //
 // ```
 // h:m:s      // 5:02:33
@@ -60,38 +79,44 @@ pub fn (d Duration) days() f64 {
 // ns<ns>     // 234ns
 // ```
 pub fn (d Duration) str() string {
-	if d == time.infinite {
-		return 'inf'
-	}
 	mut sign := ''
-	mut t := i64(d)
-	if t < 0 {
+	mut t := u64(d)
+	if d < 0 {
 		sign = '-'
-		t = -t
+		// The minimum i64 magnitude fits in u64, but cannot be negated as i64.
+		t = u64(-(i64(d) + 1)) + 1
 	}
-	hr := t / time.hour
-	t -= hr * time.hour
-	min := t / time.minute
-	t -= min * time.minute
-	sec := t / time.second
-	t -= sec * time.second
-	ms := t / time.millisecond
-	t -= ms * time.millisecond
-	us := t / time.microsecond
-	t -= us * time.microsecond
+	hr := t / u64(hour)
+	t -= hr * u64(hour)
+	min := t / u64(minute)
+	t -= min * u64(minute)
+	sec := t / u64(second)
+	t -= sec * u64(second)
+	ms := t / u64(millisecond)
+	t -= ms * u64(millisecond)
+	us := t / u64(microsecond)
+	t -= us * u64(microsecond)
 	ns := t
 
-	return match true {
-		hr > 0 { '${sign}${hr}:${min:02}:${sec:02}' }
-		min > 0 { '${sign}${min}:${sec:02}.${ms:03}' }
-		sec > 0 { '${sign}${sec}.${ms:03}s' }
-		ms > 0 { '${sign}${ms}.${us:03}ms' }
-		us > 0 { '${sign}${us}.${ns:03}us' }
-		else { '${sign}${ns}ns' }
+	if hr > 0 {
+		return sign + hr.str() + ':' + duration_pad2(min) + ':' + duration_pad2(sec)
 	}
+	if min > 0 {
+		return sign + min.str() + ':' + duration_pad2(sec) + '.' + duration_pad3(ms)
+	}
+	if sec > 0 {
+		return sign + sec.str() + '.' + duration_pad3(ms) + 's'
+	}
+	if ms > 0 {
+		return sign + ms.str() + '.' + duration_pad3(us) + 'ms'
+	}
+	if us > 0 {
+		return sign + us.str() + '.' + duration_pad3(ns) + 'us'
+	}
+	return sign + ns.str() + 'ns'
 }
 
-// debug returns a detailed breakdown of the Duration, as: 'Duration: - 50days, 4h, 3m, 7s, 541ms, 78us, 9ns'
+// debug returns a detailed breakdown of the Duration, as: 'Duration: - 50days, 4h, 3m, 7s, 541ms, 78us, 9ns'.
 pub fn (d Duration) debug() string {
 	mut res := []string{}
 	mut x := i64(d)
@@ -101,12 +126,12 @@ pub fn (d Duration) debug() string {
 		x = -x
 	}
 	for label, v in {
-		'days': 24 * time.hour
-		'h':    time.hour
-		'm':    time.minute
-		's':    time.second
-		'ms':   time.millisecond
-		'us':   time.microsecond
+		'days': 24 * hour
+		'h':    hour
+		'm':    minute
+		's':    second
+		'ms':   millisecond
+		'us':   microsecond
 	} {
 		if x > v {
 			xx := x / v
@@ -115,7 +140,13 @@ pub fn (d Duration) debug() string {
 		}
 	}
 	if x > 0 {
-		res << '${x}ns'
+		res << x.str() + 'ns'
 	}
-	return 'Duration: ${sign}${res.join(', ')}'
+	return 'Duration: ' + sign + res.join(', ')
+}
+
+// times allows you to return fractional unit durations, based on an existing duration.
+// For example, you can: `half_an_hour := time.hour.times(0.5)` .
+pub fn (d Duration) times(x f64) Duration {
+	return Duration(f64(d) * x)
 }

@@ -18,20 +18,20 @@ const gen_point = generator() or { panic(err) }
 
 fn d_const_generate() !Element {
 	mut v := Element{}
-	v.set_bytes(edwards25519.d_bytes)!
+	v.set_bytes(d_bytes)!
 	return v
 }
 
 fn d2_const_generate() !Element {
 	mut v := Element{}
-	v.add(edwards25519.d_const, edwards25519.d_const)
+	v.add(d_const, d_const)
 	return v
 }
 
 // id_point_generate is the point at infinity.
 fn id_point_generate() !Point {
 	mut p := Point{}
-	p.set_bytes(edwards25519.id_bytes)!
+	p.set_bytes(id_bytes)!
 	return p
 }
 
@@ -39,7 +39,7 @@ fn id_point_generate() !Point {
 // correspondence of this encoding with the values in RFC 8032.
 fn generator() !Point {
 	mut p := Point{}
-	p.set_bytes(edwards25519.gen_bytes)!
+	p.set_bytes(gen_bytes)!
 	return p
 }
 
@@ -139,7 +139,7 @@ pub fn (mut v Point) set_bytes(x []u8) !Point {
 
 	// v = dy² + 1
 	mut el3 := Element{}
-	mut vv := el3.multiply(y2, edwards25519.d_const)
+	mut vv := el3.multiply(y2, d_const)
 	vv = vv.add(vv, fe_one)
 
 	// x = +√(u/v)
@@ -171,13 +171,13 @@ pub fn (mut v Point) set(u Point) Point {
 // new_identity_point returns a new Point set to the identity.
 pub fn new_identity_point() Point {
 	mut p := Point{}
-	return p.set(edwards25519.id_point)
+	return p.set(id_point)
 }
 
 // new_generator_point returns a new Point set to the canonical generator.
 pub fn new_generator_point() Point {
 	mut p := Point{}
-	return p.set(edwards25519.gen_point)
+	return p.set(gen_point)
 }
 
 fn (mut v ProjectiveCached) zero() ProjectiveCached {
@@ -225,19 +225,8 @@ fn (mut v Point) bytes_generic(mut buf [32]u8) []u8 {
 }
 
 fn copy_field_element(mut buf [32]u8, mut v Element) []u8 {
-	// this fail in test
-	/*
-	copy(mut buf[..], v.bytes())
+	copy(mut buf, v.bytes())
 	return buf[..]
-	*/
-
-	// this pass the test
-	mut out := []u8{len: 32}
-	for i := 0; i <= buf.len - 1; i++ {
-		out[i] = v.bytes()[i]
-	}
-
-	return out
 }
 
 // Conversions.
@@ -276,14 +265,14 @@ fn (mut v ProjectiveCached) from_p3(p Point) ProjectiveCached {
 	v.ypx.add(p.y, p.x)
 	v.ymx.subtract(p.y, p.x)
 	v.z.set(p.z)
-	v.t2d.multiply(p.t, edwards25519.d2_const)
+	v.t2d.multiply(p.t, d2_const)
 	return v
 }
 
 fn (mut v AffineCached) from_p3(p Point) AffineCached {
 	v.ypx.add(p.y, p.x)
 	v.ymx.subtract(p.y, p.x)
-	v.t2d.multiply(p.t, edwards25519.d2_const)
+	v.t2d.multiply(p.t, d2_const)
 
 	mut invz := Element{}
 	invz.invert(p.z)
@@ -353,8 +342,8 @@ fn (mut v ProjectiveP1) sub(p Point, q ProjectiveCached) ProjectiveP1 {
 	ypx.add(p.y, p.x)
 	ymx.subtract(p.y, p.x)
 
-	pp.multiply(&ypx, q.ymx) // flipped sign
-	mm.multiply(&ymx, q.ypx) // flipped sign
+	pp.multiply(ypx, q.ymx) // flipped sign
+	mm.multiply(ymx, q.ypx) // flipped sign
 	tt2d.multiply(p.t, q.t2d)
 	zz2.multiply(p.z, q.z)
 
@@ -378,8 +367,8 @@ fn (mut v ProjectiveP1) add_affine(p Point, q AffineCached) ProjectiveP1 {
 	ypx.add(p.y, p.x)
 	ymx.subtract(p.y, p.x)
 
-	pp.multiply(&ypx, q.ypx)
-	mm.multiply(&ymx, q.ymx)
+	pp.multiply(ypx, q.ypx)
+	mm.multiply(ymx, q.ymx)
 	tt2d.multiply(p.t, q.t2d)
 
 	z2.add(p.z, p.z)
@@ -521,7 +510,7 @@ fn check_on_curve(points ...Point) bool {
 		mut rhs := Element{}
 		lhs.subtract(yy, xx)
 		lhs.multiply(lhs, zz)
-		rhs.multiply(edwards25519.d_const, xx)
+		rhs.multiply(d_const, xx)
 		rhs.multiply(rhs, yy)
 		rhs.add(rhs, zzzz)
 
@@ -530,7 +519,7 @@ fn check_on_curve(points ...Point) bool {
 		}
 		/*
 		if lhs.equal(rhs) != 1 {
-			lg.error('X, Y, and Z do not specify a point on the curve\nX = $p.x \nY = $p.y\nZ = $p.z')
+			lg.error('X, Y, and Z do not specify a point on the curve\nX = ${p.x} \nY = ${p.y}\nZ = ${p.z}')
 		}*/
 
 		// xy = T/Z
@@ -538,7 +527,7 @@ fn check_on_curve(points ...Point) bool {
 		rhs.multiply(p.z, p.t)
 		/*
 		if lhs.equal(rhs) != 1 {
-			lg.error('point $i is not valid\nX = $p.x\nY = $p.y\nZ = $p.z')
+			lg.error('point ${i} is not valid\nX = ${p.x}\nY = ${p.y}\nZ = ${p.z}')
 		}*/
 		if lhs.equal(rhs) != 1 {
 			return false

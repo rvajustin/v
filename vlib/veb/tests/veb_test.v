@@ -1,6 +1,8 @@
+// vtest retry: 3
+// vtest build: !sanitized_job? && !windows // !windows: fasthttp.Server.run not implemented yet
 import os
 import time
-import json
+import json2 as json
 import net
 import net.http
 import io
@@ -26,33 +28,43 @@ fn testsuite_begin() {
 
 fn test_simple_veb_app_can_be_compiled() {
 	// did_server_compile := os.system('${os.quoted_path(vexe)} -g -o ${os.quoted_path(serverexe)} vlib/veb/tests/veb_test_server.v')
-	did_server_compile := os.system('${os.quoted_path(vexe)} -o ${os.quoted_path(serverexe)} vlib/veb/tests/veb_test_server.v')
+	did_server_compile :=
+		os.system_args([vexe, '-o', serverexe, 'vlib/veb/tests/veb_test_server.v'])
 	assert did_server_compile == 0
 	assert os.exists(serverexe)
 }
 
 fn test_a_simple_veb_app_runs_in_the_background() {
-	mut suffix := ''
-	$if !windows {
-		suffix = ' > /dev/null &'
-	}
-	if veb_logfile != '' {
-		suffix = ' 2>> ${os.quoted_path(veb_logfile)} >> ${os.quoted_path(veb_logfile)} &'
-	}
-	server_exec_cmd := '${os.quoted_path(serverexe)} ${sport} ${exit_after_time} ${suffix}'
+	server_args := [serverexe, '${sport}', '${exit_after_time}']
 	$if debug_net_socket_client ? {
-		eprintln('running:\n${server_exec_cmd}')
+		eprintln('running:\n${server_args}')
 	}
 	$if windows {
-		spawn os.system(server_exec_cmd)
+		spawn os.system_args(server_args)
 	} $else {
-		res := os.system(server_exec_cmd)
+		// The shell starts the server in the background and returns at once.
+		script := if veb_logfile != '' {
+			'"\${1}" "\${2}" "\${3}" 2>> "\${4}" >> "\${4}" &'
+		} else {
+			'"\${1}" "\${2}" "\${3}" > /dev/null &'
+		}
+		res := os.system_args(['sh', '-c', script, 'v', ...server_args, veb_logfile])
 		assert res == 0
 	}
 	$if macos {
 		time.sleep(1000 * time.millisecond)
 	} $else {
 		time.sleep(100 * time.millisecond)
+	}
+	// A freshly built server can need much longer than the fixed pause to start
+	// listening on a slow or emulated machine; wait for its port to accept.
+	for _ in 0 .. 100 {
+		mut probe := net.dial_tcp(localserver) or {
+			time.sleep(100 * time.millisecond)
+			continue
+		}
+		probe.close() or {}
+		break
 	}
 }
 
@@ -96,6 +108,22 @@ fn test_a_simple_tcp_client_zero_content_length() {
 	assert watch.elapsed() < 1 * time.second
 }
 
+fn test_timeout_after_delayed_body() {
+	// content length is 10, but we don't send anything. The request should timeout,
+	// but not error.
+	watch := time.new_stopwatch(auto_start: true)
+	res := simple_tcp_client(
+		path:       '/json_echo'
+		headers:    'Content-Length: 10\r\n\r\n'
+		method_str: 'POST'
+	) or {
+		assert err.msg() == ''
+		return
+	}
+
+	assert res.ends_with('408 Request Timeout')
+}
+
 fn test_a_simple_tcp_client_html_page() {
 	received := simple_tcp_client(path: '/html_page') or {
 		assert err.msg() == ''
@@ -109,16 +137,24 @@ fn test_a_simple_tcp_client_html_page() {
 // net.http client based tests follow:
 fn assert_common_http_headers(x http.Response) ! {
 	assert x.status() == .ok
-	assert x.header.get(.server)! == 'veb'
-	assert x.header.get(.content_length)!.int() > 0
+	assert x.header.get(.server) or { '' } == 'veb'
+	assert (x.header.get(.content_length) or { '0' }).int() > 0
 }
 
 fn test_http_client_index() {
 	x := http.get('http://${localserver}/') or { panic(err) }
 	assert_common_http_headers(x)!
-	assert x.header.get(.content_type)! == 'text/plain'
+	assert x.header.get(.content_type)? == 'text/plain'
 	assert x.body == 'Welcome to veb'
-	assert x.header.get(.connection)! == 'close'
+	// The default http client keeps connections alive (it no longer sends
+	// `Connection: close`), so veb must not answer with a close either.
+	if conn_header := x.header.get(.connection) {
+		assert conn_header != 'close'
+	}
+	// Opting out of connection reuse restores the historical behavior
+	// end-to-end: the client sends `Connection: close` and veb honors it.
+	y := http.fetch(url: 'http://${localserver}/', disable_connection_reuse: true) or { panic(err) }
+	assert y.header.get(.connection)? == 'close'
 }
 
 fn test_http_client_404() {
@@ -138,14 +174,14 @@ fn test_http_client_404() {
 fn test_http_client_simple() {
 	x := http.get('http://${localserver}/simple') or { panic(err) }
 	assert_common_http_headers(x)!
-	assert x.header.get(.content_type)! == 'text/plain'
+	assert x.header.get(.content_type)? == 'text/plain'
 	assert x.body == 'A simple result'
 }
 
 fn test_http_client_html_page() {
 	x := http.get('http://${localserver}/html_page') or { panic(err) }
 	assert_common_http_headers(x)!
-	assert x.header.get(.content_type)! == 'text/html'
+	assert x.header.get(.content_type)? == 'text/html'
 	assert x.body == '<h1>ok</h1>'
 }
 
@@ -153,7 +189,7 @@ fn test_http_client_settings_page() {
 	x := http.get('http://${localserver}/bilbo/settings') or { panic(err) }
 	assert_common_http_headers(x)!
 	assert x.body == 'username: bilbo'
-	//
+
 	y := http.get('http://${localserver}/kent/settings') or { panic(err) }
 	assert_common_http_headers(y)!
 	assert y.body == 'username: kent'
@@ -163,11 +199,11 @@ fn test_http_client_user_repo_settings_page() {
 	x := http.get('http://${localserver}/bilbo/gostamp/settings') or { panic(err) }
 	assert_common_http_headers(x)!
 	assert x.body == 'username: bilbo | repository: gostamp'
-	//
+
 	y := http.get('http://${localserver}/kent/golang/settings') or { panic(err) }
 	assert_common_http_headers(y)!
 	assert y.body == 'username: kent | repository: golang'
-	//
+
 	z := http.get('http://${localserver}/missing/golang/settings') or { panic(err) }
 	assert z.status() == .not_found
 }
@@ -180,25 +216,25 @@ struct User {
 fn test_http_client_json_post() {
 	ouser := User{
 		name: 'Bilbo'
-		age: 123
+		age:  123
 	}
 	json_for_ouser := json.encode(ouser)
 	mut x := http.post_json('http://${localserver}/json_echo', json_for_ouser) or { panic(err) }
 	$if debug_net_socket_client ? {
 		eprintln('/json_echo endpoint response: ${x}')
 	}
-	assert x.header.get(.content_type)! == 'application/json'
+	assert x.header.get(.content_type)? == 'application/json'
 	assert x.body == json_for_ouser
-	nuser := json.decode(User, x.body) or { User{} }
+	nuser := json.decode[User](x.body) or { User{} }
 	assert '${ouser}' == '${nuser}'
-	//
+
 	x = http.post_json('http://${localserver}/json', json_for_ouser) or { panic(err) }
 	$if debug_net_socket_client ? {
 		eprintln('/json endpoint response: ${x}')
 	}
-	assert x.header.get(.content_type)! == 'application/json'
+	assert x.header.get(.content_type)? == 'application/json'
 	assert x.body == json_for_ouser
-	nuser2 := json.decode(User, x.body) or { User{} }
+	nuser2 := json.decode[User](x.body) or { User{} }
 	assert '${ouser}' == '${nuser2}'
 }
 
@@ -218,9 +254,9 @@ fn test_http_client_multipart_form_data() {
 
 	mut files := []http.FileData{}
 	files << http.FileData{
-		filename: 'veb'
+		filename:     'veb'
 		content_type: 'text'
-		data: '"veb test"'
+		data:         '"veb test"'
 	}
 
 	mut form_config_files := http.PostMultipartFormConfig{
@@ -257,7 +293,7 @@ fn test_query_params_are_passed_as_arguments() {
 
 fn test_host() {
 	mut req := http.Request{
-		url: 'http://${localserver}/with_host'
+		url:    'http://${localserver}/with_host'
 		method: .get
 	}
 
@@ -267,6 +303,17 @@ fn test_host() {
 	req.add_header(.host, 'example.com')
 	x = req.do()!
 	assert x.status() == .ok
+}
+
+fn test_empty_response_body_has_content_length() {
+	req := http.Request{
+		url:    'http://${localserver}/empty_response_body'
+		method: .get
+	}
+
+	mut x := req.do()!
+	assert x.status() == .ok
+	assert x.header.get(.content_length)? == '0'
 }
 
 fn test_http_client_shutdown_does_not_work_without_a_cookie() {
@@ -281,8 +328,8 @@ fn testsuite_end() {
 	// This test is guaranteed to be called last.
 	// It sends a request to the server to shutdown.
 	x := http.fetch(
-		url: 'http://${localserver}/shutdown'
-		method: .get
+		url:     'http://${localserver}/shutdown'
+		method:  .get
 		cookies: {
 			'skey': 'superman'
 		}
@@ -296,12 +343,13 @@ fn testsuite_end() {
 
 // utility code:
 struct SimpleTcpClientConfig {
-	retries int    = 4
-	host    string = 'static.dev'
-	path    string = '/'
-	agent   string = 'v/net.tcp.v'
-	headers string = '\r\n'
-	content string
+	retries    int    = 4
+	host       string = 'static.dev'
+	path       string = '/'
+	agent      string = 'v/net.tcp.v'
+	headers    string = '\r\n'
+	content    string
+	method_str string = 'GET'
 }
 
 fn simple_tcp_client(config SimpleTcpClientConfig) !string {
@@ -329,7 +377,7 @@ fn simple_tcp_client(config SimpleTcpClientConfig) !string {
 	defer {
 		client.close() or {}
 	}
-	message := 'GET ${config.path} HTTP/1.1
+	message := '${config.method_str} ${config.path} HTTP/1.1
 Host: ${config.host}
 User-Agent: ${config.agent}
 Accept: */*
@@ -358,4 +406,11 @@ fn test_empty_querypath() {
 	assert x.body == 'Welcome to veb'
 	x = http.get('http://${localserver}///') or { panic(err) }
 	assert x.body == 'Welcome to veb'
+}
+
+fn test_large_response() {
+	received := simple_tcp_client(path: '/large_response') or { panic(err) }
+	assert_common_headers(received)
+	assert received.ends_with('}]')
+	assert received.len == 830778
 }

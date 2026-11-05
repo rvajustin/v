@@ -23,6 +23,10 @@ It works, by running these in succession:
 * `v check-md -hide-warnings .`
 * `v install nedpals.args`
 
+The self-build checks include serial transformation and C generation with `-no-parallel`.
+Transformation always runs in the current compiler; the historical `-new-transformer` switch
+is no longer needed.
+
 # Details:
 
 In the `v` repo there are many tests. The main types are:
@@ -39,6 +43,11 @@ and will exit with a 0 exit code, if they all had 0 failing assertions.
 `v -stats file_test.v` - this will run the test_ functions, and show a
 report about how much time it took to run each of them too.
 
+Implicit test executables and their macOS debug symbols are removed after the test process exits,
+including failed assertions, panics, and nonzero exits. This also applies with `-stats`, `-keepc`,
+and `v run file_test.v`; `-keepc` still retains generated C. An explicit `-o` keeps the requested
+output for later execution or debugging.
+
 NB 2: You can also run many test files at once (in parallel, depending on
 how many cores you have), with:
 `v test folder` - this will run *all* `_test.v` files in `folder`,
@@ -46,6 +55,34 @@ recursively.
 
 `v -stats test folder` - same, but will also produce timing reports
 about how fast each test_ function in each _test.v file ran.
+
+The `v test` runner is built for the host using the C backend. Backend and target options such
+as `-b arm64` apply to the test programs it compiles. Architecture-suffixed test discovery
+uses the requested `-arch`, including when it differs from the runner's host architecture.
+
+By default, `v test` uses at most four parallel workers and budgets one worker per 8 GiB
+of memory. On Linux it uses the lower of physical memory and the active cgroup memory limit.
+Set `VJOBS` to a positive value to explicitly choose a different worker count when your test
+workload and machine capacity are known.
+
+`cmd/tools/test_if_v_test_system_works.v` checks direct and nested test invocations,
+including expected failures. It streams child output to stderr while retaining that output
+for its assertions, so a watchdog failure leaves the nested command's progress in the log.
+Set `VTOOLS_CACHE_VERBOSE=1`, `VTEST_SHOW_CMD=1`, and `VTEST_SHOW_START=1` to include
+tool-cache decisions and test compilation/execution commands in that progress.
+
+Skipped test paths are resolved before comparison, so selecting a file through a symlink
+does not bypass its platform or architecture exclusion.
+
+On Linux, `-race` test builds use `_setjmp` and `_longjmp` to continue after failed assertions,
+avoiding ThreadSanitizer's incompatible `longjmp` interceptor on glibc 2.44. Later tests and
+race detection still run. A later race report can retain frames from the failed test because
+the sanitizer does not observe that jump.
+
+Tests ending in `_windows_test.v` or `_windows_test.c.v` run only on Windows.
+The compound `_android_outside_termux_test.v` and `_android_outside_termux_test.c.v`
+suffixes select Android outside Termux; `_termux_test.v` and `_termux_test.c.v`
+select Termux.
 
 ## `v test vlib/v/tests`:
 
@@ -68,17 +105,41 @@ The test runner will run each `.vv` file, and will check that its output, matche
 the contents of the `.out` file with the same base name. This is particularly useful
 for checking that errors and panics are printed.
 
-## `v vlib/v/gen/c/coutput_test.v`
+## `v test vlib/v/gen/c/`
 
-coutput_test.v is a *test runner*, that checks whether the generated C source
-code matches *all* expectations, specified in *.c.must_have files, in the
-folder vlib/v/gen/c/testdata/ .
+The C backend has focused unit and integration tests beside its implementation.
+Many tests compile a small V source to C and assert on the generated declarations,
+expressions, ABI, linker inputs, or runtime behavior.
 
-Each `.c.must_have` file, *has* to have a corresponding `.vv` file.
+## `v test cmd/v/`
 
-Each `.c.must_have` file, consists of multiple lines. Each of these
-lines, *should* be present *at least once* in the output, when the .vv
-file is compiled with `-o -` .
+The compiler process regressions workflow runs every launcher test in `cmd/v/` on Linux,
+macOS, and Windows with the default compiler. This covers argument routing, fallback
+messages, executable discovery, and tool-cache behavior, including platform-specific code.
+
+## Line coverage
+
+Collect coverage with `v -coverage coverage_dir path/to/file_test.v`, then inspect it with
+`v cover coverage_dir`. Add `-no-skip-unused` when compiling to include uncalled functions
+in the report as well as executed code.
+
+On Windows, test statistics and coverage use a 64-bit monotonic clock resolved at runtime,
+so they also work with bundled TCC versions whose import libraries omit `GetTickCount64`.
+
+## REPL tests
+
+The test runner for these is `vlib/v/slow_tests/repl/repl_test.v`.
+
+The test cases for the V REPL, are stored in .repl files, in the folder
+`vlib/v/slow_tests/repl/`. Each .repl file in this folder, contains several
+lines of input to the V repl, followed by a single line of `===output===`,
+and then the output lines, that the repl would normally show for the input
+lines.
+
+If you change the compiler or the REPL source, and you have breaks in those
+.repl files, you can replace the current output in them, by running several
+times `VAUTOFIX=1 ./vlib/v/slow_tests/repl/repl_test.v`, until all the
+files are fixed and the test pass.
 
 ## `v vlib/v/slow_tests/run_project_folders_test.v`
 
@@ -108,25 +169,19 @@ the `vlib/v/tests/known_errors/testdata/` folder.
 * `v build-examples`
 * `v build-vbinaries`
 
+`v build-examples` discovers files with a `main`, `no_main`, or implicit main module,
+and builds configured projects as folders. Leading comments, attributes, and directives do not
+affect module discovery. Library modules are checked when the programs that import them compile.
+The macOS tray example is built as a project on macOS and excluded on other hosts.
+
+When `VFLAGS` selects TinyCC, `v build-vbinaries` uses an installed GCC or Clang for its
+production variants. Debug variants retain TinyCC. Other compiler selections are preserved.
+
 ## Formatting tests
 
-In `vlib/v/fmt/` there are:
-
-* `v vlib/v/fmt/fmt_test.v`
-
-This checks `.out` tests.
-
-* `v vlib/v/fmt/fmt_keep_test.v`
-
-This verifies that all `_keep.vv` files in the `vlib/v/fmt/tests/` folder,
-would be unchanged by `v fmt -w`, i.e. that the v source code formatter,
-generates a stable source output, that does not change, once it is already
-formatted once.
-
-* `v vlib/v/fmt/fmt_vlib_test.v`
-
-This checks that all V source files are formatted, and prints a summary.
-This is not required.
+`cmd/tools/vfmt_test.v` checks the formatter command, while
+`vlib/v/gen/v/gen_test.v` and the other tests in `vlib/v/gen/v/` check
+flat-AST-to-V formatting and round trips.
 
 * `v test-cleancode`
 
@@ -146,11 +201,18 @@ Ensure that all .md files in the project are formatted properly,
 and that the V code block examples in them can be compiled/formatted too.
 
 Note: if that command finds formatting errors, they can be fixed with:
-`VAUTOFIX=1 ./v check-md -hide-warnings file.md`
+`VAUTOFIX=1 ./v check-md file.md` or with `v check-md -fix file.md`.
 
 ## `v test-self`
 
 Run `vlib` module tests, *including* the compiler tests.
+Test discovery includes architecture-suffixed files such as `_test.amd64.v` when
+the suffix matches the host architecture; files for other architectures are excluded.
+
+To run the same suite across separate machines, set `VTEST_SELF_SHARD_COUNT` to the number of
+machines and set `VTEST_SELF_SHARD_INDEX` to a different zero-based index on each one. For example,
+`VTEST_SELF_SHARD_COUNT=5 VTEST_SELF_SHARD_INDEX=0 ./v test-self vlib` runs the first shard.
+Every test file belongs to exactly one shard. Leave both variables unset for the full suite.
 
 ## `v vlib/v/compiler_errors_test.v`
 
@@ -159,6 +221,37 @@ This runs tests for:
 * `vlib/v/scanner/tests/*.vv`
 * `vlib/v/checker/tests/*.vv`
 * `vlib/v/parser/tests/*.vv`
+
+Some fixtures require the V 0.5.2 compatibility compiler: legacy compiler-module diagnostics
+and legacy JSON code-generation errors. The current driver selects that compiler for those
+fixtures; other fixtures, including the `with_check_option` cases, start with the current compiler
+and may use its normal compatibility fallback. The suite remains runnable on master even though
+the legacy compiler sources were removed from this tree.
+
+Prepare the compatibility compiler from the repository root before running the complete suite:
+
+```sh
+make v1
+./v -silent vlib/v/compiler_errors_test.v
+```
+
+`make v1` installs the pinned V 0.5.2 release and its matching library in a cache, or builds that
+release with `oldv` when a usable release binary is unavailable. Initial installation needs network
+access and the installer tools; source builds also need Git and a C compiler. On Windows, run this
+from MSYS2 with GNU make (`make` or `mingw32-make`) available. Building the ordinary compiler with
+`makev.bat` alone does not provision this compatibility compiler.
+
+The driver can run `make v1` automatically when needed. If it reports that no usable fallback was
+found and make is unavailable, install GNU make and run the preparation command above. This is a
+missing test prerequisite, and also affects the complete `v test vlib/v/` run, which includes this
+suite. After installation, a usable cached compatibility compiler can run without make.
+Successful automatic installation keeps progress output out of exact-output fixture diagnostics.
+If installation fails, the driver prints the installer output to explain the missing prerequisite.
+
+Use `-new-compiler` when investigating an individual fixture with the current compiler. It overrides
+explicit legacy fixture selection, so its diagnostics need not match that fixture's existing `.out`
+file. Disabling automatic fallback with `V_MACOS_V3_NO_FALLBACK=1` still permits explicit legacy
+fixture selection and does not remove the suite's compatibility-compiler prerequisite.
 
 > [!NOTE]
 > There are special folders, that compiler_errors_test.v will try to
@@ -178,6 +271,33 @@ NB 3: To run only some of the tests, use:
 `VTEST_ONLY=mismatch ./v vlib/v/compiler_errors_test.v`
 This will check only the .vv files, whose paths match the given filter.
 
+NB 4: To run tests, but without printing status lines for all the successful
+ones, use:
+`VTEST_HIDE_OK=1 ./v test vlib/math/`
+This will print only the total stats, and the failing tests, but otherwise
+it will be silent. It is useful, when you have hundreds or thousands of
+individual `_test.v` files, and you want to avoid scrolling.
+
+NB 5: To show only *the currently running test*, use:
+`./v -progress test vlib/math/`
+In this mode, the output lines will be limited, no matter how many `_test.v`
+files there are. The output will contain the total stats and the output of
+the failing tests too.
+
+NB 6: Set `VTEST_SKIP_OWNERSHIP=1` to omit ownership and autofree tests from
+`v test`, `v test-self`, and `vlib/v/test_all.vsh`. GitHub Actions enables this
+behavior automatically while ownership/autofree coverage is disabled there.
+A `_test.v` file is an ownership/autofree test when it is in an `ownership`
+folder, its name contains `ownership` or `autofree`, its `// vtest vflags:` line
+has `-ownership`, `-autofree` or `-d ownership`, or it has this line:
+```v ignore
+// vtest ownership
+```
+Add that line to a test that builds the ownership compiler, or compiles with one
+of those flags (for example with `os.exec([vexe, '-ownership', ...])`). Flags
+elsewhere in a test's source are not enough, since many tests pass them only to
+check how they are parsed or rejected.
+
 ## `.github/workflows/ci.yml`
 
 This is a Github Actions configuration file, that runs various CI
@@ -188,7 +308,7 @@ tests in the main V repository, for example:
 
 > [!NOTE]
 The VDOC test vdoc_file_test.v now also supports VAUTOFIX, which is
-useful, if you change anything inside cmd/tools/vdoc or vlib/v/doc/,
+useful, if you change anything inside cmd/tools/vdoc,
 or inside the modules that it depends on (like markdown).
 After such changes, just run this command *2 times*, and commit the
 resulting changes in `cmd/tools/vdoc/testdata` as well:

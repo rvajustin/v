@@ -3,6 +3,8 @@ module runner
 import os
 import v.util.diff
 
+const is_vautofix = os.getenv('VAUTOFIX') != ''
+
 pub struct RunnerOptions {
 pub:
 	wd    string
@@ -26,10 +28,10 @@ pub fn full_path_to_v(dirs_in int) string {
 	vreal  := os.real_path('v')
 	myself := os.real_path( os.executable() )
 	wd := os.getwd()
-	println('args are: $args')
-	println('vreal   : $vreal')
-	println('myself  : $myself')
-	println('wd      : $wd')
+	println('args are: ${args}')
+	println('vreal   : ${vreal}')
+	println('myself  : ${myself}')
+	println('wd      : ${wd}')
 	*/
 	return vexec
 }
@@ -48,13 +50,21 @@ pub fn run_repl_file(wd string, vexec string, file string) !string {
 		panic(err)
 	}
 	rcmd := '${os.quoted_path(vexec)} repl -replfolder ${os.quoted_path(wd)} -replprefix "${fname}." < ${os.quoted_path(input_temporary_filename)}'
-	r := os.execute(rcmd)
+	mut input_process := os.new_process(vexec)
+	input_process.set_args(['repl', '-replfolder', wd, '-replprefix', '${fname}.'])
+	input_process.set_redirect_stdio_merged()
+	input_process.set_stdin_path(input_temporary_filename)
+	input_process.run()
+	input_output := input_process.stdout_slurp()
+	input_process.wait()
+	r := os.Result{ exit_code: input_process.code, output: input_output }
+	input_process.close()
 	if r.exit_code != 0 {
 		os.rm(input_temporary_filename)!
 		return error('Could not execute: ${rcmd}')
 	}
 	result := r.output.replace_each(['\r', '', '>>> ', '', '>>>', '', '... ', '',
-		wd + os.path_separator, '', vexec_folder, '', '\\', '/']).trim_right('\n\r')
+		wd + os.path_separator, '', vexec_folder, '']).trim_right('\n\r')
 	$if windows {
 		dump(rcmd)
 		dump(r.output)
@@ -62,19 +72,25 @@ pub fn run_repl_file(wd string, vexec string, file string) !string {
 	}
 	os.rm(input_temporary_filename)!
 	if result != output {
+		if is_vautofix {
+			new_content := input + '===output===\n' + r.output.trim_right('\n\r') + '\n'
+			os.write_file(file, new_content)!
+			eprintln('>>> fixed file: `${file}`, new_content.len: ${new_content.len}')
+		}
 		return diff_error(file, output, result)
 	}
 	return file.replace('./', '')
 }
 
+// run_prod_file compares production program output, suppressing compiler progress notices.
 pub fn run_prod_file(wd string, vexec string, file string) !string {
 	file_expected := '${file}.expected.txt'
 	f_expected_content := os.read_file(file_expected) or {
 		return error('Could not read expected prod file ${file_expected}')
 	}
 	expected_content := f_expected_content.replace('\r', '')
-	cmd := '${os.quoted_path(vexec)} -prod run ${os.quoted_path(file)}'
-	r := os.execute(cmd)
+	cmd := '${os.quoted_path(vexec)} -silent -prod run ${os.quoted_path(file)}'
+	r := os.exec([vexec, '-silent', '-prod', 'run', file])
 	if r.exit_code < 0 {
 		return error('Could not execute: ${cmd}')
 	}
@@ -100,7 +116,7 @@ pub fn new_options() RunnerOptions {
 		files = os.walk_ext('.', '.repl')
 	}
 	return RunnerOptions{
-		wd: wd
+		wd:    wd
 		vexec: vexec
 		files: files
 	}
@@ -116,7 +132,7 @@ pub fn new_prod_options() RunnerOptions {
 		files = os.walk_ext(wd, '.prod.v')
 	}
 	return RunnerOptions{
-		wd: wd
+		wd:    wd
 		vexec: vexec
 		files: files
 	}

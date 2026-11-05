@@ -19,17 +19,26 @@ pub mut:
 	state State = .closed // current state of connection
 }
 
+struct WriteLock {
+	reserved bool
+}
+
 // Client represents websocket client
 pub struct Client {
 	is_server bool
 mut:
+	read_buffer       [8192]u8
+	read_start        int
+	read_end          int
 	ssl_conn          &ssl.SSLConn = unsafe { nil } // secure connection used when wss is used
-	flags             []Flag       // flags used in handshake
-	fragments         []Fragment   // current fragments
+	proxy_url         string
+	flags             []Flag                // flags used in handshake
+	fragments         []Fragment            // current fragments
 	message_callbacks []MessageEventHandler // all callbacks on_message
 	error_callbacks   []ErrorEventHandler   // all callbacks on_error
 	open_callbacks    []OpenEventHandler    // all callbacks on_open
 	close_callbacks   []CloseEventHandler   // all callbacks on_close
+	write_lock        shared WriteLock
 pub:
 	is_ssl        bool   // true if secure socket is used
 	uri           Uri    // uri of current connection
@@ -37,10 +46,10 @@ pub:
 	read_timeout  i64
 	write_timeout i64
 pub mut:
-	header            http.Header  // headers that will be passed when connecting
+	header            http.Header // headers that will be passed when connecting
 	conn              &net.TcpConn = unsafe { nil } // underlying TCP socket connection
-	nonce_size        int = 16 // size of nounce used for masking
-	panic_on_callback bool // set to true of callbacks can panic
+	nonce_size        int          = 16           // size of nounce used for masking
+	panic_on_callback bool               // set to true of callbacks can panic
 	client_state      shared ClientState // current state of connection
 	// logger used to log messages
 	logger        &log.Logger = default_logger
@@ -83,27 +92,30 @@ pub enum OPCode {
 @[params]
 pub struct ClientOpt {
 pub:
-	read_timeout  i64 = 30 * time.second
-	write_timeout i64 = 30 * time.second
+	read_timeout  i64         = net.infinite_timeout
+	write_timeout i64         = 30 * time.second
 	logger        &log.Logger = default_logger
+	proxy_url     string // optional proxy URL used to open the websocket TCP tunnel
 }
 
 // new_client instance a new websocket client
 pub fn new_client(address string, opt ClientOpt) !&Client {
 	uri := parse_uri(address)!
+	is_ssl := address.starts_with('wss')
 	return &Client{
-		conn: unsafe { nil }
-		is_server: false
-		ssl_conn: ssl.new_ssl_conn()!
-		is_ssl: address.starts_with('wss')
-		logger: opt.logger
-		uri: uri
-		client_state: ClientState{
+		conn:          unsafe { nil }
+		is_server:     false
+		ssl_conn:      if is_ssl { ssl.new_ssl_conn()! } else { unsafe { nil } }
+		is_ssl:        is_ssl
+		logger:        opt.logger
+		uri:           uri
+		proxy_url:     opt.proxy_url
+		client_state:  ClientState{
 			state: .closed
 		}
-		id: rand.uuid_v4()
-		header: http.new_header()
-		read_timeout: opt.read_timeout
+		id:            rand.uuid_v4()
+		header:        http.new_header()
+		read_timeout:  opt.read_timeout
 		write_timeout: opt.write_timeout
 	}
 }
@@ -111,6 +123,8 @@ pub fn new_client(address string, opt ClientOpt) !&Client {
 // connect connects to remote websocket server
 pub fn (mut ws Client) connect() ! {
 	ws.assert_not_connected()!
+	ws.read_start = 0
+	ws.read_end = 0
 	ws.set_state(.connecting)
 	ws.logger.info('connecting to host ${ws.uri}')
 	ws.conn = ws.dial_socket()!
@@ -118,6 +132,38 @@ pub fn (mut ws Client) connect() ! {
 	ws.set_state(.open)
 	ws.logger.info('successfully connected to host ${ws.uri}')
 	ws.send_open_event()
+}
+
+// connect_with_dialer uses an owned TCP connection supplied by the caller.
+// The dialer must return a connected socket and owns failed candidates. Once
+// returned, this client owns cleanup. TLS and HTTP upgrade use the usual path.
+// Custom dialers provide their own proxy tunneling; ClientOpt.proxy_url is not
+// accepted here to avoid silently bypassing configured proxy behavior.
+pub fn (mut ws Client) connect_with_dialer(dialer fn (string) !&net.TcpConn) ! {
+	ws.assert_not_connected()!
+	if ws.proxy_url != '' { return error('custom websocket dialer cannot use proxy_url') }
+	ws.read_start = 0
+	ws.read_end = 0
+	ws.set_state(.connecting)
+	mut tcp := dialer('${ws.uri.hostname}:${ws.uri.port}')!
+	ws.conn = ws.configure_socket(mut tcp)!
+	ws.handshake()!
+	ws.set_state(.open)
+	ws.send_open_event()
+}
+
+// dispose ends a client generation after its reader and writers have joined.
+// Unlike close (which supports reconnect), it also releases the freshly reset
+// TLS context, or the initial context when dialing never produced Client.conn.
+// It is idempotent; this client must not be reconnected after disposal.
+pub fn (mut ws Client) dispose() {
+	if ws.get_state() != .closed && !isnil(ws.conn) {
+		ws.close(1000, 'connection owner ended') or {}
+	}
+	if !isnil(ws.ssl_conn) {
+		ws.ssl_conn.shutdown() or {}
+	}
+	ws.set_state(.closed)
 }
 
 // listen listens and processes incoming messages
@@ -133,12 +179,15 @@ pub fn (mut ws Client) listen() ! {
 	}
 	for ws.get_state() == .open {
 		msg := ws.read_next_message() or {
-			if ws.get_state() in [.closed, .closing] {
+			if err.code() == net.error_eintr { // Check for EINTR and retry
+				continue
+			} else if ws.get_state() in [.closed, .closing] {
 				return
+			} else {
+				ws.debug_log('failed to read next message: ${err}')
+				ws.send_error_event('failed to read next message: ${err}')
+				return err
 			}
-			ws.debug_log('failed to read next message: ${err}')
-			ws.send_error_event('failed to read next message: ${err}')
-			return err
 		}
 		if ws.get_state() in [.closed, .closing] {
 			return
@@ -238,9 +287,13 @@ pub fn (mut ws Client) pong() ! {
 	ws.send_control_frame(.pong, 'PONG', [])!
 }
 
-// write_ptr writes len bytes provided a byteptr with a websocket messagetype
+// write_ptr writes payload_len bytes from a pointer with a websocket message type.
+// Control frame payloads larger than 125 bytes are rejected before socket access.
 pub fn (mut ws Client) write_ptr(bytes &u8, payload_len int, code OPCode) !int {
-	// ws.debug_log('write_ptr code: $code')
+	if is_control_frame(code) && payload_len > 125 {
+		return error('control frame payload exceeds 125 bytes')
+	}
+	// ws.debug_log('write_ptr code: ${code}')
 	if ws.get_state() != .open || ws.conn.sock.handle < 1 {
 		// todo: send error here later
 		return error('trying to write on a closed socket!')
@@ -250,9 +303,9 @@ pub fn (mut ws Client) write_ptr(bytes &u8, payload_len int, code OPCode) !int {
 	if !ws.is_server {
 		header_len += 4
 	}
-	mut header := []u8{len: header_len, init: `0`} // [`0`].repeat(header_len)
+	mut header := [14]u8{}
 	header[0] = u8(int(code)) | 0x80
-	masking_key := create_masking_key()
+	masking_key := if ws.is_server { []u8{} } else { create_masking_key() }
 	if ws.is_server {
 		if payload_len <= 125 {
 			header[1] = u8(payload_len)
@@ -293,12 +346,12 @@ pub fn (mut ws Client) write_ptr(bytes &u8, payload_len int, code OPCode) !int {
 			return error('frame too large')
 		}
 	}
-	len := header.len + payload_len
+	len := header_len + payload_len
 	mut frame_buf := []u8{len: len}
 	unsafe {
-		vmemcpy(&frame_buf[0], &u8(header.data), header.len)
+		vmemcpy(&frame_buf[0], &header[0], header_len)
 		if payload_len > 0 {
-			vmemcpy(&frame_buf[header.len], bytes, payload_len)
+			vmemcpy(&frame_buf[header_len], bytes, payload_len)
 		}
 	}
 	if !ws.is_server {
@@ -310,12 +363,12 @@ pub fn (mut ws Client) write_ptr(bytes &u8, payload_len int, code OPCode) !int {
 	unsafe {
 		frame_buf.free()
 		masking_key.free()
-		header.free()
 	}
 	return written_len
 }
 
-// write writes a byte array with a websocket messagetype to socket
+// write writes a byte array with a websocket message type to the socket.
+// Control frame payloads may contain at most 125 bytes.
 pub fn (mut ws Client) write(bytes []u8, code OPCode) !int {
 	return ws.write_ptr(&u8(bytes.data), bytes.len, code)
 }
@@ -325,12 +378,13 @@ pub fn (mut ws Client) write_string(str string) !int {
 	return ws.write_ptr(str.str, str.len, .text_frame)
 }
 
-// close closes the websocket connection
+// close closes the websocket connection. A positive code leaves at most 123 bytes for the reason.
+// An oversized reason returns an error and still shuts down, resets, and emits the close event.
 pub fn (mut ws Client) close(code int, message string) ! {
 	ws.debug_log('sending close, ${code}, ${message}')
 	ws_state := ws.get_state()
 	if ws_state in [.closed, .closing] || ws.conn.sock.handle <= 1 {
-		ws.debug_log('close: Websocket already closed (${ws_state}), ${message}, ${code} handle(${ws.conn.sock.handle})')
+		ws.debug_log('close: Websocket already closed (${ws_state}), ${message}, ${code}')
 		err_msg := 'Socket already closed: ${code}'
 		return error(err_msg)
 	}
@@ -345,6 +399,9 @@ pub fn (mut ws Client) close(code int, message string) ! {
 		code_ := conv.hton16(u16(code))
 		message_len := message.len + 2
 		mut close_frame := []u8{len: message_len}
+		defer {
+			unsafe { close_frame.free() }
+		}
 		close_frame[0] = u8(code_ & 0xFF)
 		close_frame[1] = u8(code_ >> 8)
 		// code32 = (close_frame[0] << 8) + close_frame[1]
@@ -352,7 +409,6 @@ pub fn (mut ws Client) close(code int, message string) ! {
 			close_frame[i + 2] = message[i]
 		}
 		ws.send_control_frame(.close, 'CLOSE', close_frame)!
-		unsafe { close_frame.free() }
 	} else {
 		ws.send_control_frame(.close, 'CLOSE', [])!
 	}
@@ -362,13 +418,19 @@ pub fn (mut ws Client) close(code int, message string) ! {
 // send_control_frame sends a control frame to the server
 fn (mut ws Client) send_control_frame(code OPCode, frame_typ string, payload []u8) ! {
 	ws.debug_log('send control frame ${code}, frame_type: ${frame_typ}')
+	// RFC 6455 section 5.5 caps control frames at 125 bytes of payload.
+	// Longer payloads would truncate the 7-bit length byte and desynchronise
+	// the peer's frame parser, so reject them before touching the socket.
+	if payload.len > 125 {
+		return error('control frame payload exceeds 125 bytes')
+	}
 	if ws.get_state() !in [.open, .closing] && ws.conn.sock.handle > 1 {
 		return error('socket is not connected')
 	}
 	header_len := if ws.is_server { 2 } else { 6 }
 	frame_len := header_len + payload.len
 	mut control_frame := []u8{len: frame_len}
-	mut masking_key := if !ws.is_server { create_masking_key() } else { websocket.empty_bytearr }
+	mut masking_key := if !ws.is_server { create_masking_key() } else { empty_bytearr }
 	defer {
 		unsafe {
 			control_frame.free()
@@ -437,10 +499,10 @@ fn parse_uri(url string) !&Uri {
 	}
 	querystring := if v.len > 1 { '?' + v[1] } else { '' }
 	return &Uri{
-		url: url
-		hostname: u.hostname()
-		port: port
-		resource: v[0]
+		url:         url
+		hostname:    u.hostname()
+		port:        port
+		resource:    v[0]
 		querystring: querystring
 	}
 }
@@ -453,18 +515,20 @@ pub fn (mut ws Client) set_state(state State) {
 }
 
 // get_state return the current state of the websocket connection
-pub fn (ws Client) get_state() State {
+pub fn (ws &Client) get_state() State {
 	return rlock ws.client_state {
 		ws.client_state.state
 	}
 }
 
 // assert_not_connected returns error if the connection is not connected
-fn (ws Client) assert_not_connected() ! {
+fn (ws &Client) assert_not_connected() ! {
 	match ws.get_state() {
 		.connecting { return error('connect: websocket is connecting') }
 		.open { return error('connect: websocket already open') }
-		.closing { return error('connect: reconnect on closing websocket not supported, please use new client') }
+		.closing {
+			return error('connect: reconnect on closing websocket not supported, please use new client')
+		}
 		else {}
 	}
 }
@@ -473,7 +537,9 @@ fn (ws Client) assert_not_connected() ! {
 pub fn (mut ws Client) reset_state() ! {
 	lock ws.client_state {
 		ws.client_state.state = .closed
-		ws.ssl_conn = ssl.new_ssl_conn()!
+		if ws.is_ssl {
+			ws.ssl_conn = ssl.new_ssl_conn()!
+		}
 		ws.flags = []
 		ws.fragments = []
 	}

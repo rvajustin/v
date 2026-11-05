@@ -1,13 +1,12 @@
 module main
 
 import gg
-import gx
-import os
+import os.asset
 import math
 
 const win_width = 600
 const win_height = 700
-const bg_color = gx.white
+const bg_color = gg.white
 
 const text = '
 Once upon a midnight dreary, while I pondered, weak and weary,
@@ -62,19 +61,16 @@ mut:
 
 fn main() {
 	mut app := &App{}
-	mut font_path := os.resource_abs_path(os.join_path('..', 'assets', 'fonts', 'RobotoMono-Regular.ttf'))
-	$if android {
-		font_path = 'fonts/RobotoMono-Regular.ttf'
-	}
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'Raven text'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		font_path: font_path // window_user_ptr: ctx
+		window_title:  'Raven text'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		font_path:     asset.get_path('../assets', 'fonts/RobotoMono-Regular.ttf')
+		// window_user_ptr: ctx
 		// native_rendering: true
 	)
 	app.gg.run()
@@ -87,7 +83,7 @@ fn frame(mut app App) {
 	if scale_factor <= 0 {
 		scale_factor = 1
 	}
-	text_cfg := gx.TextCfg{
+	text_cfg := gg.TextCfg{
 		size: 16 * int(scale_factor)
 	}
 	mut y := 10

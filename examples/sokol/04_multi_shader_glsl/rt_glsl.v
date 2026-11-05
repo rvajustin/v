@@ -1,3 +1,4 @@
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 /**********************************************************************
 * Sokol 3d cube multishader demo
 * Copyright (c) 2024 Dario Deledda. All rights reserved.
@@ -47,19 +48,19 @@ mut:
 fn create_texture(w int, h int, buf byteptr) (gfx.Image, gfx.Sampler) {
 	sz := w * h * 4
 	mut img_desc := gfx.ImageDesc{
-		width: w
+		width:  w
 		height: h
 	}
 	img_desc.data.subimage[0][0] = gfx.Range{
-		ptr: buf
-		size: usize(sz)
+		ptr:  buf
+		size: uint(sz)
 	}
 	sg_img := gfx.make_image(&img_desc)
 	mut smp_desc := gfx.SamplerDesc{
 		min_filter: .linear
 		mag_filter: .linear
-		wrap_u: .clamp_to_edge
-		wrap_v: .clamp_to_edge
+		wrap_u:     .clamp_to_edge
+		wrap_v:     .clamp_to_edge
 	}
 	sg_smp := gfx.make_sampler(&smp_desc)
 	return sg_img, sg_smp
@@ -108,32 +109,32 @@ fn cube_vertices() []Vertex_t {
 
 fn (mut app App) init_glsl_shader(shader_name string, shader_desc &gfx.ShaderDesc, indices []u16) {
 	mut vert_buffer_desc := gfx.BufferDesc{}
-	unsafe { vmemset(&vert_buffer_desc, 0, sizeof(vert_buffer_desc)) }
+	unsafe { vmemset(&vert_buffer_desc, 0, int(sizeof(vert_buffer_desc))) }
 	vert_buffer_desc.label = c'cube-vertices'
-	vert_buffer_desc.size = usize(vertices.len) * sizeof(Vertex_t)
+	vert_buffer_desc.size = uint(vertices.len) * sizeof(Vertex_t)
 	vert_buffer_desc.data = gfx.Range{
 		ptr: vertices.data
 		size: vert_buffer_desc.size
 	}
-	vert_buffer_desc.@type = .vertexbuffer
+	vert_buffer_desc.type = .vertexbuffer
 	vbuf := gfx.make_buffer(&vert_buffer_desc)
 
 	mut index_buffer_desc := gfx.BufferDesc{}
-	unsafe { vmemset(&index_buffer_desc, 0, sizeof(index_buffer_desc)) }
+	unsafe { vmemset(&index_buffer_desc, 0, int(sizeof(index_buffer_desc))) }
 	index_buffer_desc.label = c'cube-indices'
-	index_buffer_desc.size = usize(indices.len) * sizeof(u16)
+	index_buffer_desc.size = uint(indices.len) * sizeof(u16)
 	index_buffer_desc.data = gfx.Range{
 		ptr: indices.data
 		size: index_buffer_desc.size
 	}
-	index_buffer_desc.@type = .indexbuffer
+	index_buffer_desc.type = .indexbuffer
 	ibuf := gfx.make_buffer(&index_buffer_desc)
 
 	// create shader
 	shader := gfx.make_shader(shader_desc)
 
 	mut pipdesc := gfx.PipelineDesc{}
-	unsafe { vmemset(&pipdesc, 0, sizeof(pipdesc)) }
+	unsafe { vmemset(&pipdesc, 0, int(sizeof(pipdesc))) }
 	pipdesc.label = c'glsl_shader pipeline'
 	pipdesc.layout.buffers[0].stride = int(sizeof(Vertex_t))
 
@@ -151,7 +152,7 @@ fn (mut app App) init_glsl_shader(shader_name string, shader_desc &gfx.ShaderDes
 	pipdesc.cull_mode = .back
 
 	mut bind := gfx.Bindings{}
-	unsafe { vmemset(&bind, 0, sizeof(bind)) }
+	unsafe { vmemset(&bind, 0, int(sizeof(bind))) }
 	bind.vertex_buffers[0] = vbuf
 	bind.index_buffer = ibuf
 	bind.fs.images[C.SLOT_tex] = app.texture
@@ -194,8 +195,8 @@ fn (app &App) draw_glsl_shader(shader_name string) {
 	// passing the view matrix as uniform
 	// res is a 4x4 matrix of f32 thus: 4*16 byte of size
 	vs_uniforms_range := gfx.Range{
-		ptr: &tr_matrix
-		size: usize(4 * 16)
+		ptr: unsafe { &tr_matrix }
+		size: uint(4 * 16)
 	}
 	gfx.apply_uniforms(.vs, C.SLOT_vs_params_m, &vs_uniforms_range)
 
@@ -215,7 +216,7 @@ fn (app &App) draw_glsl_shader(shader_name string) {
 	]!
 	fs_uniforms_range := gfx.Range{
 		ptr: unsafe { &tmp_fs_params }
-		size: usize(sizeof(tmp_fs_params))
+		size: uint(sizeof(tmp_fs_params))
 	}
 	gfx.apply_uniforms(.fs, C.SLOT_fs_params_p, &fs_uniforms_range)
 
@@ -285,12 +286,12 @@ fn (mut app App) on_init() {
 	app.texture, app.sampler = create_texture(w, h, tmp_txt)
 
     // vfmt off
-    app.init_glsl_shader('march', C.rt_march_shader_desc(C.sg_query_backend()), [
+    app.init_glsl_shader('march', voidptr(C.rt_march_shader_desc(C.sg_query_backend())), [
         u16(0), 1,  2,    0,   2,  3,
             6,  5,  4,    7,   6,  4,
             8,  9, 10,    8,  10, 11,
     ])
-    app.init_glsl_shader('puppy', C.rt_puppy_shader_desc(C.sg_query_backend()), [
+    app.init_glsl_shader('puppy', voidptr(C.rt_puppy_shader_desc(C.sg_query_backend())), [
         u16(14), 13, 12,  15, 14, 12,
             16,  17, 18,  16, 18, 19,
             22,  21, 20,  23, 22, 20,
@@ -302,7 +303,7 @@ fn (mut app App) on_init() {
 /******************************************************************************
 * events handling
 ******************************************************************************/
-fn (mut app App) on_event(ev &gg.Event, x voidptr) {
+fn (mut app App) on_event(ev &gg.Event, _x voidptr) {
 	if ev.typ == .mouse_down {
 		app.mouse_down = true
 	}
@@ -326,13 +327,13 @@ fn (mut app App) on_event(ev &gg.Event, x voidptr) {
 fn main() {
 	mut app := &App{}
 	app.gg = gg.new_context(
-		width: 800
-		height: 800
+		width:        800
+		height:       800
 		window_title: '3D Dual shader Cube - click and rotate with the mouse'
-		user_data: app
-		frame_fn: app.frame
-		init_fn: app.on_init
-		event_fn: app.on_event
+		user_data:    app
+		frame_fn:     app.frame
+		init_fn:      app.on_init
+		event_fn:     app.on_event
 	)
 	app.gg.run()
 }

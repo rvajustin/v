@@ -1,6 +1,5 @@
 module gg
 
-import gx
 import js.dom
 
 pub enum DOMEventType {
@@ -30,7 +29,6 @@ pub enum DOMEventType {
 	clipboard_pasted
 	files_dropped
 	num
-	files_droped  @[deprecated: 'use files_dropped instead'; deprecated_after: '2023-08-21']
 }
 
 pub struct Event {
@@ -211,20 +209,20 @@ pub:
 	window_title      string
 	borderless_window bool
 	always_on_top     bool
-	bg_color          gx.Color
+	bg_color          Color
 	init_fn           FNCb   = unsafe { nil }
 	frame_fn          FNCb   = unsafe { nil }
 	native_frame_fn   FNCb   = unsafe { nil }
 	cleanup_fn        FNCb   = unsafe { nil }
 	fail_fn           FNFail = unsafe { nil }
-	//
+
 	event_fn FNEvent = unsafe { nil }
 	quit_fn  FNEvent = unsafe { nil }
-	//
+
 	keydown_fn FNKeyDown = unsafe { nil }
 	keyup_fn   FNKeyUp   = unsafe { nil }
 	char_fn    FNChar    = unsafe { nil }
-	//
+
 	move_fn    FNMove    = unsafe { nil }
 	click_fn   FNClick   = unsafe { nil }
 	unclick_fn FNUnClick = unsafe { nil }
@@ -233,10 +231,11 @@ pub:
 	resized_fn FNEvent   = unsafe { nil }
 	scroll_fn  FNEvent   = unsafe { nil }
 	// wait_events       bool // set this to true for UIs, to save power
-	fullscreen    bool
-	scale         f32 = 1.0
-	sample_count  int
-	swap_interval int = 1 // 1 = 60fps, 2 = 30fps etc. The preferred swap interval (ignored on some platforms)
+	fullscreen     bool
+	scale          f32 = 1.0
+	sample_count   int
+	texture_filter TextureFilter = .linear
+	swap_interval  int           = 1 // 1 = 60fps, 2 = 30fps etc. Ignored by the JS backend; frame pacing follows requestAnimationFrame.
 	// ved needs this
 	// init_text bool
 	font_path             string
@@ -249,16 +248,16 @@ pub:
 	font_bytes_italic []u8
 	native_rendering  bool // Cocoa on macOS/iOS, GDI+ on Windows
 	// drag&drop
-	enable_dragndrop             bool   // enable file dropping (drag'n'drop), default is false
-	max_dropped_files            int    = 1 // max number of dropped files to process (default: 1)
-	max_dropped_file_path_length int    = 2048 // max length in bytes of a dropped UTF-8 file path (default: 2048)
+	enable_dragndrop             bool // enable file dropping (drag'n'drop), default is false
+	max_dropped_files            int    = 1      // max number of dropped files to process (default: 1)
+	max_dropped_file_path_length int    = 2048   // max length in bytes of a dropped UTF-8 file path (default: 2048)
 	html5_canvas_name            string = 'canvas' // the id/name of the canvas element, that will be used to render GG apps
 }
 
 const size = Size{0, 0}
 
 pub fn window_size() Size {
-	return gg.size
+	return size
 }
 
 pub struct Context {
@@ -271,7 +270,7 @@ pub mut:
 	scale         f32 = 1.0
 	width         int
 	height        int
-	window        JS.Window    @[noinit]
+	window        JS.Window @[noinit]
 	config        Config
 	user_data     voidptr
 	ui_mode       bool
@@ -284,9 +283,9 @@ pub mut:
 	mouse_dy      int
 	scroll_x      int
 	scroll_y      int
-	//
-	key_modifiers     Modifier // the current key modifiers
-	key_repeat        bool     // whether the pressed key was an autorepeated one
+
+	key_modifiers     Modifier           // the current key modifiers
+	key_repeat        bool               // whether the pressed key was an autorepeated one
 	pressed_keys      [key_code_max]bool // an array representing all currently pressed keys
 	pressed_keys_edge [key_code_max]bool // true when the previous state of pressed_keys,
 	context           JS.CanvasRenderingContext2D @[noinit]
@@ -324,7 +323,7 @@ pub fn new_context(cfg Config) &Context {
 	g.width = cfg.width
 	g.height = cfg.height
 	g.ui_mode = cfg.ui_mode
-	mut sz := gg.size
+	mut sz := size
 	sz.height = g.height
 	sz.width = g.width
 	g.config = cfg
@@ -466,11 +465,11 @@ pub fn (mut ctx Context) end() {
 	// ctx.context.closePath()
 }
 
-pub fn (mut ctx Context) draw_line(x1 f32, y1 f32, x2 f32, y2 f32, c gx.Color) {
+pub fn (mut ctx Context) draw_line(x1 f32, y1 f32, x2 f32, y2 f32, c Color) {
 	ctx.context.beginPath()
 	ctx.context.strokeStyle = c.to_css_string().str
-	ctx.context.moveTo(x1, y1)
-	ctx.context.lineTo(x2, y2)
+	ctx.context.moveTo(JS.Number(x1), JS.Number(y1))
+	ctx.context.lineTo(JS.Number(x2), JS.Number(y2))
 	ctx.context.stroke()
 	ctx.context.closePath()
 }
@@ -478,16 +477,17 @@ pub fn (mut ctx Context) draw_line(x1 f32, y1 f32, x2 f32, y2 f32, c gx.Color) {
 pub fn (mut ctx Context) quit() {
 }
 
-pub fn (mut ctx Context) draw_rect(x f32, y f32, w f32, h f32, c gx.Color) {
+pub fn (mut ctx Context) draw_rect(x f32, y f32, w f32, h f32, c Color) {
 	ctx.context.beginPath()
 	ctx.context.fillStyle = c.to_css_string().str
-	ctx.context.fillRect(x, y, w, h)
+	ctx.context.fillRect(JS.Number(x), JS.Number(y), JS.Number(w), JS.Number(h))
 	ctx.context.closePath()
 }
 
 fn gg_animation_frame_fn(mut g Context) {
 	g.frame++
-	g.context.clearRect(0, 0, g.config.width, g.config.height)
+	g.context.clearRect(JS.Number(0), JS.Number(0), JS.Number(g.config.width),
+		JS.Number(g.config.height))
 	// todo(playXE): handle events
 
 	if !isnil(g.config.frame_fn) {
@@ -521,10 +521,11 @@ fn (mut g Context) handle_mouse_event(event JS.MouseEvent, typ DOMEventType) Eve
 			e.mouse_button = .invalid
 		}
 	}
-	e.mouse_x = int(event.offsetX)
-	e.mouse_y = int(event.offsetY)
-	e.mouse_dx = int(event.movementX)
-	e.mouse_dy = int(event.movementY)
+
+	e.mouse_x = f32(event.offsetX)
+	e.mouse_y = f32(event.offsetY)
+	e.mouse_dx = f32(event.movementX)
+	e.mouse_dy = f32(event.movementY)
 	bitplace := int(event.button)
 	g.mbtn_mask |= u8(1 << bitplace)
 	// g.mouse_buttons = MouseButtons(g.mbtn_mask)

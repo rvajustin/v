@@ -4,16 +4,22 @@
 module time
 
 #include <time.h>
+#include "@VEXEROOT/vlib/time/ticks_windows_api.h"
+
+#flag @VEXEROOT/vlib/time/ticks_windows.o
+
+fn C.v_time_ticks_ms() u64
+
 // #include <sysinfoapi.h>
 
 pub struct C.tm {
 pub mut:
-	tm_year int
-	tm_mon  int
-	tm_mday int
-	tm_hour int
-	tm_min  int
-	tm_sec  int
+	tm_year i32
+	tm_mon  i32
+	tm_mday i32
+	tm_hour i32
+	tm_min  i32
+	tm_sec  i32
 }
 
 pub struct C._FILETIME {
@@ -37,15 +43,16 @@ fn C.GetSystemTimeAsFileTime(lpSystemTimeAsFileTime &C._FILETIME)
 
 fn C.FileTimeToSystemTime(lpFileTime &C._FILETIME, lpSystemTime &SystemTime)
 
-fn C.SystemTimeToTzSpecificLocalTime(lpTimeZoneInformation &C.TIME_ZONE_INFORMATION, lpUniversalTime &SystemTime, lpLocalTime &SystemTime)
+fn C.SystemTimeToTzSpecificLocalTime(lpTimeZoneInformation voidptr, lpUniversalTime &SystemTime,
+	lpLocalTime &SystemTime)
 
 fn C.localtime_s(t &C.time_t, tm &C.tm)
 
-fn C.timespec_get(t &C.timespec, base int) int
+fn C.timespec_get(t &C.timespec, base i32) i32
 
-// start_time is needed on Darwin and Windows because of potential overflows
+// start_time and time_coefficients are needed on Windows because of potential overflows
 const start_time = init_win_time_start()
-const freq_time = init_win_time_freq()
+const time_coefficients = init_win_time_coefficients()
 const start_local_time = local_as_unix_time()
 
 // in most systems, these are __quad_t, which is an i64
@@ -63,10 +70,24 @@ fn make_unix_time(t C.tm) i64 {
 	return portable_timegm(&t)
 }
 
-fn init_win_time_freq() u64 {
-	f := u64(0)
+struct WinTimeCoefficients {
+	numer u64
+	denom u64
+}
+
+fn init_win_time_coefficients() WinTimeCoefficients {
+	mut f := u64(0)
 	C.QueryPerformanceFrequency(voidptr(&f))
-	return f
+	mut nom := u64(1000000000)
+	for f % 10 == 0 {
+		f = f / 10
+		nom = nom / 10
+	}
+	res := WinTimeCoefficients{
+		numer: nom
+		denom: f
+	}
+	return res
 }
 
 fn init_win_time_start() u64 {
@@ -79,7 +100,7 @@ fn init_win_time_start() u64 {
 pub fn sys_mono_now() u64 {
 	tm := u64(0)
 	C.QueryPerformanceCounter(voidptr(&tm)) // XP or later never fail
-	return (tm - time.start_time) * 1000000000 / time.freq_time
+	return (tm - start_time) * time_coefficients.numer / time_coefficients.denom
 }
 
 // Note: vpc_now is used by `v -profile` .
@@ -95,34 +116,39 @@ fn vpc_now() u64 {
 fn local_as_unix_time() i64 {
 	t := C.time(0)
 	tm := C.localtime(&t)
-	return make_unix_time(tm)
+	return make_unix_time(*tm)
 }
 
-// local - return the time `t`, converted to the currently active local timezone
+// local - return the time `t`, converted to the currently active local timezone.
 pub fn (t Time) local() Time {
 	if t.is_local {
 		return t
 	}
+	// IANA-zoned values keep their absolute instant in `unix`, while their
+	// public calendar fields contain the location's wall clock. Convert that
+	// projection back to UTC before passing it to the Windows API.
+	utc_time := t.local_to_utc()
 	st_utc := SystemTime{
-		year: u16(t.year)
-		month: u16(t.month)
-		day: u16(t.day)
-		hour: u16(t.hour)
-		minute: u16(t.minute)
-		second: u16(t.second)
-		millisecond: u16(t.nanosecond / 1_000_000)
+		year:        u16(utc_time.year)
+		month:       u16(utc_time.month)
+		day:         u16(utc_time.day)
+		hour:        u16(utc_time.hour)
+		minute:      u16(utc_time.minute)
+		second:      u16(utc_time.second)
+		millisecond: u16(utc_time.nanosecond / 1_000_000)
 	}
 	st_local := SystemTime{}
 	C.SystemTimeToTzSpecificLocalTime(unsafe { nil }, voidptr(&st_utc), voidptr(&st_local))
 	t_local := Time{
-		year: st_local.year
-		month: st_local.month
-		day: st_local.day
-		hour: st_local.hour
-		minute: st_local.minute
-		second: st_local.second // These are the same
+		year:       st_local.year
+		month:      st_local.month
+		day:        st_local.day
+		hour:       st_local.hour
+		minute:     st_local.minute
+		second:     st_local.second // These are the same
 		nanosecond: int(st_local.millisecond) * 1_000_000
-		unix: st_local.unix()
+		unix:       st_local.unix()
+		is_local:   true
 	}
 	return t_local
 }
@@ -138,15 +164,15 @@ fn win_now() Time {
 	st_local := SystemTime{}
 	C.SystemTimeToTzSpecificLocalTime(unsafe { nil }, voidptr(&st_utc), voidptr(&st_local))
 	t := Time{
-		year: st_local.year
-		month: st_local.month
-		day: st_local.day
-		hour: st_local.hour
-		minute: st_local.minute
-		second: st_local.second
+		year:       st_local.year
+		month:      st_local.month
+		day:        st_local.day
+		hour:       st_local.hour
+		minute:     st_local.minute
+		second:     st_local.second
 		nanosecond: int(st_local.millisecond) * 1_000_000
-		unix: st_local.unix()
-		is_local: true
+		unix:       st_local.unix()
+		is_local:   true
 	}
 	return t
 }
@@ -160,33 +186,27 @@ fn win_utc() Time {
 	st_utc := SystemTime{}
 	C.FileTimeToSystemTime(&ft_utc, voidptr(&st_utc))
 	t := Time{
-		year: st_utc.year
-		month: st_utc.month
-		day: st_utc.day
-		hour: st_utc.hour
-		minute: st_utc.minute
-		second: st_utc.second
+		year:       st_utc.year
+		month:      st_utc.month
+		day:        st_utc.day
+		hour:       st_utc.hour
+		minute:     st_utc.minute
+		second:     st_utc.second
 		nanosecond: int(st_utc.millisecond) * 1_000_000
-		unix: st_utc.unix()
-		is_local: false
+		unix:       st_utc.unix()
+		is_local:   false
 	}
 	return t
-}
-
-// unix_time returns Unix time.
-@[deprecated: 'use `st.unix()` instead']
-fn (st SystemTime) unix_time() i64 {
-	return st.unix()
 }
 
 // unix returns Unix time.
 fn (st SystemTime) unix() i64 {
 	tt := C.tm{
-		tm_sec: st.second
-		tm_min: st.minute
+		tm_sec:  st.second
+		tm_min:  st.minute
 		tm_hour: st.hour
 		tm_mday: st.day
-		tm_mon: st.month - 1
+		tm_mon:  st.month - 1
 		tm_year: st.year - 1900
 	}
 	return make_unix_time(tt)

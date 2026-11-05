@@ -1,4 +1,3 @@
-// vtest flaky: true
 // vtest retry: 4
 /*
 * To verify the effect of "[keep_args_alive]", this attribute may be commented out.
@@ -19,7 +18,7 @@ fn C.atomic_load_ptr(voidptr) voidptr
 fn C.atomic_store_ptr(voidptr, voidptr)
 
 @[keep_args_alive]
-fn C.calc_expr_after_delay(voidptr, int, voidptr) int
+fn C.calc_expr_after_delay(voidptr, i32, voidptr) i32
 
 fn set_vals() voidptr {
 	unsafe {
@@ -42,7 +41,7 @@ fn set_vals() voidptr {
 
 fn tt(mut sem sync.Semaphore) int {
 	waste_mem(10000, mut sem)
-	r := &voidptr(set_vals())
+	r := unsafe { &voidptr(set_vals()) }
 	g := unsafe { C.calc_expr_after_delay(r[456], 12, r[7932]) }
 	return g
 }
@@ -67,7 +66,7 @@ fn test_keep_args_alive_attribute() {
 		spawn waste_mem(-1, mut sem)
 		waste_mem(10000, mut sem)
 	}
-	r := &voidptr(set_vals())
+	r := unsafe { &voidptr(set_vals()) }
 	v := unsafe { C.calc_expr_after_delay(r[456], 12, r[7932]) }
 	$if gcboehm ? {
 		sem.post()

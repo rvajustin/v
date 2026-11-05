@@ -5,9 +5,9 @@ module picohttpparser
 
 // token_char_map contains all allowed characters in HTTP headers
 const token_char_map = '\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' +
-	'\0\1\0\1\1\1\1\1\0\0\1\1\0\1\1\0\1\1\1\1\1\1\1\1\1\1\0\0\0\0\0\0' +
-	'\0\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\0\0\0\1\1' +
-	'\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\1\0\1\0\1\0' +
+	'\0\x01\0\x01\x01\x01\x01\x01\0\0\x01\x01\0\x01\x01\0\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\0\0\0\0\0\0' +
+	'\0\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\0\0\0\x01\x01' +
+	'\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\x01\0\x01\0\x01\0' +
 	'\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' +
 	'\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' +
 	'\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' +
@@ -89,10 +89,10 @@ fn (mut r Request) phr_parse_request_path_pipeline(buf_start &u8, buf_end &u8, m
 	r.method = method
 	r.path = path
 
-	for buf < buf_end {
+	for unsafe { buf_end - buf > 4 } {
 		unsafe { buf++ }
-		// check if following 4 characters are '\r\n\r\n' indicating a new request line
-		if unsafe { *(&u32(buf)) == 0x0a0d0a0d } {
+		// All four delimiter bytes must be within the input, at any alignment.
+		if unsafe { buf[0] == `\r` && buf[1] == `\n` && buf[2] == `\r` && buf[3] == `\n` } {
 			unsafe {
 				buf += 4
 			}
@@ -125,6 +125,11 @@ fn (mut r Request) phr_parse_request(buf_start &u8, buf_end &u8, mut pret Pret) 
 		if *buf != `\n` {
 			pret.ret = -1
 			pret.err = 'error parsing request: expected "\n" after "\r"'
+			return unsafe { nil }
+		}
+		unsafe { buf++ }
+		if buf == buf_end {
+			pret.ret = -2
 			return unsafe { nil }
 		}
 	}
@@ -214,7 +219,7 @@ fn (mut r Request) parse_headers(buf_start &u8, buf_end &u8, mut pret Pret) &u8 
 			// http://www.mozilla.org/security/announce/2006/mfsa2006-33.html
 			for *buf != `:` {
 				// check if the current character is allowed in an HTTP header
-				if picohttpparser.token_char_map[*buf] == 0 {
+				if token_char_map[*buf] == 0 {
 					$if trace_parse ? {
 						eprintln('invalid character! ${*buf}')
 					}
@@ -462,23 +467,25 @@ fn advance_token(tok_start &u8, tok_end &u8, mut pret Pret) string {
 	return unsafe { tos(tok_start, pret.ret) }
 }
 
-// advance_token2 is a less safe version of advance_token
+// advance_token2 scans pipeline tokens without validating each character.
 @[inline]
 fn advance_token2(tok_start &u8, tok_end &u8, mut pret Pret) string {
 	mut len := 0
 	mut i := 0
-	for {
+	for unsafe { tok_start + i < tok_end } {
 		if unsafe { *(tok_start + i) == ` ` } {
 			len = i
-			for unsafe { *(tok_start + i) == ` ` } {
+			for unsafe { tok_start + i < tok_end && *(tok_start + i) == ` ` } {
 				i++
 			}
-			break
+			pret.ret = i
+			return unsafe { tos(tok_start, len) }
 		}
 		i++
 	}
-	pret.ret = i
-	return unsafe { tos(tok_start, len) }
+	pret.ret = -1
+	pret.err = 'error parsing request: no request found'
+	return ''
 }
 
 @[inline]

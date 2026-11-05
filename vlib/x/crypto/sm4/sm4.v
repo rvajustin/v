@@ -238,8 +238,7 @@ u32(0xd55b5b8e), 0x924242d0, 0xeaa7a74d, 0xfdfbfb06, 0xcf3333fc, 0xe2878765,
 @[direct_array_access; inline]
 fn big_endian_u128_fixed(b [16]u8, mut u [4]u32) {
 	for i in 0 .. 4 {
-		u[i] = u32(b[i * 4 + 3]) | (u32(b[i * 4 + 2]) << u32(8)) | (u32(b[i * 4 + 1]) << u32(16)) | (u32(b[
-			i * 4 + 0]) << u32(24))
+		u[i] = u32(b[i * 4 + 3]) | (u32(b[i * 4 + 2]) << u32(8)) | (u32(b[i * 4 + 1]) << u32(16)) | (u32(b[i * 4 + 0]) << u32(24))
 	}
 }
 
@@ -262,7 +261,7 @@ fn sm4_tl(ka u32) u32 {
 
 	// Divide ka into 4 bytes, then use sbox transfer, combine again into a new u32
 	big_endian_put_u32_fixed(mut a, ka)
-	b[3], b[2], b[1], b[0] = sm4.sbox[a[3]], sm4.sbox[a[2]], sm4.sbox[a[1]], sm4.sbox[a[0]]
+	b[3], b[2], b[1], b[0] = sbox[a[3]], sbox[a[2]], sbox[a[1]], sbox[a[0]]
 	bb := big_endian_u32_fixed(b)
 
 	// Rotate Left Shift 02, 10, 18, 24
@@ -283,7 +282,7 @@ fn calculate_irk(ka u32) u32 {
 
 	// Divide ka into 4 bytes, then use sbox transfer, combine them into a new u32
 	big_endian_put_u32_fixed(mut a, ka)
-	b[3], b[2], b[1], b[0] = sm4.sbox[a[3]], sm4.sbox[a[2]], sm4.sbox[a[1]], sm4.sbox[a[0]]
+	b[3], b[2], b[1], b[0] = sbox[a[3]], sbox[a[2]], sbox[a[1]], sbox[a[0]]
 	bb := big_endian_u32_fixed(b)
 
 	// Rotate Left Shift 13, 23
@@ -300,12 +299,12 @@ fn key_expansion(mut rk [32]u32, key [16]u8) {
 
 	// k = key ^ fk
 	big_endian_u128_fixed(key, mut mk)
-	k[3], k[2], k[1], k[0] = mk[3] ^ sm4.fk[3], mk[2] ^ sm4.fk[2], mk[1] ^ sm4.fk[1], mk[0] ^ sm4.fk[0]
+	k[3], k[2], k[1], k[0] = mk[3] ^ fk[3], mk[2] ^ fk[2], mk[1] ^ fk[1], mk[0] ^ fk[0]
 
 	// generate the round keys
 	for i in 0 .. 32 {
 		// TODO: use 8:32 lookup table speedup
-		k[i + 4] = k[i] ^ calculate_irk(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ sm4.ck[i])
+		k[i + 4] = k[i] ^ calculate_irk(k[i + 1] ^ k[i + 2] ^ k[i + 3] ^ ck[i])
 		rk[i] = k[i + 4]
 	}
 }
@@ -325,7 +324,7 @@ fn one_round(rk [32]u32, input [16]u8, mut output [16]u8) {
 			tmp1 = x[0] ^ sm4_tl(tmp)
 		} $else {
 			// use 8:32 lookup table
-			tmp1 = x[0] ^ sm4.table0[(tmp >> 24) & 0xff] ^ sm4.table1[(tmp >> 16) & 0xff] ^ sm4.table2[(tmp >> 8) & 0xff] ^ sm4.table3[(tmp >> 0) & 0xff]
+			tmp1 = x[0] ^ table0[(tmp >> 24) & 0xff] ^ table1[(tmp >> 16) & 0xff] ^ table2[(tmp >> 8) & 0xff] ^ table3[(tmp >> 0) & 0xff]
 		}
 		x[3], x[2], x[1], x[0] = tmp1, x[3], x[2], x[1]
 	}
@@ -399,8 +398,11 @@ pub fn (c &SM4Cipher) crypt_ecb(input []u8, mut output []u8) ! {
 // `iv` is a 16 bytes Initialization Vector.
 // `input` must be padded to multiple of 16 bytes.
 // `output` must be exactly the same length as `input`.
+// returns:
+//   Updated IV ([]u8): The last ciphertext block for subsequent operations
+//   Error: If input length is invalid, IV length incorrect, or buffer mismatch
 @[direct_array_access]
-pub fn (c &SM4Cipher) crypt_cbc(mut iv []u8, input []u8, mut output []u8) ! {
+pub fn (c &SM4Cipher) crypt_cbc(iv []u8, input []u8, mut output []u8) ![]u8 {
 	mut idx := 0
 	mut length := input.len
 	if length & 0x0f != 0 || length == 0 {
@@ -416,17 +418,19 @@ pub fn (c &SM4Cipher) crypt_cbc(mut iv []u8, input []u8, mut output []u8) ! {
 	// fixed size array, avoid alloc on heap
 	mut input_16 := [16]u8{}
 	mut output_16 := [16]u8{}
+	mut iv_buf := [16]u8{}
+	unsafe { vmemcpy(&iv_buf[0], &iv[0], 16) }
 
 	match c.mode {
 		.sm4_encrypt {
 			for length > 0 {
 				// processing a 128bit block
 				for i in 0 .. 16 {
-					input_16[i] = input[idx + i] ^ iv[i] // convert to fixed size array
+					input_16[i] = input[idx + i] ^ iv_buf[i] // convert to fixed size array
 				}
 				// use round keys encrypt the input_16
 				one_round(c.rk, input_16, mut output_16)
-				unsafe { vmemcpy(&iv[0], &output_16, 16) } // update iv with output
+				unsafe { vmemcpy(&iv_buf[0], &output_16, 16) } // update iv_buf with output
 				unsafe { vmemcpy(&output[idx], &output_16, 16) } // convert from fixed size array
 				idx += 16
 				length -= 16
@@ -439,12 +443,14 @@ pub fn (c &SM4Cipher) crypt_cbc(mut iv []u8, input []u8, mut output []u8) ! {
 				// use round keys decrypt the input_16
 				one_round(c.rk, input_16, mut output_16)
 				for i in 0 .. 16 {
-					output[idx + i] = output_16[i] ^ iv[i] // update output with iv
-					iv[i] = input_16[i] // update iv with input
+					output[idx + i] = output_16[i] ^ iv_buf[i] // update output with iv_buf
+					iv_buf[i] = input_16[i] // update iv_buf with input
 				}
 				idx += 16
 				length -= 16
 			}
 		}
 	}
+
+	return iv_buf[..]
 }

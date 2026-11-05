@@ -31,7 +31,7 @@ fn test_trace() {
 	assert all_expect_files.len > 0, 'no .v files found in ${trace_tests_path}'
 	mut oks := 0
 	for eidx, efile in all_expect_files.sorted() {
-		// if !efile.contains('sumtype') { gprintln('skipping $efile') continue }
+		// if !efile.contains('sumtype') { gprintln('skipping ${efile}') continue }
 		vfile := efile
 
 		if be_verbose {
@@ -43,7 +43,7 @@ fn test_trace() {
 		}
 
 		compile_sw := time.new_stopwatch()
-		comp_res := os.system('${os.quoted_path(vexe)} -d trace test ${os.quoted_path(vfile)}')
+		comp_res := os.system_args([vexe, '-d', 'trace', 'test', vfile])
 		cdur_ms := compile_sw.elapsed().milliseconds()
 		if be_verbose {
 			gprintln('>>>>>>>>>>> compilation took ${cdur_ms} ms, comp_res: ${comp_res}')

@@ -40,6 +40,7 @@
 module main
 
 import os
+import v.pref
 
 const auto_complete_shells = ['bash', 'fish', 'zsh', 'powershell'] // list of supported shells
 
@@ -73,13 +74,13 @@ SUBCMD:
   zsh       : [QUERY]       - returns ZSH  compatible completion code with completions computed from QUERY
   powershell: [QUERY]       - returns PowerShell compatible completion code with completions computed from QUERY"
 
-// Snooped from cmd/v/v.v, vlib/v/pref/pref.c.v
+// Snooped from cmd/v/v.v and vlib/v/pref/default.v.
 const auto_complete_commands = [
 	// simple_cmd
 	'ast',
 	'doc',
 	'vet',
-	// tools in one .v file
+	// tools in one .v file or folder (typically has a "v" prefix)
 	'bin2v',
 	'bug',
 	'build-examples',
@@ -87,17 +88,27 @@ const auto_complete_commands = [
 	'build-vbinaries',
 	'bump',
 	'check-md',
+	'clean',
 	'complete',
 	'compress',
+	'cover',
 	'create',
 	'doctor',
+	'download',
+	'env',
 	'fmt',
 	'gret',
+	'git-fmt-hook',
 	'ls',
+	'pbgen',
+	'quest',
+	'retry',
+	'reduce',
 	'repl',
 	'repeat',
 	'self',
 	'setup-freetype',
+	'scan',
 	'shader',
 	'symlink',
 	'test-all',
@@ -106,9 +117,11 @@ const auto_complete_commands = [
 	'test-parser',
 	'test-self',
 	'test',
+	'tool',
 	'tracev',
 	'up',
 	'watch',
+	'where',
 	'wipe-cache',
 	// commands
 	'help',
@@ -118,11 +131,14 @@ const auto_complete_commands = [
 	'self',
 	'search',
 	'install',
+	'link',
 	'update',
 	'upgrade',
 	'outdated',
 	'list',
 	'remove',
+	'unlink',
+	'why',
 	'vlib-docs',
 	'get',
 	'version',
@@ -130,21 +146,51 @@ const auto_complete_commands = [
 	'build',
 	'build-module',
 	'missdoc',
+	'mod',
 ]
 // Entries in the flag arrays below should be entered as is:
 // * Short flags, e.g.: "-v", should be entered: '-v'
 // * Long flags, e.g.: "--version", should be entered: '--version'
 // * Single-dash flags, e.g.: "-version", should be entered: '-version'
 const auto_complete_flags = [
+	'-wasm-validate',
+	'-wasm-stack-top',
 	'-apk',
+	'-arch',
+	'-assert',
 	'-show-timings',
+	'-show-instructions',
+	'-show-asserts',
 	'-check-syntax',
 	'-check',
+	'-json-errors',
+	'-?',
+	'-h',
+	'-help',
+	'--help',
+	'-q',
 	'-v',
+	'-V',
+	'--version',
+	'-version',
 	'-progress',
+	'-Wimpure-v',
+	'-Wfatal-errors',
 	'-silent',
+	'-skip-running',
+	'-cstrict',
+	'-nofloat',
+	'-fast-math',
+	'-e',
+	'-subsystem',
+	'-gc',
 	'-g',
 	'-cg',
+	'-debug-tcc',
+	'-sourcemap',
+	'-warn-about-allocs',
+	'-sourcemap-src-included',
+	'-sourcemap-inline',
 	'-repl',
 	'-live',
 	'-sharedlive',
@@ -152,49 +198,113 @@ const auto_complete_flags = [
 	'--enable-globals',
 	'-enable-globals',
 	'-autofree',
+	'-print_autofree_vars',
+	'-print_autofree_vars_in_fn',
+	'-trace-calls',
+	'-trace-fns',
+	'-manualfree',
+	'-no-skip-unused',
 	'-compress',
 	'-freestanding',
+	'-no-retry-compilation',
+	'-musl',
+	'-glibc',
+	'-no-bounds-checking',
 	'-no-builtin',
-	'-no-parallel',
 	'-no-preludes',
+	'-no-relaxed-gcc14',
 	'-prof',
 	'-profile',
+	'-cov',
+	'-coverage',
+	'-profile-fns',
 	'-profile-no-inline',
 	'-prod',
+	'-sanitize',
 	'-simulator',
 	'-stats',
+	'-obf',
 	'-obfuscate',
+	'-hide-auto-str',
 	'-translated',
+	'-translated-go',
+	'-m32',
+	'-m64',
 	'-color',
 	'-nocolor',
 	'-showcc',
 	'-show-c-output',
+	'-show-callgraph',
+	'-show-depgraph',
+	'-run-only',
+	'-exclude',
+	'-test-runner',
+	'-dump-c-flags',
+	'-dump-modules',
+	'-dump-files',
+	'-dump-defines',
 	'-experimental',
-	'-usecache',
+	'-use-os-system-to-run',
+	'-macosx-version-min',
+	'-nocache',
 	'-prealloc',
-	'-parallel',
+	'-no-parallel',
+	'-parallel-cc',
 	'-native',
 	'-W',
-	'-keepc',
 	'-w',
+	'-N',
+	'-n',
+	'-no-rsp',
+	'-no-std',
+	'-keepc',
+	'-watch',
 	'-print-v-files',
-	'-error-limit',
-	'-message-limit',
+	'-print-watched-files',
+	'-http',
+	'-cross',
 	'-os',
 	'-printfn',
 	'-cflags',
-	'-define',
+	'-ldflags',
 	'-d',
+	'-define',
+	'-message-limit',
+	'-thread-stack-size',
 	'-cc',
+	'-c++',
+	'-checker-match-exhaustive-cutoff-limit',
 	'-o',
+	'-output',
+	'-is_o',
 	'-b',
+	'-backend',
+	'-es5',
 	'-path',
+	'-bare-builtin-dir',
 	'-custom-prelude',
-	'-name',
-	'-bundle',
-	'-V',
-	'-version',
-	'--version',
+	'-raw-vsh-tmp-prefix',
+	'-cmain',
+	'-line-info',
+	'-check-unused-fn-args',
+	'-use-coroutines',
+]
+const auto_complete_flags_cover = [
+	'--help',
+	'-h',
+	'--verbose',
+	'-v',
+	'--hotspots',
+	'-H',
+	'--percentages',
+	'-P',
+	'--lcov',
+	'--show_test_files',
+	'-S',
+	'--absolute',
+	'-A',
+	'--filter',
+	'-f',
 ]
 const auto_complete_flags_doc = [
 	'-all',
@@ -215,6 +325,22 @@ const auto_complete_flags_doc = [
 	'-s',
 	'-l',
 ]
+const auto_complete_flags_download = [
+	'--help',
+	'-h',
+	'--target-folder',
+	'-t',
+	'--sha1',
+	'-1',
+	'--sha256',
+	'-2',
+	'--continue',
+	'-c',
+	'--retries',
+	'-r',
+	'--delay',
+	'-d',
+]
 const auto_complete_flags_fmt = [
 	'-c',
 	'-diff',
@@ -232,6 +358,16 @@ const auto_complete_flags_bin2v = [
 	'--prefix',
 	'-w',
 	'--write',
+]
+const auto_complete_flags_retry = [
+	'--help',
+	'-h',
+	'--timeout',
+	'-t',
+	'--delay',
+	'-d',
+	'--retries',
+	'-r',
 ]
 const auto_complete_flags_shader = [
 	'--help',
@@ -271,6 +407,20 @@ const auto_complete_flags_bump = [
 ]
 const auto_complete_flags_self = [
 	'-prod',
+]
+const auto_complete_flags_where = [
+	'-h',
+	'-f',
+	'-v',
+]
+const auto_complete_flags_reduce = [
+	'-e',
+	'--error_msg',
+	'-c',
+	'--command',
+	'-w',
+	'--fmt',
+	'--version',
 ]
 const auto_complete_flags_repeat = [
 	'--help',
@@ -373,10 +523,12 @@ fn auto_complete(args []string) {
 			mut files := []string{}
 			list := auto_complete_request(sub_args[1..])
 			for entry in list {
-				match true {
-					os.is_dir(entry) { dirs << entry }
-					os.is_file(entry) { files << entry }
-					else { lines << entry }
+				if os.is_dir(entry) {
+					dirs << entry
+				} else if os.is_file(entry) {
+					files << entry
+				} else {
+					lines << entry
 				}
 			}
 			println('compadd -q -- ${lines.join(' ')}')
@@ -388,6 +540,7 @@ fn auto_complete(args []string) {
 		}
 		else {}
 	}
+
 	exit(0)
 }
 
@@ -411,6 +564,25 @@ fn nearest_path_or_root(path string) string {
 		}
 	}
 	return fixed_path
+}
+
+fn completing_command(parts []string) bool {
+	mut i := 1
+	for i < parts.len - 1 {
+		part := parts[i]
+		if part == '--' {
+			return false
+		}
+		if part.starts_with('-') {
+			i += if pref.option_may_consume_value(part) { 2 } else { 1 }
+		} else if part == 'help' || part == '' {
+			i++
+		} else {
+			return false
+		}
+	}
+	// An option value is completed as a path, even when it matches a command prefix.
+	return i == parts.len - 1
 }
 
 // auto_complete_request returns a list of completions resolved from a full argument list.
@@ -452,14 +624,35 @@ fn auto_complete_request(args []string) []string {
 				'bin2v' { // 'v bin2v -<tab>'
 					list = get_flags(auto_complete_flags_bin2v, part)
 				}
+				'bump' { // 'v bump -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_bump, part)
+				}
 				'build' { // 'v build -<tab>' -> flags.
 					list = get_flags(auto_complete_flags, part)
+				}
+				'cover' { // 'v cover -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_cover, part)
 				}
 				'doc' { // 'v doc -<tab>' -> flags.
 					list = get_flags(auto_complete_flags_doc, part)
 				}
+				'download' { // 'v download -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_download, part)
+				}
 				'fmt' { // 'v fmt -<tab>' -> flags.
 					list = get_flags(auto_complete_flags_fmt, part)
+				}
+				'missdoc' { // 'v missdoc -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_missdoc, part)
+				}
+				'reduce' { // 'v reduce -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_reduce, part)
+				}
+				'retry' { // 'v retry -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_retry, part)
+				}
+				'repeat' { // 'v repeat -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_repeat, part)
 				}
 				'self' { // 'v self -<tab>' -> flags.
 					list = get_flags(auto_complete_flags_self, part)
@@ -467,14 +660,8 @@ fn auto_complete_request(args []string) []string {
 				'shader' { // 'v shader -<tab>' -> flags.
 					list = get_flags(auto_complete_flags_shader, part)
 				}
-				'missdoc' { // 'v missdoc -<tab>' -> flags.
-					list = get_flags(auto_complete_flags_missdoc, part)
-				}
-				'bump' { // 'v bump -<tab>' -> flags.
-					list = get_flags(auto_complete_flags_bump, part)
-				}
-				'repeat' { // 'v repeat -<tab>' -> flags.
-					list = get_flags(auto_complete_flags_repeat, part)
+				'where' { // 'v where -<tab>' -> flags.
+					list = get_flags(auto_complete_flags_where, part)
 				}
 				else {
 					for flag in auto_complete_flags {
@@ -493,12 +680,13 @@ fn auto_complete_request(args []string) []string {
 					}
 				}
 			}
+
 			// Clear the list if the result is identical to the part examined
 			// (the flag must have already been completed)
 			if list.len == 1 && part == list[0] {
 				list.clear()
 			}
-		} else {
+		} else if completing_command(parts) {
 			match part {
 				'help' { // 'v help <tab>' -> top level commands except "help".
 					list = auto_complete_commands.filter(it != part && it != 'complete')
@@ -525,7 +713,8 @@ fn auto_complete_request(args []string) []string {
 				add_sep := if part == '~' { os.path_separator } else { '' }
 				part = part.replace_once('~', os.home_dir().trim_right(os.path_separator)) + add_sep
 			}
-			is_abs_path := part.starts_with(os.path_separator) // TODO: Windows support for drive prefixes
+			is_abs_path :=
+				part.starts_with(os.path_separator) // TODO: Windows support for drive prefixes
 			if part.ends_with(os.path_separator) || part == '.' || part == '..' {
 				// 'v <command>(.*/$|.|..)<tab>' -> output full directory list
 				ls_path = '.' + os.path_separator + part
@@ -637,11 +826,12 @@ Register-ArgumentCompleter -Native -CommandName v -ScriptBlock {
 		}
 		else {}
 	}
+
 	return setup
 }
 
 fn main() {
 	args := os.args[1..]
-	// println('"$args"')
+	// println('"${args}"')
 	auto_complete(args)
 }

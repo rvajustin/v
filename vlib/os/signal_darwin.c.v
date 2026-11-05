@@ -2,9 +2,8 @@
 module os
 
 #flag -lpthread
-#include <signal.h>
 
-fn C.pthread_self() usize
+fn C.pthread_self() voidptr
 
 // g_main_thread_id and is_main_thread can be used to determine if the current thread is the main thread.
 // if need to get the tid of the main thread, can use the global variable g_main_thread_id
@@ -16,9 +15,9 @@ pub fn is_main_thread() bool {
 	return g_main_thread_id == u64(C.pthread_self())
 }
 
-fn C.sigaddset(set &u32, signum int) int
+fn C.sigaddset(set &u32, signum i32) i32
 fn C.sigemptyset(set &u32)
-fn C.sigprocmask(how int, set &u32, oldset &u32) int
+fn C.sigprocmask(how i32, set &u32, oldset &u32) i32
 
 fn signal_ignore_internal(args ...Signal) {
 	mask1 := u32(0)

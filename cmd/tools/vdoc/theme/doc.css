@@ -35,7 +35,11 @@
 	--code-operator-text-color: #864f29;
 	--attribute-deprecated-background-color: #f59f0b48;
 	--attribute-deprecated-text-color: #92400e;
+	--platforms-background-color: #3b82f614;
+	--platforms-border-color: #3b82f6;
 	--attribute-text-color: #000000cf;
+	--table-header-line-color: #2c3e64;
+	--table-background-color: #edf2f7;
 }
 html.dark {
 	--background-color: #1a202c;
@@ -73,6 +77,10 @@ html.dark {
 	--attribute-background-color: #ffffff20;
 	--attribute-text-color: #ffffffaf;
 	--attribute-deprecated-text-color: #fef3c7;
+	--platforms-background-color: #3b82f61f;
+	--platforms-border-color: #63b3ed;
+	--table-header-line-color: #cbd5e0;
+	--table-background-color: #2d3748;
 }
 html.dark .dark-icon {
 	display: none;
@@ -307,6 +315,9 @@ hr {
 .doc-nav > .content a:hover {
 	text-decoration: underline;
 }
+.doc-nav .search {
+	overflow-y: auto;
+}
 .doc-nav .search.hidden {
 	display: none;
 }
@@ -419,7 +430,7 @@ hr {
 	font-size: 0.85rem;
 }
 .doc-content > .doc-node {
-	padding: 5rem 0 2rem 0;
+	padding: 0.5rem 0 0.5rem 0;
 	margin-top: -4rem;
 	overflow: hidden;
 	word-break: break-word;
@@ -464,6 +475,20 @@ hr {
 .doc-content > .doc-node > .attributes > .attribute-deprecated {
 	background-color: var(--attribute-deprecated-background-color);
 	color: var(--attribute-deprecated-text-color);
+}
+.doc-content > .doc-node > .platforms {
+	margin: 0.6rem 0 0;
+	padding: 0.4rem 0.8rem;
+	border-left: 3px solid var(--platforms-border-color);
+	background-color: var(--platforms-background-color);
+	border-radius: 0 4px 0 0;
+	max-width: none;
+}
+/* The note about the platforms sits on top of the declarations that it is about. */
+.doc-content > .doc-node > .platforms + .signature {
+	margin-top: 0;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
 }
 .doc-content > .doc-node > .title > .link {
 	display: flex;
@@ -611,7 +636,7 @@ pre code {
 	hyphens: none;
 	display: block;
 	overflow-x: auto;
-	padding: 1rem;
+	padding: 5px;
 }
 code {
 	padding: 0 0.2rem;
@@ -619,11 +644,13 @@ code {
 pre {
 	overflow: auto;
 	margin: 0;
+	position: relative;
 }
 .namespace {
 	opacity: 0.7;
 }
-.token.comment {
+.token.comment,
+.token.attribute {
 	color: #93a1a1;
 	color: var(--code-comment-text-color);
 }
@@ -632,13 +659,16 @@ pre {
 	color: var(--code-punctuation-text-color);
 }
 .token.number,
-.token.symbol {
+.token.string_interp,
+.token.escape,
+.token.enum_value {
 	color: #702459;
 	color: var(--code-symbol-text-color);
 }
 .token.string,
 .token.char,
-.token.builtin {
+.token.builtin,
+.token.type_name {
 	color: #38a169;
 	color: var(--code-builtin-text-color);
 }
@@ -657,12 +687,40 @@ pre {
 	color: var(--code-keyword-text-color);
 	font-weight: bold;
 }
+.token.module_ {
+	font-weight: bold;
+}
 .token.function {
 	color: #319795;
 	color: var(--code-function-text-color);
 }
 .examples > h4 {
 	margin: 0 0 0.4rem 0;
+}
+
+table {
+	border: 1px solid var(--table-background-color);
+	border-collapse: collapse;
+}
+table tr td,
+table tr th {
+	padding: 4px 8px;
+}
+table tr th {
+	background-color: var(--table-background-color);
+}
+tr:nth-child(even) {
+	background-color: var(--table-background-color);
+}
+
+button.copy {
+	border: none;
+	background-color: transparent;
+	position: absolute;
+	font-size: 12px;
+	top: 5px;
+	right: 5px;
+	color: var(--ref-symbol-hover-color);
 }
 
 /* Medium screen and up */
@@ -714,6 +772,9 @@ pre {
 		padding: 0 1rem;
 		justify-content: space-between;
 	}
+	.doc-content > .doc-node > .title {
+		margin-top: 3.5em;
+	}
 }
 
 @media (min-width: 1024px) {
@@ -752,7 +813,7 @@ pre {
 		padding-top: 0;
 	}
 	.doc-content > .doc-node.const:not(:last-child) {
-		padding-bottom: 1rem;
+		padding-bottom: 5px;
 	}
 	.doc-container {
 		margin-left: 300px;

@@ -1,11 +1,9 @@
 import os
-import time
 
 // tfolder will contain all the temporary files/subfolders made by
 // the different tests. It would be removed in testsuite_end(), so
 // individual os tests do not need to clean up after themselves.
 const tfolder = os.join_path(os.vtmp_dir(), 'os_tests')
-
 // os.args has to be *already initialized* with the program's argc/argv at this point
 // thus it can be used for other consts too:
 const args_at_start = os.args.clone()
@@ -17,7 +15,7 @@ fn testsuite_begin() {
 	os.mkdir_all(tfolder) or { panic(err) }
 	os.chdir(tfolder) or {}
 	assert os.is_dir(tfolder)
-	// println('args_at_start: $args_at_start')
+	// println('args_at_start: ${args_at_start}')
 	assert args_at_start.len > 0
 	assert args_at_start == os.args
 }
@@ -26,7 +24,7 @@ fn testsuite_end() {
 	os.chdir(os.wd_at_startup) or {}
 	os.rmdir_all(tfolder) or {}
 	// assert !os.is_dir(tfolder)
-	// eprintln('testsuite_end  , tfolder = $tfolder removed.')
+	// eprintln('testsuite_end  , tfolder = ${tfolder} removed.')
 }
 
 fn test_open_file() {
@@ -40,7 +38,7 @@ fn test_open_file() {
 	file.write_string(hello) or { panic(err) }
 	file.close()
 	assert u64(hello.len) == os.file_size(filename)
-	read_hello := os.read_file(filename) or { panic('error reading file ${filename}') }
+	read_hello := os.read_file(filename) or { panic('error reading file ' + filename) }
 	assert hello == read_hello
 	os.rm(filename) or { panic(err) }
 }
@@ -80,7 +78,7 @@ fn test_open_file_binary() {
 	unsafe { file.write_ptr(bytes.data, bytes.len) }
 	file.close()
 	assert u64(hello.len) == os.file_size(filename)
-	read_hello := os.read_bytes(filename) or { panic('error reading file ${filename}') }
+	read_hello := os.read_bytes(filename) or { panic('error reading file ' + filename) }
 	assert bytes == read_hello
 	os.rm(filename) or { panic(err) }
 }
@@ -100,8 +98,8 @@ fn test_open_file_binary() {
 // 	}
 // 	f.close()
 // 	//
-// 	eprintln('line1: $line1 $line1.bytes()')
-// 	eprintln('line2: $line2 $line2.bytes()')
+// 	eprintln('line1: ${line1} ${line1.bytes()}')
+// 	eprintln('line2: ${line2} ${line2.bytes()}')
 // 	assert line1 == 'line 1\n'
 // 	assert line2 == 'line 2'
 // }
@@ -160,7 +158,7 @@ fn test_write_and_read_string_to_file() {
 	hello := 'hello world!'
 	os.write_file(filename, hello) or { panic(err) }
 	assert u64(hello.len) == os.file_size(filename)
-	read_hello := os.read_file(filename) or { panic('error reading file ${filename}') }
+	read_hello := os.read_file(filename) or { panic('error reading file ' + filename) }
 	assert hello == read_hello
 	os.rm(filename) or { panic(err) }
 }
@@ -187,8 +185,8 @@ fn test_write_and_read_bytes() {
 	// We only need to test read_bytes because this function calls
 	// read_bytes_at with second parameter zeroed (size, 0).
 	rbytes := file_read.read_bytes(5)
-	// eprintln('rbytes: $rbytes')
-	// eprintln('payload: $payload')
+	// eprintln('rbytes: ${rbytes}')
+	// eprintln('payload: ${payload}')
 	assert rbytes == payload
 	// check that trying to read data from EOF doesn't error and returns 0
 	mut a := []u8{len: 5}
@@ -225,6 +223,7 @@ fn create_tree() ! {
 	os.mkdir_all('myfolder/a1/a2/a3', mode: 0o700)!
 	f3 := os.real_path('myfolder/f1/f2/f3')
 	assert os.is_dir(f3)
+	create_file('myfolder/f1/f2/f3/.hfile1')!
 	create_file('myfolder/f1/f2/f3/a.txt')!
 	create_file('myfolder/f1/f2/f3/b.txt')!
 	create_file('myfolder/f1/f2/f3/c.txt')!
@@ -235,6 +234,7 @@ fn create_tree() ! {
 	create_file('myfolder/a1/a2/a3/y.txt')!
 	create_file('myfolder/a1/a2/a3/z.txt')!
 	create_file('myfolder/a1/1.txt')!
+	create_file('myfolder/a1/.hfile2')!
 	create_file('myfolder/xyz.ini')!
 }
 
@@ -274,6 +274,11 @@ fn test_walk_ext() {
 	]
 	mut mds := normalise_paths(os.walk_ext('myfolder', '.md'))
 	assert mds == ['myfolder/another.md', 'myfolder/f1/f2/f3/d.md']
+
+	all_with_hidden := os.walk_ext('.', '', hidden: true)
+	assert all_with_hidden.len > all.len
+	hidden := normalise_paths(all_with_hidden.filter(it !in all))
+	assert hidden == ['./myfolder/a1/.hfile2', './myfolder/f1/f2/f3/.hfile1']
 }
 
 fn test_walk_with_context() {
@@ -282,7 +287,8 @@ fn test_walk_with_context() {
 		remove_tree()
 	}
 	mut res := []string{}
-	os.walk_with_context('myfolder', &res, fn (mut res []string, fpath string) {
+	os.walk_with_context('myfolder', &res, fn (ctx voidptr, fpath string) {
+		mut res := unsafe { &[]string(ctx) }
 		res << fpath
 	})
 	res = normalise_paths(res)
@@ -321,13 +327,45 @@ fn test_walk() {
 fn test_cp() {
 	old_file_name := 'cp_example.txt'
 	new_file_name := 'cp_new_example.txt'
-	os.write_file(old_file_name, 'Test data 1 2 3, V is awesome #$%^[]!~⭐') or { panic(err) }
-	os.cp(old_file_name, new_file_name) or { panic('${err}') }
-	old_file := os.read_file(old_file_name) or { panic(err) }
-	new_file := os.read_file(new_file_name) or { panic(err) }
+	os.write_file(old_file_name, 'Test data 1 2 3, V is awesome #$%^[]!~⭐')!
+	os.cp(old_file_name, new_file_name)!
+	old_file := os.read_file(old_file_name)!
+	new_file := os.read_file(new_file_name)!
 	assert old_file == new_file
-	os.rm(old_file_name) or { panic(err) }
-	os.rm(new_file_name) or { panic(err) }
+	os.rm(old_file_name)!
+	os.rm(new_file_name)!
+}
+
+fn test_cp_to_folder() {
+	file_name := 'cp_to_folder_example.txt'
+	folder := 'test_cp_to_folder'
+	os.mkdir(folder)!
+	os.write_file(file_name, 'Test data 1 2 3, V is awesome #$%^[]!~⭐')!
+	os.cp(file_name, folder)!
+	new_file_path := os.join_path_single(folder, file_name)
+	old_file := os.read_file(file_name)!
+	new_file := os.read_file(new_file_path)!
+	assert old_file == new_file
+	os.rm(file_name)!
+	os.rm(new_file_path)!
+	os.rmdir(folder)!
+}
+
+fn test_cp_fail_if_exists() {
+	file_name := 'cp_fail_if_exists_example.txt'
+	folder := 'test_cp_fail_if_exists'
+	os.mkdir(folder)!
+	os.write_file(file_name, 'Test data 1 2 3, V is awesome #$%^[]!~⭐')!
+	os.cp(file_name, folder)!
+	new_file_path := os.join_path_single(folder, file_name)
+	if _ := os.cp(file_name, folder, fail_if_exists: true) {
+		assert false
+	} else {
+		assert err.str().starts_with('cp: failed to '), 'cp err: ${err}'
+	}
+	os.rm(file_name)!
+	os.rm(new_file_path)!
+	os.rmdir(folder)!
 }
 
 fn test_mv() {
@@ -433,6 +471,10 @@ fn test_realpath_existing() {
 	rpath := os.real_path(existing_file)
 	assert os.is_abs_path(rpath)
 	assert rpath.ends_with(existing_file_name)
+	$if windows {
+		assert !rpath.starts_with('UNC\\')
+		assert !rpath.starts_with('\\\\?\\')
+	}
 	os.rm(existing_file) or {}
 }
 
@@ -455,6 +497,69 @@ fn test_realpath_absolutizes_existing_relative_paths() {
 	assert os.is_abs_path(real_path_of_examples_folder)
 }
 
+fn test_realpath_resolves_a_relative_path_like_its_absolute_spelling() {
+	os.mkdir_all(os.join_path('rp_dir', 'sub')) or { panic(err) }
+	os.write_file(os.join_path('rp_dir', 'sub', 'file.txt'), 'abc') or { panic(err) }
+	mut existing := ['.', 'rp_dir', os.join_path('rp_dir', 'sub', 'file.txt'),
+		os.join_path('rp_dir', '.', 'sub', '..', 'sub'),
+		os.join_path('..', os.file_name(os.getwd()), 'rp_dir')]
+	$if !windows {
+		existing << 'rp_dir//sub/'
+		if _ := os.symlink(os.join_path('rp_dir', 'sub'), 'rp_link') {
+			existing << os.join_path('rp_link', 'file.txt')
+			assert os.real_path(os.join_path('rp_link', 'file.txt')) == os.real_path(os.join_path('rp_dir',
+				'sub', 'file.txt'))
+		}
+	}
+	wd := os.getwd()
+	for path in existing {
+		resolved := os.real_path(path)
+		assert os.is_abs_path(resolved), path
+		assert resolved == os.real_path(os.join_path_single(wd, path)), path
+	}
+	$if !windows {
+		// what does not exist, or lies under a file, stays as it was given
+		for path in ['rp_missing', os.join_path('rp_dir', 'rp_missing', 'file.txt'),
+			os.join_path('rp_dir', 'sub', 'file.txt', 'below')] {
+			assert os.real_path(path) == path
+		}
+	}
+}
+
+fn test_realpath_follows_a_renamed_working_directory() {
+	$if windows {
+		return
+	}
+	root := os.real_path(os.getwd())
+	defer {
+		os.chdir(root) or { panic(err) }
+	}
+	os.mkdir_all(os.join_path('rp_before', 'inner')) or { panic(err) }
+	os.write_file(os.join_path('rp_before', 'inner', 'file.txt'), 'abc') or { panic(err) }
+	os.chdir(os.join_path('rp_before', 'inner')) or { panic(err) }
+	os.mv(os.join_path(root, 'rp_before'), os.join_path(root, 'rp_after')) or { panic(err) }
+	// another directory takes the name the working directory had
+	os.mkdir_all(os.join_path(root, 'rp_before', 'inner')) or { panic(err) }
+	os.write_file(os.join_path(root, 'rp_before', 'inner', 'file.txt'), 'other') or { panic(err) }
+	assert os.real_path('file.txt') == os.join_path(root, 'rp_after', 'inner', 'file.txt')
+	assert os.real_path('.') == os.join_path(root, 'rp_after', 'inner')
+	assert os.real_path(os.join_path('..', '..', 'rp_before', 'inner', 'file.txt')) == os.join_path(root,
+		'rp_before', 'inner', 'file.txt')
+}
+
+fn test_realpath_keeps_a_path_that_starts_with_a_nul_byte() {
+	$if windows {
+		return
+	}
+	os.mkdir_all('rp_dir') or { panic(err) }
+	// libc reads such a path as the empty one, which names nothing
+	for path in ['\x00', '\x00.', '\x00rp_dir'] {
+		assert os.real_path(path) == path
+	}
+	// a later one ends the path that libc reads
+	assert os.real_path('rp_dir\x00missing') == os.real_path('rp_dir')
+}
+
 // TODO: think much more about whether this is desirable:
 
 fn test_realpath_does_not_absolutize_non_existing_relative_paths() {
@@ -473,6 +578,17 @@ fn handle_privilege_error(err IError) ! {
 	panic(err)
 }
 
+fn windows_extended_path_for_test(path string) string {
+	normalized_path := path.replace('/', '\\')
+	if normalized_path.starts_with('\\\\?\\') {
+		return normalized_path
+	}
+	if normalized_path.starts_with('\\\\') {
+		return '\\\\?\\UNC\\' + normalized_path[2..]
+	}
+	return '\\\\?\\' + normalized_path
+}
+
 fn test_realpath_absolutepath_symlink() ! {
 	file_name := 'tolink_file.txt'
 	symlink_name := 'symlink.txt'
@@ -482,6 +598,10 @@ fn test_realpath_absolutepath_symlink() ! {
 	println(rpath)
 	assert os.is_abs_path(rpath)
 	assert rpath.ends_with(file_name)
+	$if windows {
+		assert !rpath.starts_with('UNC\\')
+		assert !rpath.starts_with('\\\\?\\')
+	}
 	os.rm(symlink_name) or {}
 	os.rm(file_name) or {}
 }
@@ -576,6 +696,95 @@ fn test_symlink() {
 	}
 }
 
+fn test_readlink() {
+	$if windows {
+		eprintln('skipping ${@METHOD} on windows, api not supported')
+		return
+	}
+	os.symlink('some_target_string', 'some_symlink')!
+	defer { os.rm('some_symlink') or { panic(err) } }
+	assert os.readlink('some_symlink')! == 'some_target_string'
+}
+
+fn test_exists_symlink_dangling() {
+	target := 'nonexistent'
+	link := 'dangling_symlink'
+	os.rm(link) or {}
+	os.rm(target) or {}
+	defer {
+		os.rm(link) or {}
+		os.rm(target) or {}
+	}
+	assert !os.exists(target)
+	if _ := os.lstat(target) {
+		assert false, 'os.lstat should fail for a path that does not exist'
+	}
+	os.symlink(target, link) or { handle_privilege_error(err) or { return } }
+	assert os.is_link(link)
+	link_stat := os.lstat(link)!
+	$if windows {
+		assert link_stat.get_filetype() == .regular
+		assert link_stat.nlink == 1
+
+		executable_links := ['dangling_symlink.exe', 'dangling_symlink.com', 'dangling_symlink.bat',
+			'dangling_symlink.cmd']
+		non_executable_link := 'dangling_symlink.txt'
+		wildcard_dir := 'dangling_symlink_patterns'
+		wildcard_link := os.join_path(wildcard_dir, 'only_dangling_link')
+		for executable_link in executable_links {
+			os.rm(executable_link) or {}
+		}
+		os.rm(non_executable_link) or {}
+		os.rmdir_all(wildcard_dir) or {}
+		defer {
+			for executable_link in executable_links {
+				os.rm(executable_link) or {}
+			}
+			os.rm(non_executable_link) or {}
+			os.rmdir_all(wildcard_dir) or {}
+		}
+
+		for executable_link in executable_links {
+			os.symlink(target, executable_link)!
+			executable_stat := os.lstat(executable_link)!
+			assert executable_stat.get_mode().owner.execute, '${executable_link} should be executable'
+		}
+		os.symlink(target, non_executable_link)!
+		assert !os.lstat(non_executable_link)!.get_mode().owner.execute
+
+		os.mkdir(wildcard_dir)!
+		os.symlink(target, wildcard_link)!
+		assert os.ls(wildcard_dir)! == [os.file_name(wildcard_link)]
+		wildcard_question_pattern := os.join_path(wildcard_dir, 'only_dangling_lin?')
+		wildcard_star_pattern := os.join_path(wildcard_dir, 'only_dangling_*')
+		for wildcard_pattern in [wildcard_question_pattern, wildcard_star_pattern] {
+			if wildcard_stat := os.lstat(wildcard_pattern) {
+				assert false, 'os.lstat should reject wildcard path "${wildcard_pattern}", got ${wildcard_stat}'
+			}
+		}
+
+		assert windows_extended_path_for_test(r'C:\fixture\link') == r'\\?\C:\fixture\link'
+		assert windows_extended_path_for_test(r'\\server\share\link') == r'\\?\UNC\server\share\link'
+		assert windows_extended_path_for_test(r'\\?\C:\fixture\link') == r'\\?\C:\fixture\link'
+		extended_exact_path := windows_extended_path_for_test(os.join_path(os.getwd(), link))
+		assert os.lstat(extended_exact_path)!.get_filetype() == .regular
+		extended_question_pattern := windows_extended_path_for_test(os.join_path(os.getwd(),
+			wildcard_question_pattern))
+		if wildcard_stat := os.lstat(extended_question_pattern) {
+			assert false, 'os.lstat should reject extended wildcard path "${extended_question_pattern}", got ${wildcard_stat}'
+		}
+	} $else {
+		assert link_stat.get_filetype() == .symbolic_link
+	}
+	// the exists function says false in this scenario... on linux and linux-like systems.
+	// it says true on windows!
+	$if windows {
+		assert os.exists(link) == true
+	} $else {
+		assert os.exists(link) == false
+	}
+}
+
 fn test_is_executable_writable_readable() {
 	file_name := 'rwxfile.exe'
 	create_file(file_name)!
@@ -590,12 +799,19 @@ fn test_is_executable_writable_readable() {
 		assert os.is_writable(file_name)
 		assert os.is_readable(file_name)
 		assert os.is_executable(file_name)
+		for ext in ['exe', 'com', 'bat', 'cmd'] {
+			mut executable_file_name := 'executable.${ext}'
+			create_file(executable_file_name)!
+			assert os.is_executable(executable_file_name)
+			os.rm(executable_file_name) or { panic(err) }
+		}
 	}
 	// We finally delete the test file.
 	os.rm(file_name) or { panic(err) }
 }
 
 fn test_file_ext() {
+	assert os.file_ext('') == ''
 	assert os.file_ext('file.v') == '.v'
 	assert os.file_ext('file.js.v') == '.v'
 	assert os.file_ext('file.ext1.ext2.ext3') == '.ext3'
@@ -629,59 +845,172 @@ fn test_rmdir_all() {
 	assert !os.exists('some')
 }
 
+fn test_rm_and_rmdir_all_remove_directory_symlinks() ! {
+	root := os.join_path(os.getwd(), 'rm_dir_links')
+	target := os.join_path(os.getwd(), 'rm_dir_links_target')
+	gone_target := os.join_path(os.getwd(), 'rm_dir_links_gone_target')
+	os.rmdir_all(root) or {}
+	os.rmdir_all(target) or {}
+	os.rmdir_all(gone_target) or {}
+	defer {
+		os.rmdir_all(root) or {}
+		os.rmdir_all(target) or {}
+		os.rmdir_all(gone_target) or {}
+	}
+	os.mkdir_all(os.join_path(root, 'sub'))!
+	os.mkdir(target)!
+	os.write_file(os.join_path(target, 'keep.txt'), 'keep')!
+	os.mkdir(gone_target)!
+
+	// os.rm removes a live directory symlink itself, not its target.
+	direct_link := os.join_path(root, 'direct_link')
+	os.symlink(target, direct_link) or { handle_privilege_error(err) or { return } }
+	assert os.is_link(direct_link)
+	os.rm(direct_link)!
+	assert !os.is_link(direct_link)
+	assert os.read_file(os.join_path(target, 'keep.txt'))! == 'keep'
+
+	// os.rmdir_all removes live and dangling directory symlinks without following them.
+	os.symlink(target, os.join_path(root, 'sub', 'live_link'))!
+	dangling_link := os.join_path(root, 'dangling_link')
+	os.symlink(gone_target, dangling_link)!
+	os.rmdir(gone_target)!
+	assert os.is_link(dangling_link)
+	os.rmdir_all(root)!
+	assert !os.exists(root)
+	assert os.read_file(os.join_path(target, 'keep.txt'))! == 'keep'
+}
+
 fn test_rmdir_not_exist() ! {
 	dir := 'non_existing_dir'
 	assert !os.exists(dir)
 	os.rmdir(dir) or {
-		// 0x00000002 is both ENOENT in POSIX and ERROR_FILE_NOT_FOUND in Win32 API
-		assert err.code() == 0x00000002
+		// ENOENT on POSIX and ERROR_FILE_NOT_FOUND on Windows have the same
+		// value, which is why one constant covers both.
+		assert err.code() == os.error_code_noent
+		assert os.is_not_exist(err)
 	}
 	assert !os.exists(dir)
 }
 
 fn test_dir() {
-	$if windows {
-		assert os.dir('C:\\a\\b\\c') == 'C:\\a\\b'
-		assert os.dir('C:\\a\\b\\') == 'C:\\a\\b'
-		assert os.dir('C:/a/b/c') == 'C:\\a\\b'
-		assert os.dir('C:/a/b/') == 'C:\\a\\b'
-	} $else {
-		assert os.dir('/') == '/'
-		assert os.dir('/abc') == '/'
-		assert os.dir('/var/tmp/foo') == '/var/tmp'
-		assert os.dir('/var/tmp/') == '/var/tmp'
-		assert os.dir('C:\\a\\b\\c') == 'C:/a/b'
-		assert os.dir('C:\\a\\b\\') == 'C:/a/b'
-	}
+	assert os.dir('') == '.'
+	assert os.dir('\\') == '\\'
+	assert os.dir('C:\\a\\b\\c') == 'C:\\a\\b'
+	assert os.dir('C:\\a\\b\\') == 'C:\\a\\b'
+	assert os.dir('C:/a/b/c') == 'C:/a/b'
+	assert os.dir('C:/a/b/') == 'C:/a/b'
+	assert os.dir('/') == '/'
+	assert os.dir('/abc') == '/'
+	assert os.dir('/var/tmp/foo') == '/var/tmp'
+	assert os.dir('/var/tmp/') == '/var/tmp'
 	assert os.dir('os') == '.'
 }
 
 fn test_base() {
-	$if windows {
-		assert os.base('v\\vlib\\os') == 'os'
-		assert os.base('v\\vlib\\os\\') == 'os'
-		assert os.base('v/vlib/os') == 'os'
-		assert os.base('v/vlib/os/') == 'os'
-	} $else {
-		assert os.base('v/vlib/os') == 'os'
-		assert os.base('v/vlib/os/') == 'os'
-		assert os.base('v\\vlib\\os') == 'os'
-		assert os.base('v\\vlib\\os\\') == 'os'
-	}
+	assert os.base('') == '.'
+	assert os.base('v\\vlib\\os') == 'os'
+	assert os.base('v\\vlib\\os\\') == 'os'
+	assert os.base('v/vlib/os') == 'os'
+	assert os.base('v/vlib/os/') == 'os'
+	assert os.base('v/vlib/os') == 'os'
+	assert os.base('v/vlib/os/') == 'os'
+	assert os.base('v\\vlib\\os') == 'os'
+	assert os.base('v\\vlib\\os\\') == 'os'
 	assert os.base('filename') == 'filename'
 }
 
+fn test_base_multiple_trailing_separators() {
+	assert os.base('a//') == 'a'
+	assert os.base('v/vlib/os///') == 'os'
+	assert os.base('a\\\\') == 'a'
+	assert os.base('v\\vlib\\os\\\\\\') == 'os'
+	assert os.base('/') == '/'
+	assert os.base('//') == '/'
+	assert os.base('////') == '/'
+	assert os.base('\\') == '\\'
+	assert os.base('\\\\') == '\\'
+	assert os.base('\\\\\\\\') == '\\'
+}
+
 fn test_file_name() {
-	$if windows {
-		assert os.file_name('v\\vlib\\os\\os.v') == 'os.v'
-		assert os.file_name('v\\vlib\\os\\') == ''
-		assert os.file_name('v\\vlib\\os') == 'os'
-	} $else {
-		assert os.file_name('v/vlib/os/os.v') == 'os.v'
-		assert os.file_name('v/vlib/os/') == ''
-		assert os.file_name('v/vlib/os') == 'os'
-	}
+	assert os.file_name('') == ''
+	assert os.file_name('v\\vlib\\os\\os.v') == 'os.v'
+	assert os.file_name('v\\vlib\\os\\') == ''
+	assert os.file_name('v\\vlib\\os') == 'os'
+	assert os.file_name('v/vlib/os/os.v') == 'os.v'
+	assert os.file_name('v/vlib/os/') == ''
+	assert os.file_name('v/vlib/os') == 'os'
 	assert os.file_name('filename') == 'filename'
+}
+
+fn test_split_path() {
+	mut dir := ''
+	mut filename := ''
+	mut ext := ''
+
+	dir, filename, ext = os.split_path('')
+	assert [dir, filename, ext] == ['.', '', '']
+
+	dir, filename, ext = os.split_path('a')
+	assert [dir, filename, ext] == ['.', 'a', '']
+
+	dir, filename, ext = os.split_path('.')
+	assert [dir, filename, ext] == ['.', '', '']
+
+	dir, filename, ext = os.split_path('..')
+	assert [dir, filename, ext] == ['..', '', '']
+
+	dir, filename, ext = os.split_path('\\')
+	assert [dir, filename, ext] == ['\\', '', '']
+
+	dir, filename, ext = os.split_path('\\x.c.v')
+	assert [dir, filename, ext] == ['\\', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('.\\x.c.v')
+	assert [dir, filename, ext] == ['.', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('x.c.v')
+	assert [dir, filename, ext] == ['.', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('..\\x.c.v')
+	assert [dir, filename, ext] == ['..', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('\\lib\\x.c.v')
+	assert [dir, filename, ext] == ['\\lib', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('\\lib\\x.c.v\\')
+	assert [dir, filename, ext] == ['\\lib\\x.c.v', '', '']
+
+	dir, filename, ext = os.split_path('\\lib\\x.c.')
+	assert [dir, filename, ext] == ['\\lib', 'x.c.', '']
+
+	dir, filename, ext = os.split_path('C:\\lib\\x.c.')
+	assert [dir, filename, ext] == ['C:\\lib', 'x.c.', '']
+
+	dir, filename, ext = os.split_path('/')
+	assert [dir, filename, ext] == ['/', '', '']
+
+	dir, filename, ext = os.split_path('/x.c.v')
+	assert [dir, filename, ext] == ['/', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('./x.c.v')
+	assert [dir, filename, ext] == ['.', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('../x.c.v')
+	assert [dir, filename, ext] == ['..', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('/lib/x.c.v')
+	assert [dir, filename, ext] == ['/lib', 'x.c', '.v']
+
+	dir, filename, ext = os.split_path('/lib/x.c.v/')
+	assert [dir, filename, ext] == ['/lib/x.c.v', '', '']
+
+	dir, filename, ext = os.split_path('/lib/../x.c.v/')
+	assert [dir, filename, ext] == ['/lib/../x.c.v', '', '']
+
+	dir, filename, ext = os.split_path('/lib/x.c.')
+	assert [dir, filename, ext] == ['/lib', 'x.c.', '']
 }
 
 fn test_uname() {
@@ -714,6 +1043,15 @@ fn test_write_file_array_bytes() {
 	// eprintln(rarr.str())
 }
 
+fn test_write_bytes() {
+	fpath := './wbytes.bin'
+	for arr in [[u8(65), 66, 67, 68, 69, 70], [u8(3), 2, 1], []u8{}] {
+		os.write_bytes(fpath, arr)!
+		rarr := os.read_bytes(fpath)!
+		assert arr == rarr
+	}
+}
+
 fn test_write_file_array_structs() {
 	fpath := './astructs.bin'
 	mut arr := []IntPoint{len: maxn}
@@ -736,7 +1074,7 @@ fn test_stdout_capture() {
 cmd.start()
 for !cmd.eof {
 	line := cmd.read_line()
-	println('line="$line"')
+	println('line="${line}"')
 }
 cmd.close()
 	*/
@@ -856,85 +1194,41 @@ fn test_utime() {
 		os.rm(filename) or { panic(err) }
 	}
 	f.write_string(hello) or { panic(err) }
-	atime := time.now().add_days(2).unix()
-	mtime := time.now().add_days(4).unix()
-	os.utime(filename, int(atime), int(mtime)) or { panic(err) }
+	atime := i64(2_147_483_648)
+	mtime := i64(2_306_102_495)
+	os.utime(filename, atime, mtime) or { panic(err) }
 	assert os.file_last_mod_unix(filename) == mtime
 }
 
-fn test_execute() {
-	print0script := os.join_path_single(tfolder, 'print0.v')
-	// The output of the next command contains a 0 byte in the middle.
-	// Nevertheless, the execute function *should* return a string that
-	// contains it.
-	os.write_file(print0script, 'C.printf(c"start%cMIDDLE%cfinish\nxx", 0, 0)\n')!
+fn test_exec_with_args() {
+	source_path := os.join_path_single(tfolder, 'exec_args.v')
+	output_arg := os.join_path_single(tfolder, 'exec_args')
+	exe_path := if os.user_os() == 'windows' {
+		output_arg + '.exe'
+	} else {
+		output_arg
+	}
+	os.write_file(source_path,
+		"import os\n\nfn main() {\n\tprintln(os.args[1..].join('|'))\n\teprintln('stderr-ok')\n}\n")!
 	defer {
-		os.rm(print0script) or {}
+		os.rm(source_path) or {}
+		os.rm(exe_path) or {}
+		os.rm(output_arg + '.c') or {}
 	}
-	result := os.execute('${os.quoted_path(@VEXE)} run ${os.quoted_path(print0script)}')
-	hexresult := result.output.bytes().hex()
-	// println('exit_code: $result.exit_code')
-	// println('output: |$result.output|')
-	// println('output.len: $result.output.len')
-	// println('output hexresult: $hexresult')
-	assert result.exit_code == 0
-	assert hexresult.starts_with('7374617274004d4944444c450066696e697368')
-	assert hexresult.ends_with('0a7878')
-}
+	compile_result :=
+		os.exec([@VEXE, '-o', output_arg, source_path])
+	assert compile_result.exit_code == 0, compile_result.output
 
-fn test_execute_with_stderr_redirection() {
-	result := os.execute('${os.quoted_path(@VEXE)} wrong_command')
-	assert result.exit_code == 1
-	assert result.output.contains('unknown command `wrong_command`')
+	result := os.exec([exe_path, 'one two', 'semi;colon'])
+	normalized_output := result.output.replace('\r\n', '\n')
+	assert result.exit_code == 0, result.output
+	assert normalized_output.contains('one two|semi;colon\n'), result.output
+	assert normalized_output.contains('stderr-ok\n'), result.output
 
-	stderr_path := os.join_path_single(tfolder, 'stderr.txt')
-	result2 := os.execute('${os.quoted_path(@VEXE)} wrong_command 2> ${os.quoted_path(stderr_path)}')
-	assert result2.exit_code == 1
-	assert result2.output == ''
-	assert os.exists(stderr_path)
-}
-
-fn test_execute_with_linefeeds() {
-	if os.user_os() == 'windows' {
-		return
-	}
-	result := os.execute('true\n')
-	assert result.exit_code == 0
-	result2 := os.execute('false\n')
-	assert result2.exit_code == 1
-}
-
-fn test_command() {
-	if os.user_os() == 'windows' {
-		eprintln('>>> os.Command is not implemented fully on Windows yet')
-		return
-	}
-	mut cmd := os.Command{
-		path: 'ls'
-	}
-
-	cmd.start() or { panic(err) }
-	for !cmd.eof {
-		cmd.read_line()
-	}
-
-	cmd.close() or { panic(err) }
-	// dump( cmd )
-	assert cmd.exit_code == 0
-
-	// This will return a non 0 code
-	mut cmd_to_fail := os.Command{
-		path: 'ls -M'
-	}
-
-	cmd_to_fail.start() or { panic(err) }
-	for !cmd_to_fail.eof {
-		cmd_to_fail.read_line()
-	}
-
-	cmd_to_fail.close() or { panic(err) }
-	// dump( cmd_to_fail )
-	assert cmd_to_fail.exit_code != 0 // 2 on linux, 1 on macos
+	shell_metachar_result := os.exec([exe_path, 'first; echo injected'])
+	normalized_shell_metachar_output := shell_metachar_result.output.replace('\r\n', '\n')
+	assert shell_metachar_result.exit_code == 0, shell_metachar_result.output
+	assert normalized_shell_metachar_output.contains('first; echo injected\n'), shell_metachar_result.output
 }
 
 fn test_reading_from_proc_cpuinfo() {
@@ -950,7 +1244,8 @@ fn test_reading_from_proc_cpuinfo() {
 	info := os.read_file('/proc/cpuinfo')!
 	assert info.len > 0
 	assert info.contains('processor')
-	assert info.ends_with('\n\n')
+	// dump(info)
+	// assert info.ends_with('\n\n') // fails on QEMU for s390x
 
 	info_bytes := os.read_bytes('/proc/cpuinfo')!
 	assert info_bytes.len > 0
@@ -975,7 +1270,7 @@ fn move_across_partitions_using_function(f fn (src string, dst string, opts os.M
 		eprintln('skipping test_mv_by_cp, because bindfs was not present')
 		return
 	}
-	// eprintln('>> $bindfs')
+	// eprintln('>> ${bindfs}')
 	pfolder := os.join_path(tfolder, 'parent')
 	cfolder := os.join_path(pfolder, 'child')
 	mfolder := os.join_path(pfolder, 'mountpoint')
@@ -983,12 +1278,12 @@ fn move_across_partitions_using_function(f fn (src string, dst string, opts os.M
 	os.mkdir_all(mfolder)!
 	os.mkdir_all(cfolder)!
 	os.mkdir_all(cdeepfolder)!
-	//
+
 	original_path := os.join_path(pfolder, 'original.txt')
 	target_path := os.join_path(cdeepfolder, 'target.txt')
 	os.write_file(original_path, 'text')!
 	os.write_file(os.join_path(cdeepfolder, 'x.txt'), 'some text')!
-	// os.system('tree $pfolder')
+	// os.system('tree ${pfolder}')
 	/*
 	/tmp/v_1000/v/tests/os_test/parent
 	├── child
@@ -998,11 +1293,12 @@ fn move_across_partitions_using_function(f fn (src string, dst string, opts os.M
 	├── mountpoint
 	└── original.txt
 	*/
-	os.system('${bindfs} --no-allow-other ${cfolder} ${mfolder}')
+	os.system_args([bindfs, '--no-allow-other', cfolder, mfolder])
 	defer {
-		os.system('sync; umount ${mfolder}')
+		os.system_args(['sync'])
+		os.system_args(['umount', mfolder])
 	}
-	// os.system('tree $pfolder')
+	// os.system('tree ${pfolder}')
 	/*
 	/tmp/v_1000/v/tests/os_test/parent
 	├── child
@@ -1046,4 +1342,34 @@ fn test_mkdir_at_file_dst() {
 		return
 	}
 	assert false
+}
+
+fn test_disk_usage() {
+	usage := os.disk_usage('.')!
+	assert usage.total > 0
+	assert usage.available > 0
+	assert usage.used > 0
+}
+
+fn test_cp_directory_reports_read_error() {
+	// Copying a directory fails when reading it (EISDIR on Unix): the error
+	// must blame the read side, not the write side, and the -1 from read()
+	// must never reach write() as a SIZE_MAX length.
+	// See https://github.com/vlang/v/issues/30153
+	folder := 'test_cp_directory'
+	dst := 'test_cp_directory_copy'
+	os.mkdir(folder)!
+	defer {
+		os.rmdir_all(folder) or {}
+		os.rm(dst) or {}
+	}
+	os.cp(folder, dst) or {
+		$if windows {
+			// Windows copies via CopyFile, which fails at open with its own message
+			return
+		}
+		assert err.msg().contains('failed to read from')
+		return
+	}
+	assert false, 'cp of a directory should fail'
 }

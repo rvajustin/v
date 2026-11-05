@@ -1,5 +1,5 @@
-// vtest retry: 5
 // vtest flaky: true
+// vtest retry: 5
 import net
 
 const test_port = 45123
@@ -35,6 +35,9 @@ fn echo(address string) ! {
 
 	println('local: ' + c.addr()!.str())
 	println(' peer: ' + c.peer_addr()!.str())
+	ip := c.peer_ip()!
+	println('   ip: ${ip}')
+	assert ip in ['::1', 'localhost', '127.0.0.1']
 
 	data := 'Hello from vlib/net!'
 	c.write_string(data)!
@@ -80,6 +83,7 @@ fn test_tcp_unix() {
 	address := 'tcp-test.sock'
 
 	mut l := net.listen_tcp(.unix, address) or { return }
+	l.close() or {}
 	assert false
 }
 

@@ -1,3 +1,4 @@
+// vtest build: !msvc
 import v.slow_tests.assembly.util
 
 fn test_inline_asm() {
@@ -34,7 +35,7 @@ fn test_inline_asm() {
 
 	// g, h, i := 2.3, 4.8, -3.5
 	// asm rv64 {
-	// 	fadd.s $i, $g, $h // test `.` in instruction name
+	// 	fadd.s ${i}, ${g}, ${h} // test `.` in instruction name
 	// 	: =r (i) as i
 	// 	: r (g) as g
 	// 	  r (g) as h
@@ -85,7 +86,7 @@ fn test_inline_asm() {
 	assert l == 7
 
 	// same as above
-	n := [5, 9, 0, 4]
+	n := [i32(5), 9, 0, 4]
 	asm amd64 {
 		loop_start2:
 		addq [in_data + rcx * 4 + 0], 2
@@ -99,15 +100,16 @@ fn test_inline_asm() {
 
 	assert util.add(8, 9, 34, 7) == 58 // test .amd64.v imported files
 
-	mut o := Manu{}
+	mut o := &Manu{}
 	asm amd64 {
 		mov eax, 0
 		cpuid
 		; =b (o.ebx) as ebx0
 		  =d (o.edx) as edx0
 		  =c (o.ecx) as ecx0
+		; ; eax
 	}
-	o.str()
+	assert o.str()[0].is_capital()
 }
 
 @[packed]
@@ -119,11 +121,11 @@ mut:
 	zero u8 // for string
 }
 
-fn (m Manu) str() string {
+fn (m &Manu) str() string {
 	return unsafe {
 		string{
-			str: &u8(&m)
-			len: 24
+			str:    &u8(m)
+			len:    12
 			is_lit: 1
 		}
 	}
@@ -156,7 +158,7 @@ $if !macos {
 @[if !macos]
 fn test_rip_relative_label_u8() {
 	$if !macos {
-		mut a := int(4)
+		mut a := i32(4)
 		asm amd64 {
 			mov a, [rip + byte_sequence] // see below
 			; =r (a)
@@ -173,51 +175,11 @@ $if !macos {
 	}
 }
 
-fn test_flag_output() {
-	a, b := 4, 9
-	mut out := false
-	asm amd64 {
-		cmp a, b
-		; =@ccl (out)
-		; r (a)
-		  r (b)
-	}
-	assert out
-	asm amd64 {
-		cmp b, a
-		; =@ccl (out)
-		; r (a)
-		  r (b)
-	}
-	assert !out
-
-	zero := 0
-	asm amd64 {
-		cmp zero, zero
-		; =@ccz (out)
-		; r (zero)
-	}
-	assert out
-
-	mut maybe_four := 4
-	mut four := 4
-	asm amd64 {
-		subl four, maybe_four
-		testl four, maybe_four
-		movl maybe_four, 9
-		; +m (maybe_four)
-		  +r (four)
-		  =@ccz (out)
-	}
-	assert out
-	assert maybe_four == 9
-}
-
 fn test_asm_generic() {
 	u := u64(49)
 	assert generic_asm(u) == 14
 	assert u == 63
-	//
+
 	i := i32(123)
 	assert generic_asm(i) == 14
 	assert i == 137

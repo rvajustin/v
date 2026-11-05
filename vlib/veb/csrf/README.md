@@ -76,6 +76,8 @@ _main.v_
 
 ```v ignore
 fn (app &App) index(mut ctx) veb.Result {
+	// assign the config before generating the token on non-middleware routes
+	ctx.config = csrf_config
 	// this function will set a cookie header and generate a CSRF token
 	ctx.set_csrf_token(mut ctx)
 	return $veb.html()
@@ -140,23 +142,30 @@ fn (app &App) login(mut ctx, password string) veb.Result {
 
 When `set_csrf_token` is called the token is stored in the `csrf_token` field. You access
 this field directly to use it in an input field, or call `csrf_token_input`.
+`csrf_token_input` returns `veb.RawHtml`; `@{ctx.csrf_token_input()}` inserts a hidden
+input into a veb HTML template without escaping or adding quotation marks.
+If the handler is not covered by `csrf.middleware`, assign `ctx.config = csrf_config`
+first so the generated cookie and token use the same configuration.
 
 **Example:**
 
 ```v ignore
 fn (app &App) index(mut ctx) veb.Result {
+	ctx.config = csrf_config
 	token := ctx.set_csrf_token(mut ctx)
 }
 ```
 
 ### Clearing the anti-CSRF token
 
-If you want to remove the anti-CSRF token and the cookie header you can call `clear_csrf_token`
+To clear the anti-CSRF cookie, call `clear_csrf_token` with the user context.
+The cookie expires immediately with `Max-Age=0`, using `ctx.config.cookie_name`
+and `ctx.config.cookie_path` to match the original cookie.
 
 **Example:**
 
 ```v ignore
-ctx.clear_csrf_token()
+ctx.clear_csrf_token(mut ctx)
 ```
 
 ## How it works

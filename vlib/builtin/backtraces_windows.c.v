@@ -3,7 +3,7 @@ module builtin
 // dbghelp.h is already included in cheaders.v
 #flag windows -l dbghelp
 
-// SymbolInfo is used by print_backtrace_skipping_top_frames_msvc
+// SymbolInfo is used by print_backtrace_skipping_top_frames_msvc.
 pub struct SymbolInfo {
 pub mut:
 	f_size_of_struct u32 // must be 88 to be recognised by SymFromAddr
@@ -44,13 +44,16 @@ fn C.SymSetOptions(symoptions u32) u32
 // returns handle
 fn C.GetCurrentProcess() voidptr
 
-fn C.SymInitialize(h_process voidptr, p_user_search_path &u8, b_invade_process int) int
+fn C.SymInitialize(h_process voidptr, p_user_search_path &u8, b_invade_process i32) i32
 
 fn C.CaptureStackBackTrace(frames_to_skip u32, frames_to_capture u32, p_backtrace voidptr, p_backtrace_hash voidptr) u16
 
-fn C.SymFromAddr(h_process voidptr, address u64, p_displacement voidptr, p_symbol voidptr) int
-
-fn C.SymGetLineFromAddr64(h_process voidptr, address u64, p_displacement voidptr, p_line &Line64) int
+$if windows {
+	$if msvc {
+		fn C.SymFromAddr(h_process voidptr, address u64, p_displacement voidptr, p_symbol voidptr) i32
+		fn C.SymGetLineFromAddr64(h_process voidptr, address u64, p_displacement voidptr, p_line &Line64) i32
+	}
+}
 
 // Ref - https://docs.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-symsetoptions
 const symopt_undname = 0x00000002
@@ -61,7 +64,7 @@ const symopt_include_32bit_modules = 0x00002000
 const symopt_allow_zero_address = 0x01000000
 const symopt_debug = u32(0x80000000)
 
-// print_backtrace_skipping_top_frames prints the backtrace skipping N top frames
+// print_backtrace_skipping_top_frames prints the backtrace skipping N top frames.
 pub fn print_backtrace_skipping_top_frames(skipframes int) bool {
 	$if msvc {
 		return print_backtrace_skipping_top_frames_msvc(skipframes)
@@ -76,6 +79,7 @@ pub fn print_backtrace_skipping_top_frames(skipframes int) bool {
 	return false
 }
 
+@[direct_array_access]
 fn print_backtrace_skipping_top_frames_msvc(skipframes int) bool {
 	$if msvc {
 		mut offset := u64(0)
@@ -86,7 +90,7 @@ fn print_backtrace_skipping_top_frames_msvc(skipframes int) bool {
 		si.f_max_name_len = sizeof(SymbolInfoContainer) - sizeof(SymbolInfo) - 1
 		fname := &char(&si.f_name)
 		mut sline64 := Line64{
-			f_file_name: &u8(0)
+			f_file_name: &u8(unsafe { nil })
 		}
 		sline64.f_size_of_struct = sizeof(Line64)
 
@@ -110,29 +114,37 @@ fn print_backtrace_skipping_top_frames_msvc(skipframes int) bool {
 		}
 		for i in 0 .. frames {
 			frame_addr := backtraces[i]
-			if C.SymFromAddr(handle, frame_addr, &offset, si) == 1 {
+			if C.SymFromAddr(handle, u64(frame_addr), &offset, si) == 1 {
 				nframe := frames - i - 1
 				mut lineinfo := ''
-				if C.SymGetLineFromAddr64(handle, frame_addr, &offset, &sline64) == 1 {
+				if C.SymGetLineFromAddr64(handle, u64(frame_addr), &offset, &sline64) == 1 {
 					file_name := unsafe { tos3(sline64.f_file_name) }
 					lnumber := sline64.f_line_number
-					lineinfo = '${file_name}:${lnumber}'
+					lineinfo = file_name + ':' + i64(lnumber).str()
 				} else {
 					// addr:
-					lineinfo = '?? : address = 0x${(&frame_addr):x}'
+					lineinfo = '?? : address = 0x' + ptr_str(frame_addr)
 				}
-				sfunc := unsafe { tos3(fname) }
-				eprintln('${nframe:-2d}: ${sfunc:-25s}  ${lineinfo}')
+				sfunc := demangle_v_symbol(unsafe { tos3(fname) })
+				snframe := i64(nframe).str()
+				eprint_space_padding(snframe, 2)
+				eprint(': ')
+				eprint(sfunc)
+				eprint_space_padding(sfunc, 25)
+				eprint('  ')
+				eprintln(lineinfo)
 			} else {
 				// https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes
 				cerr := int(C.GetLastError())
+				eprint('SymFromAddr failure: ')
+				eprint(i64(cerr).str())
 				if cerr == 87 {
-					eprintln('SymFromAddr failure: ${cerr} = The parameter is incorrect)')
+					eprintln(' = The parameter is incorrect)')
 				} else if cerr == 487 {
 					// probably caused because the .pdb isn't in the executable folder
-					eprintln('SymFromAddr failure: ${cerr} = Attempt to access invalid address (Verify that you have the .pdb file in the right folder.)')
+					eprintln(' = Attempt to access invalid address (Verify that you have the .pdb file in the right folder.)')
 				} else {
-					eprintln('SymFromAddr failure: ${cerr} (see https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes)')
+					eprintln(' (see https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes)')
 				}
 			}
 		}
@@ -148,10 +160,11 @@ fn print_backtrace_skipping_top_frames_mingw(skipframes int) bool {
 	return false
 }
 
-fn C.tcc_backtrace(fmt &char) int
+@[c_extern]
+fn C.tcc_backtrace(fmt &char) i32
 
 fn print_backtrace_skipping_top_frames_tcc(skipframes int) bool {
-	$if tinyc && !native {
+	$if tinyc {
 		$if no_backtrace ? {
 			eprintln('backtraces are disabled')
 			return false

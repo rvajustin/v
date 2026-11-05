@@ -2,20 +2,36 @@ module xml
 
 import strings
 
-// pretty_str returns a pretty-printed version of the XML node. It requires the current indentation
-// the node is at, the depth of the node in the tree, and a map of reverse entities to use when
-// escaping text.
-pub fn (node XMLNode) pretty_str(original_indent string, depth int, reverse_entities map[string]string) string {
-	// Create the proper indentation first
-	mut indent_builder := strings.new_builder(original_indent.len * depth)
+fn write_indent(mut builder strings.Builder, indent string, depth int) {
 	for _ in 0 .. depth {
-		indent_builder.write_string(original_indent)
+		builder.write_string(indent)
 	}
-	indent := indent_builder.str()
+}
 
-	// Now we can stringify the node
-	mut builder := strings.new_builder(1024)
-	builder.write_string(indent)
+fn escape_node_text(text string, reverse_entities map[string]string) string {
+	escaped := escape_text(text, reverse_entities: reverse_entities)
+	mut start := 0
+	for start < escaped.len && escaped[start] in [u8(9), 10, 13, 32] {
+		start++
+	}
+	mut end := escaped.len
+	for end > start && escaped[end - 1] in [u8(9), 10, 13, 32] {
+		end--
+	}
+	mut builder := strings.new_builder(escaped.len)
+	for i, ch in escaped {
+		// References protect text edges from trimming and CR from CRLF normalization.
+		if ch == `\r` || ((i < start || i >= end) && ch in [u8(9), 10, 32]) {
+			builder.write_string('&#${ch};')
+		} else {
+			builder.write_u8(ch)
+		}
+	}
+	return builder.str()
+}
+
+fn write_pretty_xml_node(mut builder strings.Builder, node XMLNode, original_indent string, depth int, reverse_entities map[string]string) {
+	write_indent(mut builder, original_indent, depth)
 	builder.write_u8(`<`)
 	builder.write_string(node.name)
 
@@ -23,55 +39,62 @@ pub fn (node XMLNode) pretty_str(original_indent string, depth int, reverse_enti
 		builder.write_u8(` `)
 		builder.write_string(key)
 		builder.write_string('="')
-		builder.write_string(value)
+		builder.write_string(escape_text(value))
 		builder.write_u8(`"`)
 	}
 	if node.children.len > 0 {
 		builder.write_string('>\n')
+		mut in_text_run := false
 		for child in node.children {
+			if child is XMLNode {
+				if in_text_run {
+					builder.write_u8(`\n`)
+					in_text_run = false
+				}
+				write_pretty_xml_node(mut builder, child, original_indent, depth + 1,
+					reverse_entities)
+				builder.write_u8(`\n`)
+				continue
+			}
+			// Keep a text run together so formatting cannot add whitespace around controls.
+			if !in_text_run {
+				write_indent(mut builder, original_indent, depth + 1)
+				in_text_run = true
+			}
 			match child {
 				string {
-					builder.write_string(indent)
-					builder.write_string(original_indent)
-					builder.write_string(escape_text(child, reverse_entities: reverse_entities))
-				}
-				XMLNode {
-					builder.write_string(child.pretty_str(original_indent, depth + 1,
-						reverse_entities))
+					builder.write_string(escape_node_text(child, reverse_entities))
 				}
 				XMLComment {
-					builder.write_string(indent)
-					builder.write_string(original_indent)
 					builder.write_string('<!--')
 					builder.write_string(child.text)
 					builder.write_string('-->')
 				}
 				XMLCData {
-					builder.write_string(indent)
-					builder.write_string(original_indent)
 					builder.write_string('<![CDATA[')
 					builder.write_string(child.text)
 					builder.write_string(']]>')
 				}
+				else {}
 			}
+		}
+		if in_text_run {
 			builder.write_u8(`\n`)
 		}
-		builder.write_string(indent)
+		write_indent(mut builder, original_indent, depth)
 		builder.write_string('</')
 		builder.write_string(node.name)
 		builder.write_u8(`>`)
 	} else {
 		builder.write_string('/>')
 	}
-	return builder.str()
 }
 
-fn (list []DTDListItem) pretty_str(indent string) string {
+fn write_pretty_dtd_list(mut builder strings.Builder, list []DTDListItem, indent string) bool {
 	if list.len == 0 {
-		return ''
+		return false
 	}
 
-	mut builder := strings.new_builder(1024)
 	builder.write_u8(`[`)
 	builder.write_u8(`\n`)
 
@@ -89,50 +112,88 @@ fn (list []DTDListItem) pretty_str(indent string) string {
 				builder.write_string(indent)
 				builder.write_string('<!ELEMENT ')
 				builder.write_string(item.name)
-				builder.write_string(' [')
+				builder.write_string(' (')
 				builder.write_string(item.definition.join(', '))
-				builder.write_string(']>')
+				builder.write_string(')>')
 			}
 		}
+
 		builder.write_u8(`\n`)
 	}
 	builder.write_u8(`]`)
-	return builder.str()
+	return true
 }
 
-fn (doctype DocumentType) pretty_str(indent string) string {
-	mut builder := strings.new_builder(1024)
+fn write_pretty_doctype(mut builder strings.Builder, doctype DocumentType, indent string) bool {
+	if doctype.external_id != '' {
+		builder.write_string('<!DOCTYPE ')
+		builder.write_string(doctype.name)
+		builder.write_u8(` `)
+		builder.write_string(doctype.external_id)
+		if doctype.dtd is DocumentTypeDefinition && doctype.dtd.list.len > 0 {
+			builder.write_u8(` `)
+			write_pretty_dtd_list(mut builder, doctype.dtd.list, indent)
+		}
+		builder.write_string('>\n')
+		return true
+	}
 	match doctype.dtd {
 		string {
 			content := doctype.dtd
-			return if content.len > 0 {
-				builder.write_string('<!DOCTYPE ')
-				builder.write_string(doctype.name)
-				builder.write_string(' SYSTEM ')
-				builder.write_string(content)
-				builder.write_string('>\n')
-				builder.str()
-			} else {
-				''
+			if content.len == 0 {
+				return false
 			}
+			builder.write_string('<!DOCTYPE ')
+			builder.write_string(doctype.name)
+			builder.write_string(' SYSTEM ')
+			builder.write_string(content)
+			builder.write_string('>\n')
+			return true
 		}
 		DocumentTypeDefinition {
 			if doctype.dtd.list.len == 0 {
-				return ''
+				return false
 			}
 
 			builder.write_string('<!DOCTYPE ')
 			builder.write_string(doctype.name)
 			builder.write_string(' ')
-			builder.write_string(doctype.dtd.list.pretty_str(indent))
+			write_pretty_dtd_list(mut builder, doctype.dtd.list, indent)
 			builder.write_string('>\n')
-			return builder.str()
+			return true
 		}
 	}
 }
 
+// pretty_str returns a pretty-printed version of the XML node. It requires the current indentation
+// the node is at, the depth of the node in the tree, and a map of reverse entities to use when
+// escaping text. Text runs containing comments or CDATA stay together, and significant whitespace
+// is preserved with character references.
+pub fn (node XMLNode) pretty_str(original_indent string, depth int, reverse_entities map[string]string) string {
+	mut builder := strings.new_builder(1024)
+	write_pretty_xml_node(mut builder, node, original_indent, depth, reverse_entities)
+	return builder.str()
+}
+
+fn (list []DTDListItem) pretty_str(indent string) string {
+	mut builder := strings.new_builder(1024)
+	if !write_pretty_dtd_list(mut builder, list, indent) {
+		return ''
+	}
+	return builder.str()
+}
+
+fn (doctype DocumentType) pretty_str(indent string) string {
+	mut builder := strings.new_builder(1024)
+	if !write_pretty_doctype(mut builder, doctype, indent) {
+		return ''
+	}
+	return builder.str()
+}
+
 // pretty_str returns a pretty-printed version of the XML document. It requires the string used to
-// indent each level of the document.
+// indent each level of the document. Significant text whitespace is preserved with character
+// references, and comments and CDATA do not add whitespace inside text runs.
 pub fn (doc XMLDocument) pretty_str(indent string) string {
 	mut document_builder := strings.new_builder(1024)
 
@@ -142,28 +203,16 @@ pub fn (doc XMLDocument) pretty_str(indent string) string {
 	document_builder.write_string(doc.encoding)
 	document_builder.write_string('"?>\n')
 
-	comments := if doc.comments.len > 0 {
-		mut comments_buffer := strings.new_builder(512)
-		for comment in doc.comments {
-			comments_buffer.write_string('<!--')
-			comments_buffer.write_string(comment.text)
-			comments_buffer.write_string('-->')
-			comments_buffer.write_u8(`\n`)
-		}
-		comments_buffer.str()
-	} else {
-		''
-	}
-
-	doctype_string := doc.doctype.pretty_str(indent)
-	if doctype_string.len > 0 {
-		document_builder.write_string(doctype_string)
+	if write_pretty_doctype(mut document_builder, doc.doctype, indent) {
 		document_builder.write_u8(`\n`)
 	}
-	if comments.len > 0 {
-		document_builder.write_string(comments)
+	for comment in doc.comments {
+		document_builder.write_string('<!--')
+		document_builder.write_string(comment.text)
+		document_builder.write_string('-->')
+		document_builder.write_u8(`\n`)
 	}
-	document_builder.write_string(doc.root.pretty_str(indent, 0, doc.parsed_reverse_entities))
+	write_pretty_xml_node(mut document_builder, doc.root, indent, 0, doc.parsed_reverse_entities)
 
 	return document_builder.str()
 }

@@ -39,13 +39,15 @@ pub fn vwasm_memory_grow(size int) int {
 
 // vcalloc dynamically allocates a zeroed `n` bytes block of memory on the heap.
 // vcalloc returns a `byteptr` pointing to the memory address of the allocated space.
-// Unlike `v_calloc` vcalloc checks for negative values given in `n`.
+// vcalloc checks for negative values given in `n`.
 @[unsafe]
-pub fn vcalloc(n isize) &u8 {
+pub fn vcalloc(n int) &u8 {
 	if n <= 0 {
-		panic('vcalloc(n <= 0)')
-	} else if n == 0 {
-		return &u8(0)
+		$if no_imports ? {
+			return unsafe { nil }
+		} $else {
+			panic('valloc(n <= 0)')
+		}
 	}
 
 	res := unsafe { malloc(n) }
@@ -71,7 +73,7 @@ pub fn isnil(v voidptr) bool {
 // vmemcpy copies n bytes from memory area src to memory area dest.
 // The memory areas **CAN** overlap. vmemcpy returns a pointer to `dest`.
 @[unsafe]
-pub fn vmemcpy(dest voidptr, const_src voidptr, n isize) voidptr {
+pub fn vmemcpy(dest voidptr, const_src voidptr, n int) voidptr {
 	asm wasm {
 		local.get dest
 		local.get const_src
@@ -87,7 +89,7 @@ pub fn vmemcpy(dest voidptr, const_src voidptr, n isize) voidptr {
 // vmemmove copies n bytes from memory area src to memory area dest.
 // The memory areas **CAN** overlap. vmemmove returns a pointer to `dest`.
 @[unsafe]
-pub fn vmemmove(dest voidptr, const_src voidptr, n isize) voidptr {
+pub fn vmemmove(dest voidptr, const_src voidptr, n int) voidptr {
 	asm wasm {
 		local.get dest
 		local.get const_src
@@ -103,7 +105,7 @@ pub fn vmemmove(dest voidptr, const_src voidptr, n isize) voidptr {
 // vmemset fills the first `n` bytes of the memory area pointed to by `s`,
 // with the constant byte `c`. It returns a pointer to the memory area `s`.
 @[unsafe]
-pub fn vmemset(s voidptr, c int, n isize) voidptr {
+pub fn vmemset(s voidptr, c int, n int) voidptr {
 	asm wasm {
 		local.get s
 		local.get c

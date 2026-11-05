@@ -19,7 +19,8 @@ pub fn set_cursor_position(c Coord) {
 	flush_stdout()
 }
 
-// n is number of cells
+// move the cursor relative to its current position.
+// n is number of cells.
 // direction: A is up / North
 // direction: B is down / South
 // direction: C is forward / East
@@ -71,8 +72,7 @@ pub fn erase_tobeg() {
 	erase_display('1')
 }
 
-// erase_clear clears the entire terminal window and returns the cursor to the
-// top left corner.
+// erase_clear clears the entire terminal window and returns the cursor to the top left corner.
 pub fn erase_clear() {
 	print('\033[H\033[J')
 	flush_stdout()
@@ -99,8 +99,7 @@ pub fn erase_line_toend() {
 	erase_line('0')
 }
 
-// erase_line_tobeg erases from the start of the line to the cursor
-// position.
+// erase_line_tobeg erases from the start of the line to the cursor position.
 pub fn erase_line_tobeg() {
 	erase_line('1')
 }
@@ -129,4 +128,11 @@ pub fn hide_cursor() {
 pub fn clear_previous_line() {
 	print('\r\x1b[1A\x1b[2K')
 	flush_stdout()
+}
+
+// show_cursor_on_exit restores the cursor when main returns or exit is called.
+// It preserves the application's signal handlers. Signal termination does not run
+// exit callbacks; applications should arrange signal cleanup in normal execution.
+pub fn show_cursor_on_exit() {
+	at_exit(show_cursor) or {}
 }

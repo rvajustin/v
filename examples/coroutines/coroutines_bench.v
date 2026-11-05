@@ -1,6 +1,5 @@
-// Build with (-gc none, until GC bug is fixed)
-// v -gc none -use-coroutines coroutine_benchs.v
-//
+// vtest build: false // This should be build with: `v -use-coroutines coroutine_benchs.v`
+// Note: the Photon wrapper is not yet trivial enough to build/install on the CI.
 import coroutines
 import time
 import net.http
@@ -11,7 +10,7 @@ const run_time = 10 * time.second
 fn request(mut mu sync.Mutex, count &int) {
 	for {
 		http.get('http://vlang.io/utc_now') or { panic(err) }
-		mu.@lock()
+		mu.lock()
 		unsafe {
 			(*count)++
 		}

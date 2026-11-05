@@ -36,8 +36,7 @@ pub:
 	execute bool
 }
 
-// bitmask returns a 3 bit sequence in the order RWE where
-// the bit is set to 1 if the value is true or 0 otherwise.
+// bitmask returns a 3 bit sequence in the order RWE, where the bit is set to 1 if the value is true or 0 otherwise.
 pub fn (p FilePermission) bitmask() u32 {
 	mut mask := u32(0)
 	if p.read {
@@ -59,17 +58,17 @@ pub fn (m FileMode) bitmask() u32 {
 }
 
 // inode returns the metadata of the file/inode, containing inode type, permission information, size and modification time.
-// it supports windows for regular files, but it doesn't matter if you use owner, group or others when checking permissions on windows.
-// if a symlink is targeted, it returns info on the link, not the target
+// It supports Windows for regular files, but it doesn't matter if you use owner, group or others when checking permissions on Windows.
+// if a symlink is targeted, it returns info on the link, not the target.
 pub fn inode(path string) FileInfo {
 	attr := lstat(path) or { Stat{} }
 	fm := attr.get_mode()
 	return FileInfo{
-		typ: fm.typ
-		owner: fm.owner
-		group: fm.group
+		typ:    fm.typ
+		owner:  fm.owner
+		group:  fm.group
 		others: fm.others
-		size: attr.size
-		mtime: attr.mtime
+		size:   attr.size
+		mtime:  attr.mtime
 	}
 }

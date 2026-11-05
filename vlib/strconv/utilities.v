@@ -36,6 +36,12 @@ fn bool_to_u64(b bool) u64 {
 	return u64(0)
 }
 
+// format_has_sign_bit reports whether the sign bit of `x` is set. Unlike `x < 0.0`, it is true for -0.0 too.
+@[inline]
+fn format_has_sign_bit(x f64) bool {
+	return bits.f64_bits(x) >> 63 != 0
+}
+
 fn get_string_special(neg bool, expZero bool, mantZero bool) string {
 	if !mantZero {
 		return 'nan'
@@ -67,11 +73,15 @@ fn mul_shift_32(m u32, mul u64, ishift int) u32 {
 	return u32(shifted_sum)
 }
 
+@[direct_array_access; inline]
 fn mul_pow5_invdiv_pow2(m u32, q u32, j int) u32 {
+	assert1(q < pow5_inv_split_32.len, 'q < pow5_inv_split_32.len')
 	return mul_shift_32(m, pow5_inv_split_32[q], j)
 }
 
+@[direct_array_access; inline]
 fn mul_pow5_div_pow2(m u32, i u32, j int) u32 {
+	assert1(i < pow5_split_32.len, 'i < pow5_split_32.len')
 	return mul_shift_32(m, pow5_split_32[i], j)
 }
 

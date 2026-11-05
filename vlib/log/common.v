@@ -7,8 +7,8 @@ pub enum Level {
 	disabled = 0 // lowest level, disables everything else
 	fatal // disables error, warn, info and debug
 	error // disables warn, info and debug
-	warn // disables info and debug
-	info // disables debug
+	warn  // disables info and debug
+	info  // disables debug
 	debug
 }
 
@@ -19,8 +19,9 @@ pub enum LogTarget {
 	both
 }
 
-// tag_to_cli returns the tag for log level `l` as a colored string.
-fn tag_to_cli(l Level, short_tag bool) string {
+// tag_to_console returns the tag for log level `l` as a colored string.
+@[noinline]
+fn tag_to_console(l Level, short_tag bool) string {
 	if short_tag {
 		return match l {
 			.disabled { ' ' }
@@ -43,6 +44,7 @@ fn tag_to_cli(l Level, short_tag bool) string {
 }
 
 // tag_to_file returns the tag for log level `l` as a string.
+@[noinline]
 fn tag_to_file(l Level, short_tag bool) string {
 	if short_tag {
 		return match l {
@@ -67,6 +69,7 @@ fn tag_to_file(l Level, short_tag bool) string {
 
 // level_from_tag returns the log level from the given string.
 // It returns `none` when it does not find a match.
+@[noinline]
 pub fn level_from_tag(tag string) ?Level {
 	return match tag {
 		'DISABLED', ' ' { Level.disabled }
@@ -81,6 +84,7 @@ pub fn level_from_tag(tag string) ?Level {
 
 // target_from_label returns the log target from the given string.
 // It returns `none` when it does not find a match.
+@[noinline]
 pub fn target_from_label(label string) ?LogTarget {
 	return match label {
 		'console' { LogTarget.console }

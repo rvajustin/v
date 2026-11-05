@@ -1,4 +1,6 @@
+import math.big
 import math.unsigned
+import rand
 
 fn test_str() {
 	x := unsigned.uint128_from_dec_str('170141183460469231713240559642174554112') or { panic('') }
@@ -41,53 +43,53 @@ fn new(x u64, y u64) unsigned.Uint128 {
 fn test_leading_zeros() {
 	tcs := [
 		LeadingZeros{
-			l: new(0x00, 0xf000000000000000)
-			r: new(0x00, 0x8000000000000000)
+			l:     new(0x00, 0xf000000000000000)
+			r:     new(0x00, 0x8000000000000000)
 			zeros: 1
 		},
 		LeadingZeros{
-			l: new(0x00, 0xf000000000000000)
-			r: new(0x00, 0xc000000000000000)
+			l:     new(0x00, 0xf000000000000000)
+			r:     new(0x00, 0xc000000000000000)
 			zeros: 2
 		},
 		LeadingZeros{
-			l: new(0x00, 0xf000000000000000)
-			r: new(0x00, 0xe000000000000000)
+			l:     new(0x00, 0xf000000000000000)
+			r:     new(0x00, 0xe000000000000000)
 			zeros: 3
 		},
 		LeadingZeros{
-			l: new(0x00, 0xffff000000000000)
-			r: new(0x00, 0xff00000000000000)
+			l:     new(0x00, 0xffff000000000000)
+			r:     new(0x00, 0xff00000000000000)
 			zeros: 8
 		},
 		LeadingZeros{
-			l: new(0x00, 0x000000000000ffff)
-			r: new(0x00, 0x000000000000ff00)
+			l:     new(0x00, 0x000000000000ffff)
+			r:     new(0x00, 0x000000000000ff00)
 			zeros: 56
 		},
 		LeadingZeros{
-			l: new(0xf000000000000000, 0x01)
-			r: new(0x4000000000000000, 0x00)
+			l:     new(0xf000000000000000, 0x01)
+			r:     new(0x4000000000000000, 0x00)
 			zeros: 63
 		},
 		LeadingZeros{
-			l: new(0xf000000000000000, 0x00)
-			r: new(0x4000000000000000, 0x00)
+			l:     new(0xf000000000000000, 0x00)
+			r:     new(0x4000000000000000, 0x00)
 			zeros: 64
 		},
 		LeadingZeros{
-			l: new(0xf000000000000000, 0x00)
-			r: new(0x8000000000000000, 0x00)
+			l:     new(0xf000000000000000, 0x00)
+			r:     new(0x8000000000000000, 0x00)
 			zeros: 65
 		},
 		LeadingZeros{
-			l: new(0x00, 0x00)
-			r: new(0x00, 0x00)
+			l:     new(0x00, 0x00)
+			r:     new(0x00, 0x00)
 			zeros: 128
 		},
 		LeadingZeros{
-			l: new(0x01, 0x00)
-			r: new(0x00, 0x00)
+			l:     new(0x01, 0x00)
+			r:     new(0x00, 0x00)
 			zeros: 127
 		},
 	]
@@ -169,4 +171,84 @@ fn test_separators() {
 
 		assert with == without
 	}
+}
+
+fn test_new() {
+	assert unsigned.uint128_new(max_u64, max_u64) == unsigned.uint128_max
+}
+
+fn test_lsh() {
+	a := unsigned.uint128_from_dec_str('123456789012345678901234567890')!
+	assert a.str() == a.lsh(0).str()
+	assert '246913578024691357802469135780' == a.lsh(1).str()
+	assert '259801135457060040952792416454273138688' == a.lsh(64).str()
+	assert '302984417681386893975453667670529933312' == a.lsh(100).str()
+	assert unsigned.uint128_zero == a.lsh(200)
+}
+
+fn test_rsh() {
+	a := unsigned.uint128_from_dec_str('279625844435276397900870454226348864638')!
+	assert a.str() == a.rsh(0).str()
+	assert '139812922217638198950435227113174432319' == a.rsh(1).str()
+	assert '15158547400991018568' == a.rsh(64).str()
+	assert '220585896' == a.rsh(100).str()
+	assert '1' == a.rsh(127).str()
+	assert unsigned.uint128_zero == a.rsh(200)
+}
+
+fn test_quo_rem() {
+	for a_lo in 0 .. 16 {
+		for a_hi in 0 .. 16 {
+			for b_lo in 0 .. 16 {
+				for b_hi in 0 .. 16 {
+					a := unsigned.uint128_new(u64(1 << a_lo), u64(1 << a_hi))
+					b := unsigned.uint128_new(u64(1 << b_lo), u64(1 << b_hi))
+					big_a := big.integer_from_string(a.str())!
+					big_b := big.integer_from_string(b.str())!
+					q, r := a.quo_rem(b)
+					big_q, big_r := big_a.div_mod(big_b)
+					assert q.str() == big_q.str()
+					assert r.str() == big_r.str()
+				}
+			}
+		}
+	}
+}
+
+fn test_div_128() {
+	for a_lo in 0 .. 4 {
+		for a_hi in 0 .. 4 {
+			for b_lo in 0 .. 4 {
+				for b_hi in 0 .. 4 {
+					for c_lo in 0 .. 4 {
+						for c_hi in 0 .. 4 {
+							a := unsigned.uint128_new(u64(1 << a_lo), u64(1 << a_hi))
+							b := unsigned.uint128_new(u64(1 << b_lo), u64(1 << b_hi))
+							c := unsigned.uint128_new(u64(1 << c_lo), u64(1 << c_hi))
+							if c.cmp(a) <= 0 {
+								continue
+							}
+							aa := unsigned.uint256_new(b, a)
+							big_a := big.integer_from_string(aa.str())!
+							big_b := big.integer_from_string(c.str())!
+							q, r := unsigned.div_128(a, b, c)
+							big_q, big_r := big_a.div_mod(big_b)
+							assert q.str() == big_q.str()
+							assert r.str() == big_r.str()
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+fn test_put_bytes() {
+	a := unsigned.uint128_new(rand.u64(), rand.u64())
+	b := a.reverse_bytes()
+	mut buf_a := []u8{len: 16}
+	mut buf_b := []u8{len: 16}
+	a.put_bytes(mut buf_a)
+	b.put_bytes(mut buf_b)
+	assert buf_a == buf_b.reverse()
 }

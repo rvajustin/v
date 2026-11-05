@@ -19,7 +19,8 @@ pub fn (mut d TerminalStreamingDownloader) on_start(mut request Request, path st
 }
 
 // on_chunk is called multiple times, once per chunk of received content.
-pub fn (mut d TerminalStreamingDownloader) on_chunk(request &Request, chunk []u8, already_received u64, expected u64) ! {
+pub fn (mut d TerminalStreamingDownloader) on_chunk(request &Request, chunk []u8, already_received u64,
+	expected u64) ! {
 	now := time.now()
 	elapsed := now - d.start_time
 	// delta_elapsed := now - d.past_time
@@ -27,7 +28,11 @@ pub fn (mut d TerminalStreamingDownloader) on_chunk(request &Request, chunk []u8
 	d.past_time = now
 	d.past_received = already_received
 	ratio := f64(already_received) / f64(expected)
-	estimated := time.Duration(i64(f64(elapsed) / ratio))
+	res := f64(elapsed) / ratio
+	mut estimated := time.Duration(max_i64)
+	if f64(min_i64) < res && res < f64(max_i64) {
+		estimated = i64(res)
+	}
 	speed := f64(time.millisecond) * f64(already_received) / f64(elapsed)
 	elapsed_s := elapsed.seconds()
 	estimated_s := estimated.seconds()

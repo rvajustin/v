@@ -1,6 +1,5 @@
+// vtest retry: 3
 module sync
-
-import time
 
 fn do_rec_i64(mut ch Channel) {
 	mut sum := i64(0)
@@ -57,7 +56,7 @@ fn test_select() {
 	mut sl := i64(0)
 	mut objs := [voidptr(&ri), &sl, &rl, &rb]
 	for j in 0 .. 1101 {
-		idx := channel_select(mut channels, directions, mut objs, time.infinite)
+		idx := channel_select(mut channels, directions, mut objs, infinite_timeout)
 		match idx {
 			0 {
 				sum += ri
@@ -80,13 +79,14 @@ fn test_select() {
 				assert false
 			}
 		}
+
 		if j == 1100 {
 			// check also in other direction
 			assert idx == -2
 		}
 	}
 	// Use Gauß' formula for the first 2 contributions
-	// the 3rd contribution is `byte` and must be seen modulo 256
+	// the 3rd contribution is `u8` and must be seen modulo 256
 	expected_sum := 2 * (300 * (300 - 1) / 2) + 256 * (256 - 1) / 2 + 44 * (44 - 1) / 2
 	assert sum == expected_sum
 }

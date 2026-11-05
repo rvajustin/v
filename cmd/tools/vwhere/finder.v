@@ -15,7 +15,7 @@ mut:
 	modul    string
 	receiver string
 	dirs     []string
-	matches  []Match
+	matches  []Match // all the results are collected here
 }
 
 fn (mut fdr Finder) configure_from_arguments(args []string) {
@@ -71,15 +71,24 @@ fn (mut fdr Finder) search_for_matches() {
 		}
 		paths_to_search << vmod_paths
 	} else if fdr.dirs.len == 0 && fdr.modul != '' {
-		paths_to_search << if fdr.modul == 'main' { current_dir } else { resolve_module(fdr.modul) or {
-				panic(err)} }
+		paths_to_search << if fdr.modul == 'main' {
+			current_dir
+		} else {
+			resolve_module(fdr.modul) or {
+				panic(err)
+			}
+		}
 	} else if fdr.dirs.len != 0 && fdr.modul == '' {
-		recursive = false
 		paths_to_search << fdr.dirs.map(resolve_module(it) or { panic(err) })
 	} else {
 		recursive = false
-		paths_to_search << if fdr.modul == 'main' { current_dir } else { resolve_module(fdr.modul) or {
-				panic(err)} }
+		paths_to_search << if fdr.modul == 'main' {
+			current_dir
+		} else {
+			resolve_module(fdr.modul) or {
+				panic(err)
+			}
+		}
 		paths_to_search << fdr.dirs.map(resolve_module(it) or { panic(err) })
 	}
 
@@ -105,13 +114,16 @@ fn (mut fdr Finder) search_for_matches() {
 	na := '${fdr.name}'
 
 	query := match fdr.symbol {
-		.@fn { '.*${sy}${sp}${na}${sp}${op}.*${cp}.*' }
+		.fn { '.*${sy}${sp}${na}${sp}${op}.*${cp}.*' }
 		.method { '.*fn${st}${na}${sp}${op}.*${cp}.*' }
 		.var { '.*${na}${sp}:=.*' }
-		.@const { '.*${na}${sp} = .*' }
+		.const { '.*${na}${sp} = .*' }
 		.regexp { '${na}' }
-		else { '.*${sy}${sp}${na}${sp}.*' } // struct, enum, interface
+		else { '.*${sy}${sp}${na}${sp}.*' }
 	}
+
+	// struct, enum, interface
+
 	// dump(query)
 	for file in files_to_search {
 		fdr.search_within_file(file, query)
@@ -121,7 +133,7 @@ fn (mut fdr Finder) search_for_matches() {
 fn (mut fdr Finder) search_within_file(file string, query string) {
 	mut re := regex.regex_opt(query) or { panic(err) }
 	lines := os.read_lines(file) or { panic(err) }
-	mut const_found := if fdr.symbol == .@const { false } else { true }
+	mut const_found := if fdr.symbol == .const { false } else { true }
 	mut n_line := 1
 	for line in lines {
 		match fdr.visib {
@@ -130,7 +142,7 @@ fn (mut fdr Finder) search_within_file(file string, query string) {
 					const_found = true
 				}
 			}
-			.@pub {
+			.pub {
 				if line.contains('pub const (') {
 					const_found = true
 				}
@@ -141,21 +153,23 @@ fn (mut fdr Finder) search_within_file(file string, query string) {
 				}
 			}
 		}
+
 		if re.matches_string(line) && (const_found || line.contains('const')) {
 			words := line.split(' ').filter(it != '').map(it.trim('\t'))
 			match fdr.visib {
 				.all {}
-				.@pub {
-					if 'pub' !in words && fdr.symbol != .@const {
+				.pub {
+					if 'pub' !in words && fdr.symbol != .const {
 						continue
 					}
 				}
 				.pri {
-					if 'pub' in words && fdr.symbol != .@const {
+					if 'pub' in words && fdr.symbol != .const {
 						continue
 					}
 				}
 			}
+
 			match fdr.mutab {
 				.any {}
 				.yes {
@@ -169,9 +183,10 @@ fn (mut fdr Finder) search_within_file(file string, query string) {
 					}
 				}
 			}
+
 			fdr.matches << Match{file, n_line, words.join(' ').trim(' {')}
 		}
-		if line.starts_with(')') && fdr.symbol == .@const {
+		if line.starts_with(')') && fdr.symbol == .const {
 			const_found = false
 		}
 		n_line++

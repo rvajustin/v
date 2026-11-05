@@ -40,6 +40,8 @@ pub:
 	cookie_domain string
 	// whether the cookie can be send only over HTTPS
 	secure bool
+	// enable printing verbose statements
+	verbose bool
 }
 
 pub struct CsrfContext {
@@ -56,12 +58,13 @@ pub fn (mut ctx CsrfContext) set_csrf_token[T](mut user_context T) string {
 	return ctx.csrf_token
 }
 
-// clear the csrf token and cookie header from the context
+// clear_csrf_token expires the CSRF cookie using the context's configured cookie name and path.
 pub fn (ctx &CsrfContext) clear_csrf_token[T](mut user_context T) {
 	user_context.set_cookie(http.Cookie{
-		name: config.cookie_name
-		value: ''
-		max_age: 0
+		name:    ctx.config.cookie_name
+		value:   ''
+		path:    ctx.config.cookie_path
+		max_age: -1
 	})
 }
 
@@ -73,7 +76,7 @@ pub fn (ctx &CsrfContext) csrf_token_input() veb.RawHtml {
 // middleware returns a handler that you can use with veb's middleware
 pub fn middleware[T](config CsrfConfig) veb.MiddlewareOptions[T] {
 	return veb.MiddlewareOptions[T]{
-		after: false
+		after:   false
 		handler: fn [config] [T](mut ctx T) bool {
 			ctx.config = config
 			if ctx.exempt {
@@ -99,14 +102,14 @@ pub fn set_token(mut ctx veb.Context, config &CsrfConfig) string {
 	// the hmac key is set as a cookie and later validated with `app.token` that must
 	// be in an html form
 	ctx.set_cookie(http.Cookie{
-		name: config.cookie_name
-		value: cookie
+		name:      config.cookie_name
+		value:     cookie
 		same_site: config.same_site
 		http_only: true
-		secure: config.secure
-		path: config.cookie_path
-		expires: expire_time
-		max_age: config.max_age
+		secure:    config.secure
+		path:      config.cookie_path
+		expires:   expire_time
+		max_age:   config.max_age
 	})
 
 	return token
@@ -136,7 +139,9 @@ pub fn protect(mut ctx veb.Context, config &CsrfConfig) bool {
 	}
 	// retrieve timestamp and nonce from csrftoken
 	data := base64.url_decode_str(actual_token).split('.')
-	println(data)
+	if config.verbose {
+		eprintln('[CSRF] Token data: ${data}')
+	}
 	if data.len < 3 {
 		request_is_invalid(mut ctx)
 		return false
@@ -164,15 +169,22 @@ pub fn protect(mut ctx veb.Context, config &CsrfConfig) bool {
 
 	// generate new hmac based on information in the http request
 	expected_hash := generate_cookie(expire_timestamp, expected_token, config.secret)
-	eprintln(actual_hash)
-	eprintln(expected_hash)
+	if config.verbose {
+		eprintln('[CSRF] Actual Hash: ${actual_hash}')
+		eprintln('[CSRF] Expected Hash: ${expected_hash}')
+	}
 
 	// if the new hmac matches the cookie value the request is legit
 	if actual_hash != expected_hash {
+		if config.verbose {
+			eprintln('[CSRF] The actual hash differs from the expected hash')
+		}
 		request_is_invalid(mut ctx)
 		return false
 	}
-	eprintln('matching')
+	if config.verbose {
+		eprintln('[CSRF] The actual hash matches the expected hash')
+	}
 
 	return true
 }
@@ -222,7 +234,8 @@ fn generate_token(expire_time i64, session_id string, nonce_length int) string {
 // generate_cookie converts secret key based on the request context and a random
 // token into an hmac key
 fn generate_cookie(expire_time i64, token string, secret string) string {
-	hash := base64.url_encode(hmac.new(secret.bytes(), token.bytes(), sha256.sum, sha256.block_size))
+	hash :=
+		base64.url_encode(hmac.new(secret.bytes(), token.bytes(), sha256.sum, sha256.block_size))
 	cookie := '${expire_time}.${hash}'
 
 	return cookie

@@ -1,3 +1,44 @@
+## How to help and contribute to the V project
+
+The tasks in the lists below are ordered in terms of easiness/time/nerves
+investment.
+
+### Starting tasks
+0. Run `v quest` once (or several times a day) to gain XP.
+
+1. Read the [language documentation](https://docs.vlang.io/introduction.html) and [standard module documentation](https://modules.vlang.io/).
+
+2. Fix doc errors and places you found unclear, and make [PRs](https://github.com/vlang/v/pulls) about it.
+
+3. Make V programs, in the areas that you are interested in, or help others make
+   V programs. If the programs/libraries are public, post them to the channel
+   `#showcase-discussion` on [Discord](https://discord.gg/vlang) and/or to
+   [awesome-v](https://github.com/vlang/awesome-v). You can also answer other
+   people's questions in Discord channels `#help` or `#v-chat`, or in
+   [github's discussions page](https://github.com/vlang/v/discussions).
+
+4. Read the new issues in the tracker.
+
+5. Try to reproduce them on your system, and comment in the issues, with the
+   results.
+
+6. Read the PRs, try to spot errors in them, and comment about them.
+
+### Medium tasks (after gathering experience with 1..6)
+
+7. Make PRs, with bug fixes to existing issues (found doing 1..6).
+
+8. Suggest new features, tools, or modifications to the existing ones here,
+   based on the experience, that you gathered doing 1..7.
+
+9. Make PRs with implementations of your suggestions, or based on other people's
+   suggestions, based on 1..7 and the feedback from 8.
+
+### Advanced tasks (after doing 1..9 for a while)
+
+10. Work on [V RFCs](https://github.com/vlang/rfcs/) (submitting new ones,
+    providing feedback to existing ones, implementing them).
+
 ## Code Structure
 
 I tried to make the code of the compiler and vlib as simple and readable as
@@ -16,57 +57,36 @@ Be careful, if you introduce a breaking change and rebuild V, you will no longer
 be able to use V to build itself. So it's a good idea to make a backup copy of a
 working compiler executable.
 
-But don't worry, you can always simply run `make` (or `make.bat`), it will
+But don't worry, you can always simply run `make` (or `makev.bat`), it will
 download the C version of the compiler and rebuild it from scratch.
 
-The architecture of the compiler is very simple and has three distinct steps:
+The compiler pipeline has these main stages:
 
-Parse/generate AST (`v.parser`) => Check types (`v.checker`)
-=> Generate C/JavaScript/machine code (`v.gen`)
+Scan (`v.scanner`) => parse a flat AST (`v.parser`, `v.flat`) => resolve and
+check types (`v.types`) => simplify (`v.transform`) => remove unreachable code
+(`v.markused`) => generate output (`v.gen`).
 
 The main files are:
 
-1. `cmd/v/v.v` The entry point.
+1. `cmd/v/v.v` is the command and tool dispatcher. Native builds link the compiler
+   driver directly.
 
-   - V figures out the build mode.
-   - Constructs the compiler object (`struct V`).
-   - Creates a list of .v files that need to be parsed.
-   - Creates a parser object for each file and runs `parse()` on them.
-   - The correct backend is called (C, JS, native), and a binary is compiled.
+2. `vlib/v/v.v` is the standalone compiler entry point, and `vlib/v/driver` owns
+   command-line processing, module resolution, caching, and build orchestration.
 
-2. `vlib/v/scanner` The scanner's job is to parse a list of characters and convert
-   them to tokens.
+3. `vlib/v/scanner` converts source text into the tokens defined by `vlib/v/token`.
 
-3. `vlib/v/token` This is simply a list of all tokens, their string values, and a
-   couple of helper functions.
+4. `vlib/v/parser` parses those tokens into the compact representation in
+   `vlib/v/flat`.
 
-4. `vlib/v/parser` The parser. It converts a list of tokens into an AST.
-   In V, objects can be used before declaration, so unknown types are marked as
-   unresolved. They are resolved later in the type checker.
+5. `vlib/v/types` resolves names and types and performs semantic checking.
 
-5. `vlib/v/table` V creates one table object that is shared by all parsers. It
-   contains all types, consts, and functions, as well as several helpers to search
-   for objects by name, register new objects, modify types' fields, etc.
+6. `vlib/v/transform` simplifies checked programs, and `vlib/v/markused` computes
+   the reachable declarations.
 
-6. `vlib/v/checker` Type checker and resolver. It processes the AST and makes sure
-   the types are correct. Unresolved types are resolved, type information is added
-   to the AST.
-
-7. `vlib/v/gen/c` C backend. It simply walks the AST and generates C code that can be
-   compiled with Clang, GCC, Visual Studio, and TCC.
-
-8. `vlib/v/gen/js` JavaScript backend. It simply walks the AST and generates JS code that can be
-   executed on the browser or in NodeJS/Deno.
-
-9. `vlib/v/gen/c/json.v` defines the json code generation. This file will be removed once V
-   supports comptime code generation, and it will be possible to do this using the
-   language's tools.
-
-10. `vlib/v/gen/native` is the directory with all the machine code generation logic. It
-    defines a set of functions that translate assembly instructions to machine code
-    and build the binary from scratch byte by byte. It manually builds all headers,
-    segments, sections, symtable, relocations, etc. Right now it only has basic
-    support of the native platform (ELF, MACHO format).
+7. `vlib/v/gen/c` is the primary C backend. Other backends and lowerings live under
+   `vlib/v/gen/`, including FastC, WebAssembly, and ARM64 via SSA, MIR, and instruction
+   selection. WebAssembly also consumes SSA; see [the backend guide](doc/wasm.md).
 
 The rest of the directories are vlib modules: `builtin/` (strings, arrays,
 maps), `time/`, `os/`, etc. Their documentation is pretty clear.
@@ -83,7 +103,7 @@ accordingly in the steps below.)
    Let's say that the forked repository is at
    `https://github.com/YOUR_GITHUB_USERNAME/v` .
 2. Clone the main v repository https://github.com/vlang/v to a local folder on
-   your computer, say named nv/ (`git clone https://github.com/vlang/v nv`)
+   your computer, say named nv/ (`git clone --depth=1 https://github.com/vlang/v nv`)
 3. `cd nv`
    3.1 (optional) Run these commands, which ensure that all your code will be
    automatically formatted, before committing:
@@ -91,6 +111,10 @@ accordingly in the steps below.)
    cp cmd/tools/git_pre_commit_hook.vsh .git/hooks/pre-commit
    chmod 755 .git/hooks/pre-commit
    ```
+   It has to be done in a shell where you have done cd /root/of/your/V_repo once.
+   Step 3 above does it with `cd nv`.
+   I.e. you have to be in the top level folder, that contains the .git folder for the V repository.
+   
 4. `git remote add pullrequest https://github.com/YOUR_GITHUB_USERNAME/v`
 
    Note: The remote named `pullrequest` should point to YOUR own forked repo, not the
@@ -194,6 +218,20 @@ is:open is:issue label:Bug label:"OS: Windows" label:"Status: Confirmed"
 This filter will return all open issues with the labels `Bug`, `OS: Windows`,
 and `Status: Confirmed`.
 
+The `vlib modules CI` workflow tests `v doc` and generates the standard module documentation.
+On master pushes, it also publishes the generated site to <https://modules.vlang.io/>.
+A failed deployment fails the workflow, so a green run confirms that publishing succeeded too.
+
+The `docs.vlang.io deploy` workflow builds the language documentation site from this checkout's
+`doc/docs.md`. It validates generation on pull requests that change documentation, V sources,
+build files, or the workflow. On master, documentation changes and a daily scheduled run publish
+the site to <https://docs.vlang.io/>; `workflow_dispatch` can also retry a deployment manually.
+Each page's "Last updated" time comes from the V commit timestamp in UTC. Generation checks
+compare two runs so retrying the same source does not produce changes from the wall clock.
+The generator is pinned to a revision of `vlang/docs` and adapted by
+`.github/docs_site_generator.patch`. When updating that revision, check that the patch still
+applies and generation succeeds. Pull request builds only validate generation.
+
 ## Using Github's hub CLI tool
 
 You can download the `hub` tool from https://hub.github.com/ . Using
@@ -278,15 +316,21 @@ a copy of the compiler rather than replacing it with `v self`.
 | `debug_codegen`                   | Prints automatically generated V code during the scanning phase                                                     |
 | `debug_interface_table`           | Prints generated interfaces during C generation                                                                     |
 | `debug_interface_type_implements` | Prints debug information when checking that a type implements in interface                                          |
-| `print_vweb_template_expansions`  | Prints vweb compiled HTML files                                                                                     |
+| `print_veb_template_expansions`   | Prints veb compiled HTML files                                                                                      |
 | `time_checking`                   | Prints the time spent checking files and other related information                                                  |
 | `time_parsing`                    | Prints the time spent parsing files and other related information                                                   |
 |                                   |                                                                                                                     |
-| `trace_scanner`                   | Prints details about the recognized tokens. *Very* verbose. Use `./vnew -no-builtin -check-syntax file.v` later.    |
+| `trace_scanner`                   | Prints details about the recognized tokens. *Very* verbose. Use with `./vnew -no-builtin -check-syntax file.v` .    |
+| `trace_parse`                     | Prints details about the parsed files (number of tokens, lines, bytes). Use it for parsing order issues.            |
 | `trace_parser`                    | Prints details about parsed statements and expressions. Very verbose. Use it for panics in the parser.              |
+| `trace_check`                     | Prints the .v file which is checked. Use it to diagnose checker order issues.                                       |
 | `trace_checker`                   | Prints details about the statements being checked. Very verbose. Use it for panics in the checker.                  |
+| `trace_transformer`               | Prints details about the statements being transformed. Very verbose. Use it for panics in the transformer stage.    |
 |                                   |                                                                                                                     |
 | `trace_gen`                       | Prints all the strings written to the generated C file. Very verbose.                                               |
+| `trace_gen_wanted_value`          | Prints a backtrace, when a specific *wanted* value, is part of what is printed in the generated C file.             |
+|                                   |        Use: `v -g -o vgen -d trace_gen_wanted -d trace_gen_wanted_value="message = _SLIT0" cmd/v && ./vgen bug.v`   |
+| `trace_cgen`                      | Prints the .v file for which C code generation runs. Use it to diagnose cgen order issues.                          |
 | `trace_cgen_stmt`                 | Prints details about the statements that are being processed by cgen.                                               |
 |                                   |        Use it for panics in cgen, to see the closest input V source line, that caused the panic.                    |
 |                                   |        Note: you need `v -no-parallel -d trace_cgen_stmt -o w cmd/v` to make sense of the output of that,           |

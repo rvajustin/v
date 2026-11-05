@@ -1,10 +1,8 @@
 module main
 
-import os
+import os.asset
 import gg
-import gx
 import rand
-import sokol.sgl
 
 const win_width = 800
 const win_height = 600
@@ -43,18 +41,18 @@ mut:
 
 fn main() {
 	mut app := &App{
-		stars: []Star{len: max_stars}
+		stars:     []Star{len: max_stars}
 		v_letters: []VLetter{len: max_v_letters}
 	}
 	app.gg = gg.new_context(
-		bg_color: gx.black
-		width: win_width
-		height: win_height
+		bg_color:      gg.black
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'Star Vield'
-		frame_fn: frame
-		init_fn: init_images
-		user_data: app
+		window_title:  'Star Vield'
+		frame_fn:      frame
+		init_fn:       init_images
+		user_data:     app
 	)
 	for i in 0 .. max_stars {
 		app.stars[i].x = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
@@ -78,7 +76,7 @@ fn main() {
 }
 
 fn init_images(mut app App) {
-	mut logo_path := os.resource_abs_path(os.join_path('..', 'assets', 'logo.png'))
+	logo_path := asset.get_path('../assets', 'logo.png')
 	app.image = app.gg.create_image(logo_path) or { panic(err) }
 }
 
@@ -90,13 +88,13 @@ fn frame(mut app App) {
 
 // fn C.glPointSize(size f32)
 fn (mut app App) draw() {
-	sgl.defaults()
-	sgl.perspective(sgl.rad(90), 1.0, 1.0, 100.0)
+	app.gg.r.defaults()
+	app.gg.r.perspective(app.gg.r.rad(90), 1.0, 1.0, 100.0)
 	// C.glPointSize(3.0)
-	sgl.begin_points()
+	app.gg.r.begin_points()
 	for i in 0 .. app.stars.len {
 		s := app.stars[i]
-		sgl.v3f_c3f(s.x, s.y, s.z, s.r, s.g, s.b)
+		app.gg.r.v3f_c3f(s.x, s.y, s.z, s.r, s.g, s.b)
 		app.stars[i].z += 0.3
 		if app.stars[i].z > -1.0 {
 			app.stars[i].x = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
@@ -104,13 +102,13 @@ fn (mut app App) draw() {
 			app.stars[i].z = rand.f32_in_range(-200.0, -100.0) or { -200.0 }
 		}
 	}
-	sgl.end()
+	app.gg.r.end()
 	// ////
 	for i in 0 .. app.v_letters.len {
 		v := app.v_letters[i]
-		sgl.defaults()
-		sgl.perspective(sgl.rad(90), 1.0, 1.0, 100.0)
-		sgl.rotate(v.angle, 0, 0, 1)
+		app.gg.r.defaults()
+		app.gg.r.perspective(app.gg.r.rad(90), 1.0, 1.0, 100.0)
+		app.gg.r.rotate(v.angle, 0, 0, 1)
 		app.gg.draw_image_3d(v.x, v.y, v.z, v.w, v.h, app.image)
 		//
 		app.v_letters[i].z += app.v_letters[i].dz

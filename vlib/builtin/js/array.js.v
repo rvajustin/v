@@ -1,6 +1,7 @@
 module builtin
 
 import strings
+
 /// Internal representation of `array` type. It is used to implement slices and to make slices behave correctly
 /// it simply stores reference to original array and to index them properly it does index array relative to `index_start`.
 
@@ -29,6 +30,7 @@ fn (mut a array_buffer) make_copy() {
 }
 
 #array_buffer.prototype.make_copy = function() { return array_buffer_make_copy(this) }
+
 // TODO(playX): Should this be implemented fully in JS, use generics or just voidptr?
 fn (a array_buffer) get(ix int) voidptr {
 	mut res := unsafe { nil }
@@ -67,8 +69,7 @@ fn v_sort(mut arr array, comparator fn (voidptr, voidptr) int) {
 	}
 }
 
-// trim trims the array length to "index" without modifying the allocated data. If "index" is greater
-// than len nothing will be changed.
+// trim trims the array length to "index" without modifying the allocated data. If "index" is greater than len nothing will be changed.
 pub fn (mut a array) trim(index int) {
 	if index < a.len {
 		a.len = index
@@ -135,6 +136,9 @@ pub fn (a array) last() voidptr {
 }
 
 fn (a array) get(ix int) voidptr {
+	if ix < 0 || ix >= a.len {
+		return unsafe { nil }
+	}
 	mut result := unsafe { nil }
 	#result = a.arr.get(ix)
 
@@ -152,20 +156,26 @@ pub fn (a array) repeat(count int) array {
 
 fn JS.makeEmptyArray() array
 fn JS.makeEmptyJSArray() JS.Array
+
 fn empty_array() array {
 	return JS.makeEmptyArray()
 }
+
+#function v_clone_for_array_value(value) {
+#if (value instanceof $ref || value instanceof voidptr || typeof value === 'function') return value;
+#return v_clone_value(value);
+#}
 
 fn (a &array) set_len(i int) {
 	#a.arr.arr.length=i
 }
 
 pub fn (mut a array) sort_with_compare(compare voidptr) {
-	v_sort(mut a, compare)
+	#v_sort(a, compare instanceof voidptr ? compare.val : compare)
 }
 
 pub fn (mut a array) sort_with_compare_old(compare voidptr) {
-	#a.val.arr.arr.sort(compare)
+	#a.val.arr.arr.sort(compare instanceof voidptr ? compare.val : compare)
 }
 
 pub fn (mut a array) sort() {
@@ -174,6 +184,17 @@ pub fn (mut a array) sort() {
 
 pub fn (a array) index(v string) int {
 	for i in 0 .. a.len {
+		#if (a.arr.get(i).toString() == v.toString())
+
+		{
+			return i
+		}
+	}
+	return -1
+}
+
+pub fn (a array) last_index(v string) int {
+	for i := a.len - 1; i >= 0; i-- {
 		#if (a.arr.get(i).toString() == v.toString())
 
 		{
@@ -195,19 +216,22 @@ pub fn (a array) slice(start int, end int) array {
 
 pub fn (mut a array) insert(i int, val voidptr) {
 	#a.val.arr.make_copy()
-	#a.val.arr.arr.splice(i,0,val)
+	#a.val.arr.arr.splice(i,0,v_clone_for_array_value(val))
+	#a.val.arr.len.val = a.val.arr.arr.length
 }
 
 pub fn (mut a array) insert_many(i int, val voidptr, size int) {
-	#a.val.arr.arr.splice(i,0,...val.arr.slice(0,+size))
+	#a.val.arr.make_copy()
+	#a.val.arr.arr.splice(i,0,...val.arr.slice(0,+size).map(v_clone_for_array_value))
+	#a.val.arr.len.val = a.val.arr.arr.length
 }
 
 fn (mut a array) push(val voidptr) {
 	#a.val.arr.make_copy()
-	#if (arguments[2] && arguments[2].valueOf()) {a.val.arr.arr.push(...val)} else {
-	#a.val.arr.arr.push(val)
+	#if (arguments[2] && arguments[2].valueOf()) {a.val.arr.arr.push(...val.map(v_clone_for_array_value))} else {
+	#a.val.arr.arr.push(v_clone_for_array_value(val))
 	#}
-	#a.val.arr.len.val += 1
+	#a.val.arr.len.val = a.val.arr.arr.length
 }
 
 fn v_filter(arr array, callback fn (voidptr) bool) array {
@@ -274,6 +298,7 @@ struct array_iterator {
 #
 #
 #function v_makeSlice(array) { Object.defineProperty(array,'len', {get: function() { return this.arr.len; }, set: function(l) { this.arr.len = l; }}) }
+
 // delete deletes array element at index `i`.
 pub fn (mut a array) delete(i int) {
 	a.delete_many(i, 1)
@@ -285,10 +310,11 @@ fn arr_copy(mut dst array, src array, count int) {
 	}
 }
 
-// delete_many deletes `size` elements beginning with index `i`
+// delete_many deletes `size` elements beginning with index `i`.
 pub fn (mut a array) delete_many(i int, size int) {
 	#a.val.arr.make_copy()
 	#a.val.arr.arr.splice(i.valueOf(),size.valueOf())
+	#a.val.arr.len.val = a.val.arr.arr.length
 }
 
 // prepend prepends one value to the array.
@@ -317,11 +343,11 @@ pub fn (mut a array) reverse_in_place() {
 
 pub fn (mut a array) clear() {
 	#a.val.arr.make_copy()
-	#a.val.arr.arr.clear()
+	#a.val.arr.arr.length = 0
+	#a.val.arr.len.val = 0
 }
 
-// reduce executes a given reducer function on each element of the array,
-// resulting in a single output value.
+// reduce executes a given reducer function on each element of the array, resulting in a single output value.
 pub fn (a array) reduce(iter fn (int, int) int, accum_start int) int {
 	mut accum_ := accum_start
 	/*#for (let i = 0;i < a.arr.length;i++)  {
@@ -338,7 +364,7 @@ pub fn (mut a array) pop() voidptr {
 	mut res := unsafe { nil }
 	#a.val.arr.make_copy()
 	#res = a.val.arr.arr.pop()
-	#a.val.arr.len.val -= 1
+	#a.val.arr.len.val = a.val.arr.arr.length
 
 	return res
 }
@@ -414,6 +440,11 @@ pub fn (a array) to_number_array() JS.Array {
 		#tmp.push(Number(elem.valueOf()));
 	}
 	return tmp
+}
+
+// push_many - appends multiple values to the end of the array.
+pub fn (mut a array) push_many(val voidptr, size int) {
+	a.insert_many(a.len, val, size)
 }
 
 type EveryFn = fn (JS.Number, JS.Number) JS.Boolean

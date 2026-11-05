@@ -36,6 +36,11 @@ The main differences can be summarized in the following points:
   not the sequence of symbols.
   Note: **Two char classes with an `OR` in the middle is a syntax error.**
 
+  Token alternatives can be chained (`a|b|c`) and repeated (`(a|b)+`). To alternate
+  whole sequences, group each sequence: `((cat)|(dog))+` matches `dogcat`.
+  A bounded group must reach its minimum before the following token is matched:
+  `(a|b){2}z` matches `abz` and rejects `az`.
+
 - The **match operation stops at the end of the string**. It does *NOT* stop
   at new line characters.
 
@@ -80,12 +85,16 @@ latin chars `a-z` and all the digits `\d`.
 It is possible to mix all the properties of the char class together.
 
 > **Note**
-> In order to match the `-` (minus) char, it must be preceded by
-> a backslash in the cc, for example `[\-_\d\a]` will match:
+> To match the `-` (minus) char, place it first or last in the cc, or precede it
+> with a backslash. For example, `[-a-z]` and `[a-z-]` match lowercase letters
+> and a minus, and `[\-_\d\a]` will match:
 > - `-` minus,
 > - `_` underscore,
 > - `\d` numeric chars,
 > - `\a` lower case chars.
+
+A minus immediately after a completed range is also literal. For example,
+`[a-z-0-9]` matches lowercase letters, digits, and a minus; the `a-z` range remains intact.
 
 ### Meta-chars
 
@@ -119,7 +128,8 @@ must be matched.
 
 #### **Long quantifiers**
 
-- `{x}` matches exactly x times, `a{2}` matches `aa`, but not `aaa` or `a`
+- `{x}` matches exactly x times, `a{2}` matches `aa`, but not `aaa` or `a`.
+  `{0}` skips its token or group and matches without consuming input.
 - `{min,}` matches at least min times, `a{2,}` matches `aaa` or `aa`, not `a`
 - `{,max}` matches at least 0 times and at maximum max times,
   for example, `a{,2}` matches `a` and `aa`, but doesn't match `aaa`
@@ -172,6 +182,9 @@ That also means, that a query string like `abc|bde` is not equal to
 `(abc)|(bde)`, but instead to `ab(c|b)de`.
 The OR operation works only for `c|b`, not at char concatenation level.
 
+To match a choice of words, group each word into a token. For example,
+`^((cat)|(dog))$` matches either `cat` or `dog`.
+
 ### Groups
 
 Groups are a method to create complex patterns with repetitions of blocks
@@ -206,6 +219,8 @@ that is an `[]int` inside the `RE` struct.
 **example:**
 
 ```v oksyntax
+import regex
+
 text := 'cpaz cpapaz cpapapaz'
 query := r'(c(pa)+z ?)+'
 mut re := regex.regex_opt(query) or { panic(err) }
@@ -246,6 +261,8 @@ pub:
 Here is an example of use:
 
 ```v oksyntax
+import regex
+
 /*
 This simple function converts an HTML RGB value with 3 or 6 hex digits to
 an u32 value, this function is not optimized and it is only for didatical
@@ -419,6 +436,8 @@ use a name map in the `re` struct, using the function `re.get_group_by_name`.
 Here is a more complex example of using them:
 
 ```v oksyntax
+import regex
+
 // This function demonstrate the use of the named groups
 fn convert_html_rgb_n(in_col string) u32 {
 	mut n_digit := if in_col.len == 4 { 1 } else { 2 }
@@ -430,11 +449,11 @@ fn convert_html_rgb_n(in_col string) u32 {
 	println('start: ${start}, end: ${end}')
 	mut res := u32(0)
 	if start >= 0 {
-		red_s, red_e := re.get_group_by_name('red')
+		red_s, red_e := re.get_group_bounds_by_name('red')
 		r := ('0x' + in_col[red_s..red_e]).int() << col_mul
-		green_s, green_e := re.get_group_by_name('green')
+		green_s, green_e := re.get_group_bounds_by_name('green')
 		g := ('0x' + in_col[green_s..green_e]).int() << col_mul
-		blue_s, blue_e := re.get_group_by_name('blue')
+		blue_s, blue_e := re.get_group_bounds_by_name('blue')
 		b := ('0x' + in_col[blue_s..blue_e]).int() << col_mul
 		println('r: ${r} g: ${g} b: ${b}')
 		res = u32(r) << 16 | u32(g) << 8 | u32(b)
@@ -454,6 +473,9 @@ for name in re.group_map.keys() {
 }
 ```
 
+Groups that did not participate report bounds `(-1, -1)`, including after a search.
+An empty capturing group reports equal start and end bounds.
+
 ### Groups query functions
 
 These functions are helpers to query the captured groups
@@ -462,8 +484,8 @@ These functions are helpers to query the captured groups
 // get_group_bounds_by_name get a group boundaries by its name
 pub fn (re RE) get_group_bounds_by_name(group_name string) (int, int)
 
-// get_group_by_name get a group string by its name
-pub fn (re RE) get_group_by_name(group_name string) string
+// get_group_by_name gets a group string by its name
+pub fn (re &RE) get_group_by_name(in_txt string, group_name string) string
 
 // get_group_by_id get a group boundaries by its id
 pub fn (re RE) get_group_bounds_by_id(group_id int) (int,int)
@@ -493,6 +515,8 @@ re.flag = regex.f_bin
 ```
 
 - `f_bin`: parse a string as bytes, utf-8 management disabled.
+
+- `f_ci`: match ASCII letters without case sensitivity.
 
 - `f_efm`: exit on the first char matches in the query, used by the
   find function.
@@ -531,11 +555,16 @@ pub fn new() RE
 After an initializer is used, the regex expression must be compiled with:
 
 ```v ignore
-// compile_opt compile RE pattern string,  returning an error if the compilation fails
+// compile_opt compile RE pattern string, returning an error if the compilation fails
 pub fn (mut re RE) compile_opt(pattern string) !
 ```
 
 ### Matching Functions
+
+Matchers consume only bytes inside the subject. A non-word class such as `\W` does not
+match the position after the final byte. Zero-width patterns can still match that position.
+The low-level `match_base` length is the number of subject bytes; the buffer does not
+need a trailing NUL byte.
 
 These are the matching functions
 
@@ -566,12 +595,16 @@ pub fn (mut re RE) find_all(in_txt string) []int
 pub fn (mut re RE) find_all_str(in_txt string) []string
 ```
 
+`split` returns the sections around matches. Zero-width separators at the beginning or
+end do not add empty sections; separators that consume input retain empty sections.
+For example, an empty pattern splits `ab` into `['a', 'b']`.
+
 #### Replace functions
 
 ```v ignore
 // replace return a string where the matches are replaced with the repl_str string,
 // this function supports groups in the replace string
-pub fn (mut re RE) replace(in_txt string, repl string) string
+pub fn (re &RE) replace(in_txt string, repl string) string
 ```
 
 replace string can include groups references:
@@ -579,7 +612,7 @@ replace string can include groups references:
 ```v ignore
 txt := 'Today it is a good day.'
 query := r'(a\w)[ ,.]'
-mut re := regex.regex_opt(query)?
+re := regex.regex_opt(query)?
 res := re.replace(txt, r'__[\0]__')
 ```
 

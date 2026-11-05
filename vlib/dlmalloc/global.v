@@ -3,12 +3,11 @@ module dlmalloc
 
 __global global = new(get_system_allocator())
 
-/// malloc allocates `size` bytes.
-///
-/// Returns a null pointer if allocation fails. Returns a valid pointer
-/// otherwise.
+// malloc allocates `size` bytes.
+// It returns a null pointer if allocation fails.
+// It returns a valid pointer otherwise.
 @[unsafe]
-pub fn malloc(size usize) voidptr {
+pub fn malloc(size uint) voidptr {
 	unsafe {
 		return global.malloc(size)
 	}
@@ -25,7 +24,7 @@ pub fn free(ptr voidptr) {
 // Same as `malloc`, except if the allocation succeeds it's guaranteed to
 // point to `size` bytes of zeros.
 @[unsafe]
-pub fn calloc(size usize) voidptr {
+pub fn calloc(size uint) voidptr {
 	unsafe {
 		return global.calloc(size)
 	}
@@ -39,7 +38,7 @@ pub fn calloc(size usize) voidptr {
 // is still valid. Returns a valid pointer and frees `ptr` if the request
 // is satisfied.
 @[unsafe]
-pub fn realloc(ptr voidptr, oldsize usize, newsize usize) voidptr {
+pub fn realloc(ptr voidptr, oldsize uint, newsize uint) voidptr {
 	unsafe {
 		_ := oldsize
 
@@ -52,7 +51,7 @@ pub fn realloc(ptr voidptr, oldsize usize, newsize usize) voidptr {
 //
 // Returns a null pointer if allocation fails. Returns a valid pointer otherwise.
 @[unsafe]
-pub fn memalign(size usize, align usize) voidptr {
+pub fn memalign(size uint, align uint) voidptr {
 	unsafe {
 		if align <= malloc_alignment() {
 			return global.malloc(size)

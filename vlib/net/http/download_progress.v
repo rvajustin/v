@@ -4,15 +4,16 @@ module http
 // how download_file_with_progress works, and what output it produces while a file
 // is downloaded.
 pub interface Downloader {
-mut:
 	// Called once, at the start of the streaming download. You can do setup here,
 	// like opening a target file, changing request.stop_copying_limit to a different value,
 	// if you need it.
+mut:
 	on_start(mut request Request, path string) !
 	// Called many times, once a chunk of data is received
 	on_chunk(request &Request, chunk []u8, already_received u64, expected u64) !
-	// Called once, at the end of the streaming download. Do cleanup here,
+	// Called once, at the end of the download attempt. Do cleanup here,
 	// like closing a file (opened in on_start), reporting stats etc.
+	// `response` will be empty when the request fails before a response is parsed.
 	on_finish(request &Request, response &Response) !
 }
 
@@ -23,7 +24,7 @@ mut:
 pub struct DownloaderParams {
 	FetchConfig
 pub mut:
-	downloader &Downloader = TerminalStreamingDownloader{}
+	downloader &Downloader = &TerminalStreamingDownloader{}
 }
 
 // download_file_with_progress will save the URL `url` to the filepath `path` .
@@ -40,9 +41,8 @@ pub mut:
 // Note: the returned response by this function, will have a truncated .body, after the first
 // few KBs, because it does not accumulate all its data in memory, instead relying on the
 // downloaders to save the received data chunk by chunk. You can parametrise this by
-// using `stop_copying_limit:` but you need to pass a number that is big enough to fit
-// at least all headers in the response, otherwise the parsing of the response at the end will
-// fail, despite saving all the data in the file before that. The default is 65536 bytes.
+// using `stop_copying_limit:`, which limits body bytes while preserving all response headers.
+// The default is 65536 bytes; nonpositive limits keep the whole body.
 pub fn download_file_with_progress(url string, path string, params DownloaderParams) !Response {
 	mut d := unsafe { params.downloader }
 	mut config := params.FetchConfig
@@ -50,13 +50,21 @@ pub fn download_file_with_progress(url string, path string, params DownloaderPar
 	config.user_ptr = voidptr(d)
 	config.on_progress_body = download_progres_cb
 	if config.stop_copying_limit == -1 {
-		// leave more than enough space for potential redirect headers
 		config.stop_copying_limit = 65536
 	}
 	mut req := prepare(config)!
 	d.on_start(mut req, path)!
-	response := req.do()!
-	d.on_finish(req, response)!
+	mut response := Response{}
+	defer {
+		d.on_finish(req, response) or {}
+	}
+	response = req.do()!
+	$if windows && !no_vschannel ? {
+		// TODO: remove this, when windows supports streaming properly through vschannel
+		// For now though, just ensure that the complete body is "received" in one big chunk:
+		body_len := u64(response.body.len)
+		d.on_chunk(req, response.body.bytes(), body_len, body_len)!
+	}
 	return response
 }
 
@@ -65,7 +73,7 @@ const zz = &Downloader(unsafe { nil })
 fn download_progres_cb(request &Request, chunk []u8, body_so_far u64, expected_size u64, status_code int) ! {
 	// TODO: remove this hack, when `unsafe { &Downloader( request.user_ptr ) }` works reliably,
 	// by just casting, without trying to promote the argument to the heap at all.
-	mut d := unsafe { http.zz }
+	mut d := unsafe { zz }
 	pd := unsafe { &voidptr(&d) }
 	unsafe {
 		*pd = request.user_ptr

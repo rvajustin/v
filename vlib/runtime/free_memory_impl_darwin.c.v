@@ -1,7 +1,5 @@
 module runtime
 
-#include <mach/mach.h>
-
 @[typedef]
 pub struct C.vm_size_t {
 }
@@ -17,21 +15,31 @@ pub struct C.vm_statistics64_data_t {
 @[typedef]
 pub struct C.host_t {}
 
-fn C.mach_host_self() C.host_t
-fn C.host_page_size(host C.host_t, out_page_size &C.vm_size_t) int
-fn C.host_statistics64(host C.host_t, flavor int, host_info_out &int, host_info_outCnt &u32) int
+@[typedef]
+pub struct C.task_t {}
 
-fn free_memory_impl() usize {
-	$if macos {
-		mut hs := C.vm_statistics64_data_t{}
-		mut vmsz := u32(C.HOST_VM_INFO64_COUNT)
-		mut hps := u32(0)
-		mut host := C.mach_host_self()
-		unsafe {
-			C.host_statistics64(host, C.HOST_VM_INFO64, &int(&hs), &vmsz)
-			C.host_page_size(host, &C.vm_size_t(&hps))
+fn C.mach_host_self() C.host_t
+fn C.mach_task_self() C.task_t
+fn C.mach_port_deallocate(task C.task_t, host C.host_t) i32
+fn C.host_page_size(host C.host_t, out_page_size &C.vm_size_t) i32
+fn C.host_statistics64(host C.host_t, flavor i32, host_info_out &int, host_info_outCnt &u32) i32
+
+fn C.v_runtime_free_memory_darwin(bytes &u64, code &i32) i32
+
+#flag @VEXEROOT/vlib/runtime/free_memory_darwin.o
+
+fn free_memory_impl() !uint {
+	$if macos || ios {
+		mut bytes := u64(0)
+		mut code := i32(0)
+		stage := C.v_runtime_free_memory_darwin(&bytes, &code)
+		if stage == 1 {
+			return error('free_memory: `C.host_statistics64()` return = ${code}')
 		}
-		return usize(u64(hs.free_count) * u64(hps))
+		if stage == 2 {
+			return error('free_memory: `C.host_page_size()` return = ${code}')
+		}
+		return uint(bytes)
 	}
-	return 1
+	return error('free_memory: not implemented')
 }

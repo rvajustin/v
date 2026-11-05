@@ -24,10 +24,17 @@ fn main() {
 	include_path := os.join_path(sysroot_path, 'usr', 'include')
 	android_include_path := os.join_path(include_path, 'android')
 
-	//'-I"$include_path"'
-	cflags := ['-I"$android_include_path"', '-Wno-unused-value', '-Wno-implicit-function-declaration',
+	//'-I"${include_path}"'
+	cflags := ['-I"${android_include_path}"', '-Wno-unused-value', '-Wno-implicit-function-declaration',
 		'-Wno-int-conversion']
 	for arch in ndk.supported_archs {
+		v_arch := match arch {
+			'arm64-v8a' { 'arm64' }
+			'armeabi-v7a' { 'arm32' }
+			'x86' { 'x86' }
+			'x86_64' { 'amd64' }
+			else { panic('unsupported Android architecture `${arch}`') }
+		}
 		for level in ['min', 'max'] {
 			compiler_api := match level {
 				'min' {
@@ -46,22 +53,23 @@ fn main() {
 			o_file := os.join_path(work_dir, arch + '-' + level + '.o')
 
 			// x.v -> x.c
-			v_compile_cmd := '$vexe -o $c_file -os android -gc none $v_example'
-			vres := os.execute(v_compile_cmd)
+			v_compile_cmd := '${vexe} -o ${c_file} -os android -arch ${v_arch} -gc none ${v_example}'
+			vres := os.exec([vexe, '-o', c_file, '-os', 'android', '-arch', '${v_arch}', '-gc',
+				'none', '${v_example}'])
 			if vres.exit_code != 0 {
-				panic('"$v_compile_cmd" failed: $vres.output')
+				panic('"${v_compile_cmd}" failed: ${vres.output}')
 			}
 			assert os.exists(c_file)
 
 			// x.c -> x.o
-			compile_cmd := '$compiler_api ${cflags.join(' ')} -c $c_file -o $o_file'
-			cres := os.execute(compile_cmd)
+			compile_cmd := '${compiler_api} ${cflags.join(' ')} -c ${c_file} -o ${o_file}'
+			cres := os.exec([compiler_api, ...cflags, '-c', c_file, '-o', o_file])
 			if cres.exit_code != 0 {
-				panic('"$compile_cmd" failed: $cres.output')
+				panic('"${compile_cmd}" failed: ${cres.output}')
 			}
 			assert os.exists(o_file)
 			compiler_exe_name := os.file_name(compiler_api)
-			println('Compiled examples/toml.v successfully for ($level) $arch $compiler_exe_name')
+			println('Compiled examples/toml.v successfully for (${level}) ${arch} ${compiler_exe_name}')
 		}
 	}
 }

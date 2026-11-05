@@ -3,15 +3,20 @@
 // that can be found in the LICENSE file.
 module sync
 
-import time
-
 #include <synchapi.h>
 #include <time.h>
 
-fn C.GetSystemTimeAsFileTime(lpSystemTimeAsFileTime &C._FILETIME)
+$if tinyc {
+	// TinyCC's <synchapi.h> leaves out the SRW lock and condition variable functions.
+	#insert "@VEXEROOT/vlib/sync/sync_windows_tcc.h"
+}
+
 fn C.InitializeConditionVariable(voidptr)
 fn C.WakeConditionVariable(voidptr)
-fn C.SleepConditionVariableSRW(voidptr, voidptr, u32, u32) int
+fn C.SleepConditionVariableSRW(voidptr, voidptr, u32, u32) i32
+
+fn C.TryAcquireSRWLockExclusive(h voidptr) i32
+fn C.TryAcquireSRWLockShared(h voidptr) i32
 
 // TODO: The suggestion of using CriticalSection instead of mutex
 // was discussed. Needs consideration.
@@ -21,9 +26,6 @@ type MHANDLE = voidptr
 
 // Semaphore HANDLE
 type SHANDLE = voidptr
-
-@[typedef]
-pub struct C.SRWLOCK {}
 
 @[typedef]
 pub struct C.CONDITION_VARIABLE {}
@@ -72,7 +74,7 @@ pub fn (mut m RwMutex) init() {
 	C.InitializeSRWLock(&m.mx)
 }
 
-pub fn (mut m Mutex) @lock() {
+pub fn (mut m Mutex) lock() {
 	C.AcquireSRWLockExclusive(&m.mx)
 }
 
@@ -94,11 +96,11 @@ pub fn (mut m Mutex) unlock() {
 }
 
 // RwMutex has separate read- and write locks
-pub fn (mut m RwMutex) @rlock() {
+pub fn (mut m RwMutex) rlock() {
 	C.AcquireSRWLockShared(&m.mx)
 }
 
-pub fn (mut m RwMutex) @lock() {
+pub fn (mut m RwMutex) lock() {
 	C.AcquireSRWLockExclusive(&m.mx)
 }
 
@@ -207,47 +209,65 @@ pub fn (mut sem Semaphore) try_wait() bool {
 	return false
 }
 
-pub fn (mut sem Semaphore) timed_wait(timeout time.Duration) bool {
+pub fn (mut sem Semaphore) timed_wait(timeout i64) bool {
 	mut c := C.atomic_load_u32(&sem.count)
 	for c > 0 {
 		if C.atomic_compare_exchange_weak_u32(&sem.count, &c, c - 1) {
 			return true
 		}
 	}
-	mut ft_start := C._FILETIME{}
-	C.GetSystemTimeAsFileTime(&ft_start)
-	time_end := ((u64(ft_start.dwHighDateTime) << 32) | ft_start.dwLowDateTime) +
-		u64(timeout / (100 * time.nanosecond))
-	mut t_ms := u32(timeout.sys_milliseconds())
+	if timeout == infinite_timeout {
+		sem.wait()
+		return true
+	}
+	return sem.wait_for_available_count(timeout)
+}
+
+fn (mut sem Semaphore) wait_for_available_count(timeout i64) bool {
+	time_end := sync_timeout_deadline(sync_mono_now(), timeout)
+	mut t_ms := sync_milliseconds(timeout)
 	C.AcquireSRWLockExclusive(&sem.mtx)
-	mut res := 0
-	c = C.atomic_load_u32(&sem.count)
+	mut acquired := false
+	mut c := C.atomic_load_u32(&sem.count)
 
 	outer: for {
 		if c == 0 {
-			res = C.SleepConditionVariableSRW(&sem.cond, &sem.mtx, t_ms, 0)
-			if res == 0 {
-				break outer
+			sleep_result := C.SleepConditionVariableSRW(&sem.cond, &sem.mtx, t_ms, 0)
+			if sleep_result != 0 {
+				c = C.atomic_load_u32(&sem.count)
 			}
-			c = C.atomic_load_u32(&sem.count)
 		}
 		for c > 0 {
 			if C.atomic_compare_exchange_weak_u32(&sem.count, &c, c - 1) {
+				acquired = true
 				if c > 1 {
 					C.WakeConditionVariable(&sem.cond)
 				}
 				break outer
 			}
 		}
-		C.GetSystemTimeAsFileTime(&ft_start)
-		time_now := ((u64(ft_start.dwHighDateTime) << 32) | ft_start.dwLowDateTime) // in 100ns
-		if time_now > time_end {
-			break outer // timeout exceeded
+		expired, next_t_ms := sync_timeout_chunk(time_end, sync_mono_now())
+		if expired {
+			break outer
 		}
-		t_ms = u32((time_end - time_now) / 10000)
+		t_ms = next_t_ms
 	}
 	C.ReleaseSRWLockExclusive(&sem.mtx)
-	return res != 0
+	return acquired
+}
+
+fn sync_timeout_deadline(time_now i64, timeout i64) i64 {
+	if timeout > infinite_timeout - time_now {
+		return infinite_timeout
+	}
+	return time_now + timeout
+}
+
+fn sync_timeout_chunk(time_end i64, time_now i64) (bool, u32) {
+	if time_now >= time_end {
+		return true, 0
+	}
+	return false, sync_milliseconds(time_end - time_now)
 }
 
 pub fn (mut m RwMutex) destroy() {

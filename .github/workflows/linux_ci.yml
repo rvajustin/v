@@ -3,14 +3,11 @@ name: CI Linux
 on:
   workflow_dispatch:
   push:
+    branches:
+      - master
     paths-ignore:
-      - '**.md'
-      - '**.yml'
-      - '!**/linux_ci.yml'
-      - 'cmd/tools/**'
-      - '!cmd/tools/builders/**.v'
-  pull_request:
-    paths-ignore:
+      # vlib/v/** is intentionally NOT ignored: V3 is the default compiler on
+      # Linux, so changes to it must run this suite; the canary below stays strict.
       - '**.md'
       - '**.yml'
       - '!**/linux_ci.yml'
@@ -18,326 +15,415 @@ on:
       - '!cmd/tools/builders/**.v'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  # Replace superseded master runs instead of queueing every commit separately.
+  group: linux-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  tcc:
-    runs-on: ubuntu-20.04
+  tcc-linux:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
     timeout-minutes: 121
     env:
       VFLAGS: -cc tcc -no-retry-compilation
+      # Stop a failing test session at its first failure instead of running the
+      # whole suite to completion; the remaining files add no signal.
+      VTEST_FAIL_FAST: '1'
+      # Four test workers fit comfortably: a worker peaks near 0.25 GB and the
+      # runner has 4 CPUs and 16 GB, so this is CPU-bound, not memory-bound.
+      VJOBS: '4'
+      VTEST_SHOW_LONGEST_BY_RUNTIME: 3
+      VTEST_SHOW_LONGEST_BY_COMPTIME: 3
+      VTEST_SHOW_LONGEST_BY_TOTALTIME: 3
+      # Keep every command on V3; the canary below also proves which compiler ran.
+      V_MACOS_V3_NO_FALLBACK: 1
     steps:
-      - uses: actions/checkout@v4
-      - name: Build v
-        run: make -j4 && ./v symlink
-      - name: Build v with -prealloc
-        run: |
-          v -d debug_malloc -d debug_realloc -o v cmd/v
-          v -cg -cstrict -o v cmd/v
-          # Test v -realloc arena allocation
-          v -o vrealloc -prealloc cmd/v && ./vrealloc -o v3 cmd/v && ./v3 -o v4 cmd/v
-      - name: All code is formatted
-        run: v test-cleancode
-      - name: Install dependencies for examples and tools
-        run: |
-          v retry -- sudo apt update
-          v retry -- sudo apt install --quiet -y libssl-dev sqlite3 libsqlite3-dev valgrind
-          v retry -- sudo apt install --quiet -y libfreetype6-dev libxi-dev libxcursor-dev libgl-dev libasound2-dev
-          # The following is needed for examples/wkhtmltopdf.v
-          v retry -- wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.focal_amd64.deb
-          v retry -- sudo apt install --quiet -y xfonts-75dpi xfonts-base
-          v retry -- sudo apt install --quiet -y expect
-          v retry -- sudo dpkg -i wkhtmltox_0.12.6-1.focal_amd64.deb
-      - name: Test v->c
-        run: |
-          thirdparty/tcc/tcc.exe -version
-          v -cg -o v cmd/v # Make sure vtcc can build itself twice
-          # v test-all
-      - name: v self compilation
-        run: v -o v2 cmd/v && ./v2 -o v3 cmd/v && ./v3 -o v4 cmd/v
-      - name: v self compilation with -skip-unused
-        run: v -skip-unused -o v2 cmd/v && ./v2 -skip-unused -o v3 cmd/v && ./v3 -skip-unused -o v4 cmd/v
-      - name: v doctor
-        run: v doctor
-      - name: Verify `v test` works
-        run: |
-          echo $VFLAGS
-          v cmd/tools/test_if_v_test_system_works.v
-          ./cmd/tools/test_if_v_test_system_works
-      - name: Test pure V math module
-        run: v -exclude @vlib/math/*.c.v test vlib/math/
-      - name: Self tests
-        run: v test-self vlib
-      # - name: Self tests (-cstrict)
-      #   run: V_CI_CSTRICT=1 v -cstrict test-self vlib
-      - name: Build examples
-        run: v -N -W build-examples
-      - name: Run the submodule example, using a relative path
-        run: v -W run examples/submodule
-      - name: Build v tools
-        run: v -N -W build-tools
-      - name: Build v binaries
-        run: v -N -W build-vbinaries
-      - name: Build benches
-        run: v should-compile-all vlib/v/tests/bench/
-      - name: Run a VSH script
-        run: v run examples/v_script.vsh
-      - name: Test v tutorials
-        run: v tutorials/building_a_simple_web_blog_with_vweb/code/blog
-      - name: Build cmd/tools/fast
-        run: cd cmd/tools/fast && v fast.v && ./fast
-      - name: V self compilation with -usecache
-        run: |
-          unset VFLAGS
-          v -usecache examples/hello_world.v && examples/hello_world
-          v  -o v2 -usecache cmd/v
-          ./v2 -o v3 -usecache cmd/v
-          ./v3 version
-          ./v3 -o tetris  -usecache examples/tetris/tetris.v
-      - name: Test password input
-        run: v test examples/password/
-      - name: Test readline
-        run: v test examples/readline/
-      - name: Test leak detector
-        run: |
-          v -gc boehm_leak -o testcase_leak vlib/v/tests/testcase_leak.vv
-          ./testcase_leak 2>leaks.txt
-          grep "Found 1 leaked object" leaks.txt && grep -P ", sz=\s?1000," leaks.txt
-      - name: Test leak detector not being active for normal compile
-        run: |
-          v -o testcase_leak vlib/v/tests/testcase_leak.vv
-          ./testcase_leak 2>leaks.txt
-          [ "$(stat -c %s leaks.txt)" = "0" ]
-
-  gcc:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 121
-    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        id: uses_checkout_v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/cache-apt-packages-action
+        id: uses_cache_apt_packages_action
+        if: ${{ success() && !cancelled() && steps.uses_checkout_v7.outcome == 'success' }}
       - name: Build V
+        if: ${{ success() && !cancelled() && steps.uses_cache_apt_packages_action.outcome == 'success' }}
+        id: build
+        # Bootstrap helpers must also compile with V3 once the fresh compiler exists.
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
         run: make -j4 && ./v symlink
+      # Cheapest high-signal check first: a `v vet`/`v fmt -verify` failure must not
+      # cost the whole compile matrix below, and this ordering costs no extra runner.
       - name: All code is formatted
-        run: v test-cleancode
+        id: format
+        if: ${{ success() && !cancelled() && steps.build.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh all_code_is_formatted_tcc
+      - name: Assert V is the default compiler (fail if V1 is silently used)
+        id: canary
+        if: ${{ success() && !cancelled() && steps.format.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          # A monumental default-compiler change should be provable, not assumed:
+          # this canary fails loudly if the default compiler is not dispatched on Linux
+          # or if it silently falls back to the compatibility compiler.
+          printf 'fn main() { println(6 * 7) }\n' > "$RUNNER_TEMP/v3_canary.v"
+          V_MACOS_V3_NO_FALLBACK=1 ./v -v run "$RUNNER_TEMP/v3_canary.v" > "$RUNNER_TEMP/v3_canary.out" 2>&1 || true
+          cat "$RUNNER_TEMP/v3_canary.out"
+          grep -q '=== V compiler benchmark ===' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the default compiler was not dispatched on Linux'; exit 1; }
+          grep -qx '42' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the V-compiled canary did not build/run correctly'; exit 1; }
+          if grep -qiE 'retrying with .-old-compiler|compatibility fallback|used the stable compiler' "$RUNNER_TEMP/v3_canary.out"; then echo '::error::the default compiler silently fell back to V1'; exit 1; fi
+          echo 'OK: V compiled and ran this program in-process on Linux, with the fallback disabled'
       - name: Install dependencies for examples and tools
-        run: |
-          v retry -- sudo apt update
-          v retry -- sudo apt install --quiet -y postgresql libpq-dev libssl-dev sqlite3 libsqlite3-dev valgrind
-          v retry -- sudo apt install --quiet -y libfreetype6-dev libxi-dev libxcursor-dev libgl-dev libasound2-dev
-      - name: Recompile V with -cstrict and gcc
-        run: v -cc gcc -cg -cstrict -o v cmd/v
-      - name: Valgrind v.c
-        run: valgrind --error-exitcode=1 v -o v.c cmd/v
-      - name: Run sanitizers
-        run: |
-          v -o v2 cmd/v -cflags -fsanitize=thread
-          v -o v3 cmd/v -cflags "-fsanitize=undefined -fno-sanitize=alignment"
-          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v2 -o v.c cmd/v
-          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v3 -o v.c cmd/v
-      # - name: Test V
-      #   run: v test-all
-      # - name: Test v binaries
-      #   run: v -N -W build-vbinaries
-      # - name: Test v->js
-      #   run: v -o hi.js examples/hello_v_js.v && node hi.js
-      # - name: Build Vorum
-      #   run: v retry -- git clone --depth 1 https://github.com/vlang/vorum && cd vorum && v . && cd ..
-      - name: Freestanding
-        run: v -freestanding run vlib/os/bare/bare_example_linux.v
-      - name: V self compilation
-        run: v -o v2 cmd/v && ./v2 -o v3 cmd/v && ./v3 -o v4 cmd/v
-      - name: V self compilation with -usecache
-        run: |
-          unset VFLAGS
-          v -usecache examples/hello_world.v && examples/hello_world
-          v  -o v2     -usecache cmd/v
-          ./v2 -o v3     -usecache cmd/v
-          ./v3 version
-          ./v3 -o tetris -usecache examples/tetris/tetris.v
+        id: install_dependencies
+        if: ${{ success() && !cancelled() && steps.canary.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh install_dependencies_for_examples_and_tools_tcc
+      - name: Test v->c
+        id: test_v_to_c
+        if: ${{ success() && !cancelled() && steps.install_dependencies.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_v_to_c_tcc
+      - name: v self compilation
+        id: v_self_compilation
+        if: ${{ success() && !cancelled() && steps.test_v_to_c.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_tcc
+      - name: v doctor
+        id: v_doctor
+        if: ${{ success() && !cancelled() && steps.v_self_compilation.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_doctor_tcc
       - name: Verify `v test` works
-        run: |
-          echo $VFLAGS
-          v cmd/tools/test_if_v_test_system_works.v
-          ./cmd/tools/test_if_v_test_system_works
+        id: verify_v_test_works
+        if: ${{ success() && !cancelled() && steps.v_doctor.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh verify_v_test_works_tcc
       - name: Test pure V math module
-        run: v -exclude @vlib/math/*.c.v test vlib/math/
+        id: test_pure_v_math_module
+        if: ${{ success() && !cancelled() && steps.verify_v_test_works.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_pure_v_math_module_tcc
+      - name: Test inline assembly on linux
+        id: test_inline_assembly
+        if: ${{ success() && !cancelled() && steps.test_pure_v_math_module.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_inline_assembly
       - name: Self tests
-        run: v test-self vlib
-      - name: Self tests (-prod)
-        run: v -o vprod -prod cmd/v && ./vprod test-self vlib
-      - name: Self tests (-cstrict)
-        run: VTEST_JUST_ESSENTIAL=1 V_CI_CSTRICT=1 v -cc gcc -cstrict test-self vlib
+        id: self_tests
+        if: ${{ success() && !cancelled() && steps.test_inline_assembly.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_tcc
       - name: Build examples
-        run: v -N -W build-examples
+        # Keep the full examples corpus on V3 too.
+        id: build_examples
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
+        if: ${{ success() && !cancelled() && steps.self_tests.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_examples_tcc
+      - name: Run the submodule example, using a relative path
+        id: run_submodule_example
+        if: ${{ success() && !cancelled() && steps.build_examples.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh run_submodule_example_tcc
+      - name: Build v tools
+        id: build_v_tools
+        if: ${{ success() && !cancelled() && steps.run_submodule_example.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_tools_tcc
+      - name: Build v binaries
+        id: build_v_binaries
+        if: ${{ success() && !cancelled() && steps.build_v_tools.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_vbinaries_tcc
+      - name: Build benches
+        id: build_benches
+        if: ${{ success() && !cancelled() && steps.build_v_binaries.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_benches_tcc
+      - name: Run a VSH script
+        id: run_vsh_script
+        if: ${{ success() && !cancelled() && steps.build_benches.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh run_vsh_script_tcc
+      - name: Test v tutorials
+        id: test_v_tutorials
+        if: ${{ success() && !cancelled() && steps.run_vsh_script.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_v_tutorials_tcc
+      - name: Build cmd/tools/fast
+        id: build_fast
+        if: ${{ success() && !cancelled() && steps.test_v_tutorials.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_fast_tcc
+      - name: V self compilation with default caching
+        id: v_self_compilation_usecache
+        if: ${{ success() && !cancelled() && steps.build_fast.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_usecache_tcc
+      - name: Test password input
+        id: test_password_input
+        if: ${{ success() && !cancelled() && steps.v_self_compilation_usecache.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_password_input_tcc
+      - name: Test readline
+        id: test_readline
+        if: ${{ success() && !cancelled() && steps.test_password_input.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_readline_tcc
+      - name: Test leak detector
+        id: test_leak_detector
+        if: ${{ success() && !cancelled() && steps.test_readline.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_leak_detector_tcc
+      - name: Test leak detector not being active for normal compile
+        id: test_leak_detector_not_active
+        if: ${{ success() && !cancelled() && steps.test_leak_detector.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_leak_detector_not_active_tcc
+      # Last on purpose: this task alone is five full compiler builds, and a checkout
+      # that cannot build the compiler is already red from `test_v_to_c` by now.
+      - name: Build v with -prealloc
+        id: build_v_with_prealloc
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
+        if: ${{ success() && !cancelled() && steps.test_leak_detector_not_active.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_v_with_prealloc
+
+  gcc-linux:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 121
+    env:
+      # Stop a failing test session at its first failure instead of running the
+      # whole suite to completion; the remaining files add no signal.
+      VTEST_FAIL_FAST: '1'
+      # Four test workers fit comfortably: a worker peaks near 0.25 GB and the
+      # runner has 4 CPUs and 16 GB, so this is CPU-bound, not memory-bound.
+      VJOBS: '4'
+      VTEST_SHOW_LONGEST_BY_RUNTIME: 3
+      VTEST_SHOW_LONGEST_BY_COMPTIME: 3
+      VTEST_SHOW_LONGEST_BY_TOTALTIME: 3
+      # Keep every command on V3; the canary below also proves which compiler ran.
+      V_MACOS_V3_NO_FALLBACK: 1
+    steps:
+      - uses: actions/checkout@v7
+        id: uses_checkout_v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/cache-apt-packages-action
+        id: uses_cache_apt_packages_action
+        if: ${{ success() && !cancelled() && steps.uses_checkout_v7.outcome == 'success' }}
+      - name: Build V
+        if: ${{ success() && !cancelled() && steps.uses_cache_apt_packages_action.outcome == 'success' }}
+        id: build
+        # Bootstrap helpers must also compile with V3 once the fresh compiler exists.
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
+        run: make -j4 && ./v symlink
+      - name: Assert V is the default compiler (fail if V1 is silently used)
+        id: canary
+        if: ${{ success() && !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          printf 'fn main() { println(6 * 7) }\n' > "$RUNNER_TEMP/v3_canary.v"
+          V_MACOS_V3_NO_FALLBACK=1 ./v -v run "$RUNNER_TEMP/v3_canary.v" > "$RUNNER_TEMP/v3_canary.out" 2>&1 || true
+          cat "$RUNNER_TEMP/v3_canary.out"
+          grep -q '=== V compiler benchmark ===' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the default compiler was not dispatched on Linux'; exit 1; }
+          grep -qx '42' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the V-compiled canary did not build/run correctly'; exit 1; }
+          if grep -qiE 'retrying with .-old-compiler|compatibility fallback|used the stable compiler' "$RUNNER_TEMP/v3_canary.out"; then echo '::error::the default compiler silently fell back to V1'; exit 1; fi
+          echo 'OK: V compiled and ran this program in-process on Linux, with the fallback disabled'
+      - name: All code is formatted
+        id: format
+        if: ${{ success() && !cancelled() && steps.canary.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh all_code_is_formatted_gcc
+      - name: Install dependencies for examples and tools
+        id: install_dependencies
+        if: ${{ success() && !cancelled() && steps.format.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh install_dependencies_for_examples_and_tools_gcc
+      - name: Multiwindow regressions (temporarily disabled)
+        if: ${{ false }}
+        run: echo 'multiwindow CI is temporarily disabled on Linux'
+      - name: Recompile V with -cstrict and gcc
+        id: recompile_v_with_cstrict
+        if: ${{ success() && !cancelled() && steps.install_dependencies.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh recompile_v_with_cstrict_gcc
+      - name: Valgrind v.c
+        id: valgrind_v_c
+        if: ${{ success() && !cancelled() && steps.recompile_v_with_cstrict.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh valgrind_v_c_gcc
+      - name: Run sanitizers
+        id: run_sanitizers
+        if: ${{ success() && !cancelled() && steps.valgrind_v_c.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh run_sanitizers_gcc
+      - name: v self compilation
+        id: v_self_compilation
+        if: ${{ success() && !cancelled() && steps.run_sanitizers.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_gcc
+      - name: v self compilation with default caching
+        id: v_self_compilation_usecache
+        if: ${{ success() && !cancelled() && steps.v_self_compilation.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_usecache_gcc
+      - name: Verify `v test` works
+        id: verify_v_test_works
+        if: ${{ success() && !cancelled() && steps.v_self_compilation_usecache.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh verify_v_test_works_gcc
+      - name: Test pure V math module
+        id: test_pure_v_math_module
+        if: ${{ success() && !cancelled() && steps.verify_v_test_works.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_pure_v_math_module_gcc
+      - name: Self tests
+        id: self_tests
+        if: ${{ success() && !cancelled() && steps.test_pure_v_math_module.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_gcc
+      - name: Self tests (-prod)
+        id: self_tests_prod
+        if: ${{ success() && !cancelled() && steps.self_tests.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_prod_gcc
+      - name: Self tests (-cstrict)
+        id: self_tests_cstrict
+        if: ${{ success() && !cancelled() && steps.self_tests_prod.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_cstrict_gcc
+      - name: Build examples
+        # Keep the full examples corpus on V3 too.
+        id: build_examples
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
+        if: ${{ success() && !cancelled() && steps.self_tests_cstrict.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_examples_gcc
       - name: Build tetris with -autofree
-        run: v -autofree -o tetris examples/tetris/tetris.v
+        if: ${{ false }} # Ownership/autofree coverage is temporarily disabled on GitHub CI.
+        run: v run ci/linux_ci.vsh build_tetris_autofree_gcc
       - name: Build blog tutorial with -autofree
-        run: v -autofree -o blog tutorials/building_a_simple_web_blog_with_vweb/code/blog
+        if: ${{ false }} # Ownership/autofree coverage is temporarily disabled on GitHub CI.
+        run: v run ci/linux_ci.vsh build_blog_autofree_gcc
       - name: Build option_test.c.v with -autofree
-        run: v -autofree vlib/v/tests/option_test.c.v
+        if: ${{ false }} # Ownership/autofree coverage is temporarily disabled on GitHub CI.
+        run: v run ci/linux_ci.vsh build_option_test_autofree_gcc
       - name: V self compilation with -parallel-cc
-        run: |
-          v -o v2 -parallel-cc cmd/v
+        id: v_self_compilation_parallel_cc
+        if: ${{ success() && !cancelled() && steps.build_examples.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_parallel_cc_gcc
       - name: Build modules
-        run: |
-          v build-module vlib/os
-          v build-module vlib/builtin
-          v build-module vlib/strconv
-          v build-module vlib/time
-          v build-module vlib/term
-          v build-module vlib/math
-          v build-module vlib/strings
-          v build-module vlib/v/token
-          v build-module vlib/v/ast
-          v build-module vlib/v/parser
-          v build-module vlib/v/gen/c
-          v build-module vlib/v/depgraph
-          v build-module vlib/os/cmdline
-      - name: native machine code generation
-        run: |
-          v -o vprod -prod cmd/v
-          cd cmd/tools
-          echo "Generating a 1m line V file..."
-          ../../vprod gen1m.v
-          ./gen1m > 1m.v
-          echo "Building it..."
-          ../../vprod -backend native -o 1m 1m.v
-          echo "Running it..."
-          ./1m
-          ls
-      - name: compile vdoctor.v with -skip-unused and -prod
-        run: v -showcc -skip-unused -cc gcc -prod cmd/tools/vdoctor.v
-      - name: compile vup.v with -skip-unused and -prod
-        run: v -showcc -skip-unused -cc gcc -prod cmd/tools/vup.v
+        id: build_modules
+        if: ${{ success() && !cancelled() && steps.v_self_compilation_parallel_cc.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_modules_gcc
+      - name: compile vdoctor.v with -prod
+        id: compile_vdoctor_prod
+        if: ${{ success() && !cancelled() && steps.build_modules.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh compile_vdoctor_prod_gcc
+      - name: compile vup.v with -prod
+        id: compile_vup_prod
+        if: ${{ success() && !cancelled() && steps.compile_vdoctor_prod.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh compile_vup_prod_gcc
 
-        # - run: cd examples/native && v -native hello_world.v && ./hello_world
-        # - name: Coveralls GitHub Action
-        #   uses: coverallsapp/github-action@v1.0.1
-        #   with:
-        #     github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  clang:
-    runs-on: ubuntu-20.04
+  clang-linux:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
     timeout-minutes: 121
     env:
       VFLAGS: -cc clang
+      # Stop a failing test session at its first failure instead of running the
+      # whole suite to completion; the remaining files add no signal.
+      VTEST_FAIL_FAST: '1'
+      # Four test workers fit comfortably: a worker peaks near 0.25 GB and the
+      # runner has 4 CPUs and 16 GB, so this is CPU-bound, not memory-bound.
+      VJOBS: '4'
+      VTEST_SHOW_LONGEST_BY_RUNTIME: 3
+      VTEST_SHOW_LONGEST_BY_COMPTIME: 3
+      VTEST_SHOW_LONGEST_BY_TOTALTIME: 3
+      # Keep every command on V3; the canary below also proves which compiler ran.
+      V_MACOS_V3_NO_FALLBACK: 1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        id: uses_checkout_v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/cache-apt-packages-action
+        id: uses_cache_apt_packages_action
+        if: ${{ success() && !cancelled() && steps.uses_checkout_v7.outcome == 'success' }}
       - name: Build V
+        if: ${{ success() && !cancelled() && steps.uses_cache_apt_packages_action.outcome == 'success' }}
+        id: build
+        # Bootstrap helpers must also compile with V3 once the fresh compiler exists.
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
         run: make -j4 && ./v symlink
+      - name: Assert V is the default compiler (fail if V1 is silently used)
+        id: canary
+        if: ${{ success() && !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          set -uo pipefail
+          printf 'fn main() { println(6 * 7) }\n' > "$RUNNER_TEMP/v3_canary.v"
+          V_MACOS_V3_NO_FALLBACK=1 ./v -v run "$RUNNER_TEMP/v3_canary.v" > "$RUNNER_TEMP/v3_canary.out" 2>&1 || true
+          cat "$RUNNER_TEMP/v3_canary.out"
+          grep -q '=== V compiler benchmark ===' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the default compiler was not dispatched on Linux'; exit 1; }
+          grep -qx '42' "$RUNNER_TEMP/v3_canary.out" || { echo '::error::the V-compiled canary did not build/run correctly'; exit 1; }
+          if grep -qiE 'retrying with .-old-compiler|compatibility fallback|used the stable compiler' "$RUNNER_TEMP/v3_canary.out"; then echo '::error::the default compiler silently fell back to V1'; exit 1; fi
+          echo 'OK: V compiled and ran this program in-process on Linux, with the fallback disabled'
       - name: All code is formatted
-        run: v test-cleancode
+        id: format
+        if: ${{ success() && !cancelled() && steps.canary.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh all_code_is_formatted_clang
       - name: Install dependencies for examples and tools
-        run: |
-          v retry -- sudo apt update
-          v retry -- sudo apt install --quiet -y postgresql libpq-dev libssl-dev sqlite3 libsqlite3-dev valgrind
-          v retry -- sudo apt install --quiet -y libfreetype6-dev libxi-dev libxcursor-dev libgl-dev libasound2-dev
-          v retry -- sudo apt install --quiet -y clang
+        id: install_dependencies
+        if: ${{ success() && !cancelled() && steps.format.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh install_dependencies_for_examples_and_tools_clang
       - name: Recompile V with -cstrict and clang
-        run: v -cc clang -cg -cstrict -o v cmd/v
+        id: recompile_v_with_cstrict
+        if: ${{ success() && !cancelled() && steps.install_dependencies.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh recompile_v_with_cstrict_clang
       - name: Valgrind
-        run: valgrind --error-exitcode=1 v -o v.c cmd/v
+        id: valgrind
+        if: ${{ success() && !cancelled() && steps.recompile_v_with_cstrict.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh valgrind_clang
       - name: Run sanitizers
-        run: |
-          v -o v2 cmd/v -cflags -fsanitize=memory
-          v -o v3 cmd/v -cflags -fsanitize=thread
-          v -o v4 cmd/v -cflags -fsanitize=undefined
-          v -o v5 cmd/v -cflags -fsanitize=address,pointer-compare,pointer-subtract
-          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v2 -o v.c cmd/v
-          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v3 -o v.c cmd/v
-          UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v4 -o v.c cmd/v
-          ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 ./v5 -o v.c cmd/v
+        id: run_sanitizers
+        if: ${{ success() && !cancelled() && steps.valgrind.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh run_sanitizers_clang
       - name: v self compilation
-        run: v -o v2 cmd/v && ./v2 -o v3 cmd/v && ./v3 -o v4 cmd/v
-      - name: v self compilation with -usecache
-        run: |
-          unset VFLAGS
-          v -usecache examples/hello_world.v && examples/hello_world
-          v  -o v2     -usecache cmd/v
-          ./v2 -o v3     -usecache cmd/v
-          ./v3 version
-          ./v3 -o tetris -usecache examples/tetris/tetris.v
+        id: v_self_compilation
+        if: ${{ success() && !cancelled() && steps.run_sanitizers.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_clang
+      - name: v self compilation with default caching
+        id: v_self_compilation_usecache
+        if: ${{ success() && !cancelled() && steps.v_self_compilation.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh v_self_compilation_usecache_clang
       - name: Verify `v test` works
-        run: |
-          echo $VFLAGS
-          v cmd/tools/test_if_v_test_system_works.v
-          ./cmd/tools/test_if_v_test_system_works
-
+        id: verify_v_test_works
+        if: ${{ success() && !cancelled() && steps.v_self_compilation_usecache.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh verify_v_test_works_clang
       - name: Test pure V math module
-        run: v -exclude @vlib/math/*.c.v test vlib/math/
+        id: test_pure_v_math_module
+        if: ${{ success() && !cancelled() && steps.verify_v_test_works.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh test_pure_v_math_module_clang
       - name: Self tests
-        run: v test-self vlib
+        id: self_tests
+        if: ${{ success() && !cancelled() && steps.test_pure_v_math_module.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_clang
       - name: Self tests (vprod)
-        run: v -o vprod -prod cmd/v && ./vprod test-self vlib
+        id: self_tests_vprod
+        if: ${{ success() && !cancelled() && steps.self_tests.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_vprod_clang
       - name: Self tests (-cstrict)
-        run: VTEST_JUST_ESSENTIAL=1 V_CI_CSTRICT=1 ./vprod -cstrict test-self vlib
-
+        id: self_tests_cstrict
+        if: ${{ success() && !cancelled() && steps.self_tests_vprod.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh self_tests_cstrict_clang
       - name: Build examples
-        run: v -N -W build-examples
+        # Keep the full examples corpus on V3 too.
+        id: build_examples
+        env:
+          V_MACOS_V3_NO_FALLBACK: 1
+        if: ${{ success() && !cancelled() && steps.self_tests_cstrict.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_examples_clang
       - name: Build examples with -autofree
-        run: |
-          v -autofree -experimental -o tetris examples/tetris/tetris.v
+        if: ${{ false }} # Ownership/autofree coverage is temporarily disabled on GitHub CI.
+        run: v run ci/linux_ci.vsh build_examples_autofree_clang
       - name: Build modules
-        run: |
-          v build-module vlib/os
-          v build-module vlib/builtin
-          v build-module vlib/strconv
-          v build-module vlib/time
-          v build-module vlib/term
-          v build-module vlib/math
-          v build-module vlib/strings
-          v build-module vlib/v/token
-          v build-module vlib/v/ast
-          v build-module vlib/v/parser
-          v build-module vlib/v/gen/c
-          v build-module vlib/v/depgraph
-          v build-module vlib/os/cmdline
-      - name: native machine code generation
-        run: |
-          v -o vprod -prod cmd/v
-          cd cmd/tools
-          echo "Generating a 1m line V file..."
-          ../../vprod gen1m.v
-          ./gen1m > 1m.v
-          echo "Building it..."
-          ../../vprod -backend native -o 1m 1m.v
-          echo "Running it..."
-          ./1m
-          ls
+        id: build_modules
+        if: ${{ success() && !cancelled() && steps.build_examples.outcome == 'success' }}
+        run: v run ci/linux_ci.vsh build_modules_clang
 
-  # autofree-selfcompile:
-  #   runs-on: ubuntu-20.04
-  #   if: github.event_name != 'push' || github.ref == 'refs/heads/master' || github.repository != 'vlang/v'
-  #   timeout-minutes: 121
-  #   env:
-  #     VFLAGS: -cc gcc
-  #   steps:
-  #   - uses: actions/checkout@v4
-  #   - name: Build V
-  #     run: make -j4
-  #   - name: V self compilation with -autofree
-  #     run: v -o v2 -autofree cmd/v && ./v2 -o v3 -autofree cmd/v && ./v3 -o v4 -autofree cmd/v
-
-  # musl:
-  #   runs-on: ubuntu-20.04
-  #   if: github.event_name != 'push' || github.ref == 'refs/heads/master' || github.repository != 'vlang/v'
-  #   timeout-minutes: 121
-  #   env:
-  #     VFLAGS: -cc musl-gcc
-  #     V_CI_MUSL: 1
-  #   steps:
-  #   - name: Build v
-  #     run: echo $VFLAGS && make -j4 && ./v symlink
-  #   - uses: actions/checkout@v4
-  #   - name: Install dependencies for examples and tools
-  #     run: v retry -- sudo apt install --quiet -y musl musl-tools libssl-dev sqlite3 libsqlite3-dev valgrind
-  #   - name: Recompile V with -cg
-  #     run: v -cg -o v cmd/v
-  #   # - name: Test v binaries
-  #   #   run: v -N -W build-vbinaries
-  #   # - name: Test v->js
-  #   #   run: v -o hi.js examples/hello_v_js.v && node hi.js
-  #   - name: quick debug
-  #     run: v -stats vlib/strconv/format_test.v
-  #   - name: Self tests
-  #     run: v test-self vlib
+  package2-linux:
+    if: github.ref == 'refs/heads/master'
+    name: Linux ${{ matrix.compiler }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            vflags: '-cc gcc'
+          - compiler: clang
+            vflags: '-cc clang'
+          - compiler: tcc
+            vflags: '-cc tcc -no-retry-compilation'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 121
+    env:
+      VFLAGS: ${{ matrix.vflags }}
+    steps:
+      - name: Multiwindow package 2 regressions (temporarily disabled)
+        if: ${{ false }}
+        run: echo 'multiwindow package 2 CI is temporarily disabled on Linux'

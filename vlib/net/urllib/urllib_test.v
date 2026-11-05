@@ -34,7 +34,8 @@ fn test_parse_query() {
 }
 
 fn test_parse_query_orders() {
-	query_one := urllib.parse_query('https://someapi.com/endpoint?gamma=zalibaba&tau=1&alpha=alibaba&signature=alibaba123')!
+	query_one :=
+		urllib.parse_query('https://someapi.com/endpoint?gamma=zalibaba&tau=1&alpha=alibaba&signature=alibaba123')!
 	qvalues := query_one.values()
 	assert qvalues == ['zalibaba', '1', 'alibaba', 'alibaba123']
 }
@@ -75,7 +76,7 @@ fn test_parse_empty_query_one() {
 	assert query_str == query_encode
 }
 
-// testing the case where the query as empity value
+// testing the case where the query as empty value
 // e.g https://www.vlang.dev?
 fn test_parse_empty_query_two() {
 	query_str := ''
@@ -86,6 +87,35 @@ fn test_parse_empty_query_two() {
 	assert qvalues == []
 	assert qvalues_map == {}
 	assert query_str == query_encode
+}
+
+// testing the case where the URL ends with '?' and its query holds another '?'
+fn test_parse_query_with_extra_question_mark() {
+	// a single trailing '?' means: an empty query, that should still be printed
+	u := urllib.parse('http://example.com/p?')!
+	assert u.path == '/p'
+	assert u.raw_query == ''
+	assert u.force_query == true
+	assert u.str() == 'http://example.com/p?'
+	// the query holds a '?' of its own, so it is not empty and no force is needed
+	v := urllib.parse('http://example.com/p?a=1?')!
+	assert v.path == '/p'
+	assert v.raw_query == 'a=1?'
+	assert v.force_query == false
+	assert v.str() == 'http://example.com/p?a=1?'
+	// a '?' in the middle does not end the URL, it is part of the query
+	w := urllib.parse('http://example.com/p?a=1?b=2')!
+	assert w.path == '/p'
+	assert w.raw_query == 'a=1?b=2'
+	assert w.force_query == false
+	assert w.str() == 'http://example.com/p?a=1?b=2'
+	// normal, single '?' URLs are not affected
+	x := urllib.parse('http://example.com/p?a=1&b=2')!
+	assert x.path == '/p'
+	assert x.raw_query == 'a=1&b=2'
+	assert x.force_query == false
+	assert x.str() == 'http://example.com/p?a=1&b=2'
+	assert urllib.parse('http://example.com/p')!.str() == 'http://example.com/p'
 }
 
 fn test_parse() {
@@ -102,6 +132,9 @@ fn test_parse() {
 		'foo://example.com:8042/over/there?name=ferret#nose',
 		'ftp://2001:0db8:85a3:0000:0000:8a2e:0370:7334/path/file.txt',
 		'ws://[2001:0db8:85a3:0000:0000:8a2e:0370:7334]:4000',
+		'/2000k/hls/mixed.m3u8',
+		'2000k/hls/mixed.m3u8',
+		'./2000k:hls/mixed.m3u8',
 	]
 	for url in urls {
 		urllib.parse(url)!
@@ -109,9 +142,15 @@ fn test_parse() {
 
 	test_url := 'https://joe:pass@www.mydomain.com:8080/som/url?param1=test1&param2=test2&foo=bar#testfragment'
 	u := urllib.parse(test_url)!
-	assert u.scheme == 'https' && u.hostname() == 'www.mydomain.com' && u.port() == '8080'
-		&& u.path == '/som/url' && u.fragment == 'testfragment' && u.user.username == 'joe'
-		&& u.user.password == 'pass'
+	if user := u.user {
+		assert u.scheme == 'https' && u.hostname() == 'www.mydomain.com' && u.port() == '8080'
+			&& u.path == '/som/url' && u.fragment == 'testfragment' && user.username == 'joe'
+			&& user.password == 'pass'
+	}
+
+	v :=
+		urllib.parse('https://vip.ffzy-online4.com/20230205/6094_d2720761/index.m3u8')!.resolve_reference(urllib.parse('2000k/hls/mixed.m3u8')!)!
+	assert v.str() == 'https://vip.ffzy-online4.com/20230205/6094_d2720761/2000k/hls/mixed.m3u8'
 }
 
 fn test_parse_authority() {
@@ -123,8 +162,58 @@ fn test_parse_authority() {
 
 	for url, expected in test_urls {
 		u := urllib.parse(url)!
-		assert u.user.username == expected[0]
-		assert u.user.password == expected[1]
+		if user := u.user {
+			assert user.username == expected[0]
+			assert user.password == expected[1]
+		}
+	}
+}
+
+fn test_parse_rejects_backslash_in_authority() {
+	invalid_urls := [
+		r'http://127.0.0.1\@google.com/',
+		r'http://user@google.com\path',
+		r'http://google.com\path',
+	]
+	for url in invalid_urls {
+		if _ := urllib.parse(url) {
+			assert false, 'parser must reject "${url}"'
+		}
+	}
+}
+
+// test_parse_rejects_invalid_zone_escape checks that an invalid %-escape in
+// an IPv6 zone identifier is rejected, like Go does, instead of being
+// silently accepted.
+// See https://github.com/vlang/v/issues/30147
+fn test_parse_rejects_invalid_zone_escape() {
+	// Go: parse "http://[fe80::1%25%ff00]/": invalid URL escape "%ff"
+	if _ := urllib.parse('http://[fe80::1%25%ff00]/') {
+		assert false, 'parser must reject an invalid zone escape'
+	}
+	// a valid zone identifier still parses
+	u := urllib.parse('http://[fe80::1%25eth0]/') or {
+		assert false, 'parser must accept a valid zone identifier: ${err}'
+		return
+	}
+	assert u.hostname() == 'fe80::1%eth0'
+	for zone in ['eth%20', 'eth%25', '%20', '%25'] {
+		url := urllib.parse('http://[fe80::1%25${zone}]/')!
+		expected := zone.replace('%20', ' ').replace('%25', '%')
+		assert url.hostname() == 'fe80::1%${expected}'
+	}
+	for zone in ['eth%ff', 'eth%2F', 'eth%00', 'eth%', 'eth%2', 'eth%GG'] {
+		if _ := urllib.parse('http://[fe80::1%25${zone}]/') {
+			assert false, 'accepted invalid zone escape ${zone}'
+		}
+	}
+}
+
+fn test_parse_allows_apostrophe_in_authority() {
+	url := urllib.parse("http://o'connor@example'host/")!
+	assert url.host == "example'host"
+	if user := url.user {
+		assert user.username == "o'connor"
 	}
 }
 
@@ -132,4 +221,39 @@ fn test_parse_slashes() {
 	assert urllib.parse('/')!.str() == '/'
 	assert urllib.parse('//')!.str() == '//'
 	assert urllib.parse('///')!.str() == '///'
+}
+
+fn test_path_backslash_is_escaped_on_output() {
+	for input in [r'http://example.com/\/x', r'http://example.com/%5c/\/x'] {
+		u := urllib.parse(input)!
+		assert u.path.contains(r'\')
+		assert !u.escaped_path().contains(r'\')
+		assert !u.str().contains(r'\')
+		assert !u.request_uri().contains(r'\')
+		assert urllib.parse(u.str())!.path == u.path
+	}
+	u := urllib.parse(r'http://example.com/\/x')!
+	assert u.str() == 'http://example.com/%5C/x'
+	assert u.request_uri() == '/%5C/x'
+	encoded := urllib.parse('http://example.com/%5c/x')!
+	assert encoded.str() == 'http://example.com/%5c/x'
+	assert encoded.escaped_path() == '/%5c/x'
+	quoted := urllib.parse("http://example.com/a'b")!
+	assert quoted.str() == "http://example.com/a'b"
+}
+
+fn test_parse_empty_and_question_only_relative_urls() ! {
+	for raw in ['', '?', '??', '?a=1?', 'mailto:user@example.com?a=1?', '/p?a=1?#fragment?'] {
+		u := urllib.parse(raw)!
+		assert u.str() == raw
+	}
+	u := urllib.parse('?')!
+	assert u.raw_query == ''
+	assert u.force_query
+	v := urllib.parse('??')!
+	assert v.raw_query == '?'
+	assert !v.force_query
+	w := urllib.parse('/p?a=1?#fragment?')!
+	assert w.raw_query == 'a=1?'
+	assert w.fragment == 'fragment?'
 }

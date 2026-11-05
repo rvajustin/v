@@ -177,7 +177,7 @@ fn (b Buffer) view(from int, to int) View {
 	}
 	raw := lines.join('\n')
 	return View{
-		raw: raw.replace('\t', strings.repeat(` `, b.tab_width))
+		raw:    raw.replace('\t', strings.repeat(` `, b.tab_width))
 		cursor: Cursor{
 			pos_x: x
 			pos_y: b.cursor.pos_y
@@ -644,10 +644,14 @@ fn main() {
 		files: files
 	}
 	a.tui = tui.init(
-		user_data: a
-		init_fn: InitFn(init)
-		frame_fn: FrameFn(frame)
-		event_fn: EventFn(event)
+		user_data:      a
+		// The tui callback slots are `voidptr`; these handlers (`init`, `frame`, `event`)
+		// instead take the typed app pointer that `user_data` hands back. `&T` and `voidptr`
+		// share a representation, so reinterpreting each fn pointer across that parameter is
+		// ABI-safe; the casts only satisfy the static fn-type check.
+		init_fn:        unsafe { InitFn(init) }
+		frame_fn:       unsafe { FrameFn(frame) }
+		event_fn:       unsafe { EventFn(event) }
 		capture_events: true
 	)
 	a.tui.run()!

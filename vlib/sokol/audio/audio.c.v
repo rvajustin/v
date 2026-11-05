@@ -7,16 +7,24 @@ $if linux {
 	#include <alsa/asoundlib.h> # Please install the `libasound2-dev` package
 }
 
+$if openbsd {
+	$compile_error('sokol/audio not supported on OpenBSD')
+}
+
 #flag -I @VEXEROOT/thirdparty/sokol
 // FreeBSD requires the audio/alsa-lib to be installed
 #flag freebsd -I/usr/local/include
+
+@[use_once]
 #define SOKOL_IMPL
+
 #include "sokol_audio.h"
-#flag linux -lasound
+#flag linux -lasound -lpthread
 #flag darwin -framework AudioToolbox
 #flag windows -lole32
 #flag freebsd -L/usr/local/lib
 #flag freebsd -lasound
+#flag android -laaudio
 
 // callback function for `stream_cb` in [[C.saudio_desc](#C.saudio_desc)] when calling [audio.setup()](#setup)
 //
@@ -34,22 +42,18 @@ $if linux {
 //
 // Do not write more data to the buffer than it is requesting, but you may write less. The buffer is initialized with
 // zeroes, so unwritten data will result in audio silence.
-// Example: unsafe { C.memcpy(buffer, &samples, samples.len * int(sizeof(f32))) }
-// Example: unsafe { mut b := buffer; for i, sample in samples { b[i] = sample } }
-pub type FNStreamingCB = fn (buffer &f32, num_frames int, num_channels int)
+// Example body: unsafe { C.memcpy(buffer, &samples, samples.len * int(sizeof(f32))) }
+// Example body: unsafe { mut b := buffer; for i, sample in samples { b[i] = sample } }
+// Sokol declares both counts as C `int`; keep the callback ABI explicitly i32.
+pub type FNStreamingCB = fn (buffer &f32, num_frames i32, num_channels i32)
 
 // callback function for `stream_userdata_cb` to use in `C.saudio_desc` when calling [audio.setup()](#setup)
-//
-// sokol callback functions run in a separate thread
-//
 // This function operates the same way as [[FNStreamingCB](#FNStreamingCB)] but it passes customizable `user_data` to the
 // callback. This is the method to use if your audio data is stored in a struct or array. Identify the
 // `user_data` when you call `audio.setup()` and that object will be passed to the callback as the last arg.
-// Example: mut soundbuffer := []f32
-// Example: soundbuffer << previously_parsed_wavfile_bytes
-// Example: audio.setup(stream_userdata_cb: mycallback, user_data: soundbuffer)
-// Example: fn mycallback(buffer &f32, num_frames int, num_channels int, mut sb []f32) { ... }
-pub type FnStreamingCBWithUserData = fn (buffer &f32, num_frames int, num_channels int, user_data voidptr)
+// Note: Sokol's callback functions run in a separate thread.
+// Example: previously_parsed_wavfile_bytes := [f32(0),0,0,0]; mycallback := fn (buffer &f32, num_frames i32, num_channels i32, mut sb []f32) {}; mut soundbuffer := []f32{}; soundbuffer << previously_parsed_wavfile_bytes; audio.setup(stream_userdata_cb: mycallback, user_data: soundbuffer.data);
+pub type FnStreamingCBWithUserData = fn (buffer &f32, num_frames i32, num_channels i32, user_data voidptr)
 
 pub fn (x FNStreamingCB) str() string {
 	return '&FNStreamingCB{ ${ptr_str(x)} }'
@@ -85,14 +89,14 @@ pub mut:
 // | buffer_frames | 2048     | buffer size in frames, larger is more latency, smaller means higher CPU |
 // | packet_frames | 128      | push model only, number of frames that will be pushed in each packet |
 // | num_packets   | 64       | for push model only, number of packets in the backend ringbuffer |
-@[typedef]
+@[params; typedef]
 pub struct C.saudio_desc {
 pub:
-	sample_rate        int
-	num_channels       int
-	buffer_frames      int
-	packet_frames      int
-	num_packets        int
+	sample_rate        i32
+	num_channels       i32
+	buffer_frames      i32
+	packet_frames      i32
+	num_packets        i32
 	stream_cb          FNStreamingCB
 	stream_userdata_cb FnStreamingCBWithUserData
 pub mut:
@@ -101,7 +105,7 @@ pub mut:
 	logger    C.saudio_logger
 }
 
-fn C.saudio_setup(desc &C.saudio_desc)
+fn C.saudio_setup(const_desc &C.saudio_desc)
 
 fn C.saudio_shutdown()
 
@@ -111,17 +115,17 @@ fn C.saudio_userdata() voidptr
 
 fn C.saudio_query_desc() C.saudio_desc
 
-fn C.saudio_sample_rate() int
+fn C.saudio_sample_rate() i32
 
-fn C.saudio_buffer_frames() int
+fn C.saudio_buffer_frames() i32
 
-fn C.saudio_channels() int
+fn C.saudio_channels() i32
 
 fn C.saudio_suspended() bool
 
-fn C.saudio_expect() int
+fn C.saudio_expect() i32
 
-fn C.saudio_push(frames &f32, num_frames int) int
+fn C.saudio_push(const_frames &f32, num_frames i32) i32
 
 // setup - setup sokol-audio
 pub fn setup(desc &C.saudio_desc) {
@@ -192,7 +196,7 @@ pub fn push(frames &f32, num_frames int) int {
 }
 
 // fclamp - helper function to 'clamp' a number to a certain range
-// Example: realsample := audio.fclamp(sample, -1.0, 1.0)
+// Example: sample := f32(3.14); realsample := audio.fclamp(sample, -1.0, 1.0); assert realsample == 1.0
 @[inline]
 pub fn fclamp(x f32, flo f32, fhi f32) f32 {
 	if x > fhi {
@@ -207,7 +211,7 @@ pub fn fclamp(x f32, flo f32, fhi f32) f32 {
 // min - helper function to return the smaller of two numbers
 //
 // NOTE: math.min returns `f32` values, this returns `int` values
-// Example: smaller := audio.min(1, 5) // smaller == 1
+// Example: println(audio.min(1, 5))
 pub fn min(x int, y int) int {
 	if x < y {
 		return x
@@ -218,7 +222,7 @@ pub fn min(x int, y int) int {
 // max - helper function to return the larger of two numbers
 //
 // NOTE: math.max returns `f32` values, this returns `int` values
-// Example: larger := audio.max(1, 5) // larger == 5
+// Example: println(audio.max(1, 5))
 pub fn max(x int, y int) int {
 	if x < y {
 		return y

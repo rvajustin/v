@@ -2,39 +2,46 @@ import os
 import time
 import term
 import v.scanner
+import v.token
+import file_lists
 import v.pref
 
-const skip_tests = os.getenv_opt('SKIP_TESTS') or { '' }.bool()
-const comments_mode = scanner.CommentsMode.from(os.getenv('SCANNER_MODE')) or {
-	scanner.CommentsMode.skip_comments
+const skip_tests = os.getenv('SKIP_TESTS').bool()
+const fuzzer_mode = os.getenv('VFUZZER').bool()
+
+fn scanner_mode() scanner.Mode {
+	return if os.getenv('SCANNER_MODE') in ['parse_comments', 'scan_comments'] {
+		.scan_comments
+	} else {
+		.normal
+	}
 }
 
 fn main() {
-	dump(comments_mode)
-	files := os.args#[1..]
-	if files.len > 0 && files[0].starts_with('@') {
-		lst_path := files[0].all_after('@')
-		listed_files := os.read_file(lst_path)!.split('\n')
-		process_files(listed_files)!
-		return
+	if !fuzzer_mode {
+		dump(scanner_mode())
 	}
-	process_files(files)!
+	all_files := file_lists.expand_files(os.args#[1..])!
+	process_files(all_files)!
 }
 
 fn hline() {
+	if fuzzer_mode {
+		return
+	}
 	println('----------------------------------------------------------------------------------------------------------------------------------------------------')
 }
 
 fn theader() {
+	if fuzzer_mode {
+		return
+	}
 	println('        Time     Tokens      Bytes      Lines   Bytes/Token     Errors')
 }
 
 fn process_files(files []string) ! {
 	nthreads := 1 // TODO
-	mut pref_ := pref.new_preferences()
-	pref_.is_fmt = true
-	pref_.skip_warnings = true
-	pref_.output_mode = .silent
+	pref_ := pref.new_preferences()
 	mut sw := time.new_stopwatch()
 	mut total_us := i64(0)
 	mut total_bytes := i64(0)
@@ -51,14 +58,29 @@ fn process_files(files []string) ! {
 		}
 		total_files++
 		sw.restart()
-		s := scanner.new_scanner_file(f, comments_mode, pref_)!
+		source := os.read_file(f)!
+		mut fileset := token.FileSet.new()
+		mut file := fileset.add_file(f, source.len)
+		file.index_lines(source)
+		mut s := scanner.new_scanner(pref_, scanner_mode())
+		s.init(file, source)
+		mut token_count := 0
+		for {
+			token_count++
+			if s.scan() == .eof {
+				break
+			}
+		}
 		f_us := sw.elapsed().microseconds()
 		total_us += f_us
-		total_bytes += s.text.len
-		total_tokens += s.all_tokens.len
-		total_lines += s.nr_lines
-		total_errors += s.errors.len
-		println('${f_us:10}us ${s.all_tokens.len:10} ${s.text.len:10} ${s.nr_lines:10} ${(f64(s.text.len) / s.all_tokens.len):13.3f} ${s.errors.len:10}   ${f}')
+		total_bytes += source.len
+		total_tokens += token_count
+		line_count := source.count('\n') + 1
+		total_lines += line_count
+		total_errors += s.diagnostics.len
+		if !fuzzer_mode {
+			println('${f_us:10}us ${token_count:10} ${source.len:10} ${line_count:10} ${(f64(source.len) / token_count):13.3f} ${s.diagnostics.len:10}   ${f}')
+		}
 	}
 	hline()
 	theader()

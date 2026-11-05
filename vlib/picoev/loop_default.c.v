@@ -15,14 +15,14 @@ mut:
 
 type LoopType = SelectLoop
 
-// create_select_loop creates a new `SelectLoop` struct with the given `id`
+// create_select_loop creates a new `SelectLoop` struct with the given `id`.
 pub fn create_select_loop(id int) !&SelectLoop {
 	return &SelectLoop{
 		id: id
 	}
 }
 
-// updates the events associated with a file descriptor in the event loop
+// updates the events associated with a file descriptor in the event loop.
 @[direct_array_access]
 fn (mut pv Picoev) update_events(fd int, events int) int {
 	// check if fd is in range
@@ -32,7 +32,7 @@ fn (mut pv Picoev) update_events(fd int, events int) int {
 	return 0
 }
 
-// performs a single iteration of the select-based event loop
+// performs a single iteration of the select-based event loop.
 @[direct_array_access]
 fn (mut pv Picoev) poll_once(max_wait_in_sec int) int {
 	// Initializes sets for read, write, and error events
@@ -65,10 +65,10 @@ fn (mut pv Picoev) poll_once(max_wait_in_sec int) int {
 
 	// select and handle sockets if any
 	tv := C.timeval{
-		tv_sec: u64(max_wait_in_sec)
+		tv_sec:  u64(max_wait_in_sec)
 		tv_usec: 0
 	}
-	r := C.@select(maxfd + 1, &readfds, &writefds, &errorfds, &tv)
+	r := C.select(maxfd + 1, &readfds, &writefds, &errorfds, &tv)
 	if r == -1 {
 		// timeout
 		return -1
@@ -83,18 +83,13 @@ fn (mut pv Picoev) poll_once(max_wait_in_sec int) int {
 				if C.FD_ISSET(target.fd, &writefds) != 0 {
 					read_events |= picoev_write
 				}
-
 				if read_events != 0 {
-					$if trace_fd ? {
-						eprintln('do callback ${target.fd}')
-					}
-
+					trace_fd('do callback ${target.fd}')
 					// do callback!
 					unsafe { target.cb(target.fd, read_events, &pv) }
 				}
 			}
 		}
 	}
-
 	return 0
 }

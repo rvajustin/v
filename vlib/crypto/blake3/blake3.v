@@ -49,14 +49,14 @@ const iv = [
 
 // message word schedule permutations
 const sigma = [
-	[u8(0), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-	[u8(2), 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8],
-	[u8(3), 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1],
-	[u8(10), 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6],
-	[u8(12), 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4],
-	[u8(9), 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7],
-	[u8(11), 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13],
-]
+	[u8(0), 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]!,
+	[u8(2), 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]!,
+	[u8(3), 4, 10, 12, 13, 2, 7, 14, 6, 5, 9, 0, 11, 15, 8, 1]!,
+	[u8(10), 7, 12, 9, 14, 3, 13, 15, 4, 0, 11, 2, 5, 8, 1, 6]!,
+	[u8(12), 13, 9, 11, 15, 10, 14, 8, 7, 2, 5, 3, 0, 1, 6, 4]!,
+	[u8(9), 14, 11, 5, 8, 12, 15, 1, 13, 3, 0, 10, 2, 6, 4, 7]!,
+	[u8(11), 15, 5, 0, 1, 9, 8, 6, 14, 10, 2, 12, 3, 4, 7, 13]!,
+]!
 
 // internal flags
 enum Flags as u32 {
@@ -131,13 +131,13 @@ mut:
 
 // Digest.new_hash initializes a Digest structure for a Blake3 hash
 pub fn Digest.new_hash() !Digest {
-	return Digest.new(blake3.iv, 0)
+	return Digest.new(iv, 0)
 }
 
 // Digest.new_keyed_hash initializes a Digest structure for a Blake3 keyed hash
 pub fn Digest.new_keyed_hash(key []u8) !Digest {
 	// treat the key bytes as little endian u32 values
-	mut key_words := []u32{len: 8, cap: 8}
+	mut key_words := []u32{len: 8}
 	for i in 0 .. 8 {
 		key_words[i] = binary.little_endian_u32_at(key, i * 4)
 	}
@@ -147,13 +147,13 @@ pub fn Digest.new_keyed_hash(key []u8) !Digest {
 
 // Digest.new_derive_key_hash initializes a Digest structure for deriving a Blake3 key
 pub fn Digest.new_derive_key_hash(context []u8) !Digest {
-	mut context_digest := Digest.new(blake3.iv, u32(Flags.derive_key_context))!
+	mut context_digest := Digest.new(iv, u32(Flags.derive_key_context))!
 
 	context_digest.write(context)!
-	context_key := context_digest.checksum_internal(blake3.key_length)
+	context_key := context_digest.checksum_internal(key_length)
 
 	// treat the context key bytes as little endian u32 values
-	mut key_words := []u32{len: 8, cap: 8}
+	mut key_words := []u32{len: 8}
 	for i in 0 .. 8 {
 		key_words[i] = binary.little_endian_u32_at(context_key, i * 4)
 	}
@@ -186,11 +186,11 @@ fn Digest.new(key_words []u32, flags u32) !Digest {
 	}
 
 	return Digest{
-		key_words: key_words
-		flags: flags
+		key_words:     key_words
+		flags:         flags
 		chunk_counter: 0
-		input: []u8{}
-		binary_edge: []TreeNode{}
+		input:         []u8{}
+		binary_edge:   []TreeNode{}
 	}
 }
 
@@ -206,15 +206,15 @@ pub fn (mut d Digest) write(data []u8) ! {
 	// if we have more than 1024 bytes in the input,
 	// process it in chunks.
 
-	for d.input.len > blake3.chunk_size {
+	for d.input.len > chunk_size {
 		mut chunk := Chunk{}
-		words := chunk.process_input(d.input[..blake3.chunk_size], d.key_words, d.chunk_counter,
-			d.flags, false)
+		words := chunk.process_input(d.input[..chunk_size], d.key_words, d.chunk_counter, d.flags,
+			false)
 
 		d.add_node(Node{ chaining_value: words[..8] }, 0)
 
 		d.chunk_counter += 1
-		d.input = d.input[blake3.chunk_size..]
+		d.input = d.input[chunk_size..]
 	}
 }
 
@@ -238,11 +238,11 @@ fn (mut d Digest) checksum_internal(size u64) []u8 {
 	// top of the tree.
 
 	mut state := HashState{
-		words: words
+		words:          words
 		chaining_value: chunk.chaining_value
-		block_words: chunk.block_words
-		block_len: chunk.block_len
-		flags: chunk.flags
+		block_words:    chunk.block_words
+		block_len:      chunk.block_len
+		flags:          chunk.flags
 	}
 
 	mut right_node := Node{
@@ -261,12 +261,12 @@ fn (mut d Digest) checksum_internal(size u64) []u8 {
 				mut flags := d.flags | u32(Flags.parent)
 				flags |= if i == d.binary_edge.len - 1 { u32(Flags.root) } else { u32(0) }
 
-				words = f(d.key_words, block_words, u64(0), blake3.block_size, flags)
+				words = f(d.key_words, block_words, u64(0), block_size, flags)
 
 				state.words = words
 				state.chaining_value = d.key_words
 				state.block_words = block_words
-				state.block_len = blake3.block_size
+				state.block_len = block_size
 				state.flags = flags
 
 				right_node = Node{
@@ -309,6 +309,7 @@ fn root_output_bytes(state HashState, size u64) []u8 {
 	return output
 }
 
+@[direct_array_access]
 fn (mut d Digest) add_node(node Node, level u8) {
 	// if we are above the highst level,
 	// just add the node at the top
@@ -327,7 +328,7 @@ fn (mut d Digest) add_node(node Node, level u8) {
 			mut block_words := edge_node.chaining_value.clone()
 			block_words << node.chaining_value
 
-			words := f(d.key_words, block_words, u64(0), blake3.block_size, d.flags | u32(Flags.parent))
+			words := f(d.key_words, block_words, u64(0), block_size, d.flags | u32(Flags.parent))
 			parent_node := Node{
 				chaining_value: words[..8]
 			}
@@ -345,19 +346,19 @@ fn (mut d Digest) add_node(node Node, level u8) {
 pub fn sum256(data []u8) []u8 {
 	mut d := Digest.new_hash() or { panic(err) }
 	d.write(data) or { panic(err) }
-	return d.checksum_internal(blake3.size256)
+	return d.checksum_internal(size256)
 }
 
 // sum_keyed256 returns the Blake3 256 bit keyed hash of the data.
 pub fn sum_keyed256(data []u8, key []u8) []u8 {
 	mut d := Digest.new_keyed_hash(key) or { panic(err) }
 	d.write(data) or { panic(err) }
-	return d.checksum_internal(blake3.size256)
+	return d.checksum_internal(size256)
 }
 
 // sum_derived_key256 returns the Blake3 256 bit derived key hash of the key material
 pub fn sum_derive_key256(context []u8, key_material []u8) []u8 {
 	mut d := Digest.new_derive_key_hash(context) or { panic(err) }
 	d.write(key_material) or { panic(err) }
-	return d.checksum_internal(blake3.size256)
+	return d.checksum_internal(size256)
 }

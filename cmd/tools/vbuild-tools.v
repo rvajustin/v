@@ -11,7 +11,11 @@ import v.util
 // should be compiled (v folder).
 // To implement that, these folders are initially skipped, then added
 // as a whole *after the testing.prepare_test_session call*.
-const tools_in_subfolders = ['vast', 'vcreate', 'vdoc', 'vpm', 'vsymlink', 'vvet', 'vwhere', 'vcover']
+const tools_in_subfolders = ['fast', 'gen_vc', 'vast', 'vcreate', 'vdoc', 'vpbgen', 'vpm', 'vsqlite',
+	'vsymlink', 'vvet', 'vwhere', 'vcover', 'vmcp', 'vskills', 'vgenerate']
+
+// v2 is temporarily disabled, so tools that depend on it are skipped too.
+const temporarily_disabled_tool_subfolders = ['vast2']
 
 // non_packaged_tools are tools that should not be packaged with
 // prebuild versions of V, to keep the size smaller.
@@ -30,9 +34,12 @@ fn main() {
 	tfolder := os.join_path(vroot, 'cmd', 'tools')
 	main_label := 'Building ${folder} ...'
 	finish_label := 'building ${folder}'
-	//
+
 	mut skips := []string{}
 	for stool in tools_in_subfolders {
+		skips << os.join_path(tfolder, stool).replace('\\', '/')
+	}
+	for stool in temporarily_disabled_tool_subfolders {
 		skips << os.join_path(tfolder, stool).replace('\\', '/')
 	}
 	buildopts := args_string.all_before('build-tools')
@@ -42,17 +49,31 @@ fn main() {
 	for stool in tools_in_subfolders {
 		session.add(os.join_path(tfolder, stool))
 	}
-	// eprintln('> session.files: $session.files')
-	// eprintln('> session.skip_files: $session.skip_files')
+	// eprintln('> session.files: ${session.files}')
+	// eprintln('> session.skip_files: ${session.skip_files}')
 	session.test()
 	eprintln(session.benchmark.total_message(finish_label))
-	if session.failed_cmds.len > 0 {
+	if session.has_failures() {
 		exit(1)
 	}
-	//
+	// Check-only invocations do not produce a temporary directory of executables to install.
+	if os.args[1..].any(it in ['-check', '-c']) {
+		return
+	}
+
 	mut executables := os.ls(session.vtmp_dir)!
 	executables.sort()
 	for texe in executables {
+		if texe == '.v.mod.stop' {
+			continue
+		}
+		if texe.ends_with('.manifest') {
+			binary_name := texe[..texe.len - '.manifest'.len]
+			if binary_name in executables {
+				// The executable's move also routes its sidecar into the tool's subfolder.
+				continue
+			}
+		}
 		tname := texe.replace(os.file_ext(texe), '')
 		if tname in non_packaged_tools {
 			continue
@@ -60,23 +81,35 @@ fn main() {
 		//
 		tpath := os.join_path(session.vtmp_dir, texe)
 		if texe.ends_with('_builder') || texe.ends_with('_builder.exe') {
-			os.mv_by_cp(tpath, os.join_path(tfolder, 'builders', texe)) or { panic(err) }
+			move_tool_executable(tpath, os.join_path(tfolder, 'builders', texe)) or { panic(err) }
 			continue
 		}
 		if tname in tools_in_subfolders {
-			os.mv_by_cp(tpath, os.join_path(tfolder, tname, texe)) or { panic(err) }
+			move_tool_executable(tpath, os.join_path(tfolder, tname, texe)) or { panic(err) }
 			continue
 		}
 		if os.is_dir(tpath) {
 			continue
 		}
 		target_path := os.join_path(tfolder, texe)
-		os.mv_by_cp(tpath, target_path) or {
+		move_tool_executable(tpath, target_path) or {
 			emsg := err.msg()
 			if !emsg.contains('vbuild-tools') && !emsg.contains('vtest-all') {
 				eprintln('error while moving ${tpath} to ${target_path}: ${emsg}')
 			}
 			continue
 		}
+	}
+}
+
+fn move_tool_executable(source string, target string) ! {
+	os.mv_by_cp(source, target)!
+	if os.is_file('${source}.manifest') {
+		os.mv_by_cp('${source}.manifest', '${target}.manifest')!
+	} else if os.exists('${target}.manifest') {
+		os.rm('${target}.manifest')!
+	}
+	$if !windows {
+		os.chmod(target, 0o755)!
 	}
 }

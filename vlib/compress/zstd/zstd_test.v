@@ -5,7 +5,7 @@ import os
 const samples_folder = os.join_path(os.dir(@FILE), 'samples')
 
 fn s(fname string) string {
-	return os.join_path(zstd.samples_folder, fname)
+	return os.join_path(samples_folder, fname)
 }
 
 fn test_zstd() {
@@ -15,6 +15,23 @@ fn test_zstd() {
 	compressed := compress(uncompressed.bytes())!
 	decompressed := decompress(compressed)!
 	assert decompressed == uncompressed.bytes()
+}
+
+fn test_zstd_builds_with_cstrict_on_linux() {
+	$if linux {
+		root := os.join_path(os.vtmp_dir(), 'zstd_cstrict_${os.getpid()}')
+		os.mkdir_all(root) or { panic(err) }
+		defer {
+			os.rmdir_all(root) or {}
+		}
+		source := os.join_path(root, 'main.v')
+		executable := os.join_path(root, 'zstd_cstrict')
+		os.write_file(source, 'import compress.zstd\n\nfn main() {\n\tprintln(zstd.version_number())\n}\n') or {
+			panic(err)
+		}
+		compile := os.exec([@VEXE, '-new-compiler', '-cstrict', '-nocache', '-o', executable, source])
+		assert compile.exit_code == 0, compile.output
+	}
 }
 
 fn test_zstd_deferent_compression_level() {
@@ -68,43 +85,43 @@ fn test_zstd_checksum_flag() {
 fn test_zstd_deferent_strategy() {
 	uncompressed := 'Hello world!'.repeat(10000)
 
-	compressed_default := compress(uncompressed.bytes(), strategy: .zstd_default)!
+	compressed_default := compress(uncompressed.bytes(), strategy: .default)!
 	decompressed_default := decompress(compressed_default)!
 	assert decompressed_default == uncompressed.bytes()
 
-	compressed_fast := compress(uncompressed.bytes(), strategy: .zstd_fast)!
+	compressed_fast := compress(uncompressed.bytes(), strategy: .fast)!
 	decompressed_fast := decompress(compressed_fast)!
 	assert decompressed_fast == uncompressed.bytes()
 
-	compressed_dfast := compress(uncompressed.bytes(), strategy: .zstd_dfast)!
+	compressed_dfast := compress(uncompressed.bytes(), strategy: .dfast)!
 	decompressed_dfast := decompress(compressed_dfast)!
 	assert decompressed_dfast == uncompressed.bytes()
 
-	compressed_greedy := compress(uncompressed.bytes(), strategy: .zstd_greedy)!
+	compressed_greedy := compress(uncompressed.bytes(), strategy: .greedy)!
 	decompressed_greedy := decompress(compressed_greedy)!
 	assert decompressed_greedy == uncompressed.bytes()
 
-	compressed_lazy := compress(uncompressed.bytes(), strategy: .zstd_lazy)!
+	compressed_lazy := compress(uncompressed.bytes(), strategy: .lazy)!
 	decompressed_lazy := decompress(compressed_lazy)!
 	assert decompressed_lazy == uncompressed.bytes()
 
-	compressed_lazy2 := compress(uncompressed.bytes(), strategy: .zstd_lazy2)!
+	compressed_lazy2 := compress(uncompressed.bytes(), strategy: .lazy2)!
 	decompressed_lazy2 := decompress(compressed_lazy2)!
 	assert decompressed_lazy2 == uncompressed.bytes()
 
-	compressed_btlazy2 := compress(uncompressed.bytes(), strategy: .zstd_btlazy2)!
+	compressed_btlazy2 := compress(uncompressed.bytes(), strategy: .btlazy2)!
 	decompressed_btlazy2 := decompress(compressed_btlazy2)!
 	assert decompressed_btlazy2 == uncompressed.bytes()
 
-	compressed_btopt := compress(uncompressed.bytes(), strategy: .zstd_btopt)!
+	compressed_btopt := compress(uncompressed.bytes(), strategy: .btopt)!
 	decompressed_btopt := decompress(compressed_btopt)!
 	assert decompressed_btopt == uncompressed.bytes()
 
-	compressed_btultra := compress(uncompressed.bytes(), strategy: .zstd_btultra)!
+	compressed_btultra := compress(uncompressed.bytes(), strategy: .btultra)!
 	decompressed_btultra := decompress(compressed_btultra)!
 	assert decompressed_btultra == uncompressed.bytes()
 
-	compressed_btultra2 := compress(uncompressed.bytes(), strategy: .zstd_btultra2)!
+	compressed_btultra2 := compress(uncompressed.bytes(), strategy: .btultra2)!
 	decompressed_btultra2 := decompress(compressed_btultra2)!
 	assert decompressed_btultra2 == uncompressed.bytes()
 }
@@ -126,36 +143,35 @@ fn compress_file(fname string, oname string, params CompressParams) ! {
 	}
 
 	mut last_chunk := false
-	mut input := &ZSTD_inBuffer{
-		src: buf_in.data
+	mut input := &InBuffer{
+		src:  buf_in.data
 		size: 0
-		pos: 0
+		pos:  0
 	}
-	mut output := &ZSTD_outBuffer{
-		dst: buf_out.data
+	mut output := &OutBuffer{
+		dst:  buf_out.data
 		size: 0
-		pos: 0
+		pos:  0
 	}
 	for !last_chunk {
 		read_len := fin.read(mut buf_in)!
 		last_chunk = read_len < buf_in_size
 		mode := if last_chunk {
-			ZSTD_EndDirective.zstd_e_end
+			EndDirective.end
 		} else {
-			ZSTD_EndDirective.zstd_e_continue
+			EndDirective.continue
 		}
 
 		mut finished := false
 		input.src = buf_in.data
-		input.size = usize(read_len)
+		input.size = uint(read_len)
 		input.pos = 0
 		for !finished {
 			output.dst = buf_out.data
 			output.size = buf_out_size
 			output.pos = 0
-			remaining := cctx.compress_stream2(output, input, mode)
-			check_zstd(remaining)!
-			fout.write(buf_out[..output.pos])!
+			remaining := cctx.compress_stream2(output, input, mode)!
+			fout.write(buf_out[..int(output.pos)])!
 			finished = if last_chunk { remaining == 0 } else { input.pos == input.size }
 		}
 
@@ -181,30 +197,29 @@ fn decompress_file(fname string, oname string, params DecompressParams) ! {
 		dctx.free_dctx()
 	}
 
-	mut input := &ZSTD_inBuffer{
-		src: buf_in.data
+	mut input := &InBuffer{
+		src:  buf_in.data
 		size: 0
-		pos: 0
+		pos:  0
 	}
-	mut output := &ZSTD_outBuffer{
-		dst: buf_out.data
+	mut output := &OutBuffer{
+		dst:  buf_out.data
 		size: 0
-		pos: 0
+		pos:  0
 	}
 
-	mut last_ret := usize(0)
+	mut last_ret := uint(0)
 	for {
 		read_len := fin.read(mut buf_in)!
 		input.src = buf_in.data
-		input.size = usize(read_len)
+		input.size = uint(read_len)
 		input.pos = 0
 		for input.pos < input.size {
 			output.dst = buf_out.data
 			output.size = buf_out_size
 			output.pos = 0
-			ret := dctx.decompress_stream(output, input)
-			check_zstd(ret)!
-			fout.write(buf_out[..output.pos])!
+			ret := dctx.decompress_stream(output, input)!
+			fout.write(buf_out[..int(output.pos)])!
 			last_ret = ret
 		}
 		if read_len < buf_in.len {
@@ -212,7 +227,7 @@ fn decompress_file(fname string, oname string, params DecompressParams) ! {
 		}
 	}
 	if last_ret != 0 {
-		/* The last return value from ZSTD_decompressStream did not end on a
+		/* The last return value from DecompressStream did not end on a
          * frame, but we reached the end of the file! We assume this is an
          * error, and the input was truncated.
          */
@@ -225,8 +240,8 @@ fn test_zstd_stream() {
 	decompress_file(s('readme_level_19.zst'), s('tmp_file1'))!
 	compress_file(s('tmp_file1'), s('tmp_file.zstd'),
 		compression_level: 6
-		nb_threads: 1
-		checksum_flag: true
+		nb_threads:        1
+		checksum_flag:     true
 	)!
 	decompress_file(s('tmp_file.zstd'), s('tmp_file2'))!
 	file1 := os.read_file(s('tmp_file1'))!
@@ -268,8 +283,8 @@ fn store_array_test(fname string) ! {
 	for i in 0 .. 1000 {
 		store_memory_trace << MemoryTrace{
 			operation: u64(`L`)
-			address: u64(i)
-			size: u8(i % 8)
+			address:   u64(i)
+			size:      u8(i % 8)
 		}
 	}
 	store_array[MemoryTrace](fname, store_memory_trace, compression_level: 8)!
@@ -299,18 +314,21 @@ fn assert_decompress_error(data []u8, reason string) ! {
 }
 
 fn test_zstd_invalid_too_small() {
-	assert_decompress_error([]u8{}, 'An error occurred (e.g. invalid magic number, srcSize too small)')!
+	assert_decompress_error([]u8{},
+		'An error occurred (e.g. invalid magic number, srcSize too small)')!
 }
 
 fn test_zstd_invalid_magic_numbers() {
-	assert_decompress_error([]u8{len: 100}, 'An error occurred (e.g. invalid magic number, srcSize too small)')!
+	assert_decompress_error([]u8{len: 100},
+		'An error occurred (e.g. invalid magic number, srcSize too small)')!
 }
 
 fn test_zstd_invalid_compression() {
 	mut data := []u8{len: 100}
 	data[0] = 0x1f
 	data[1] = 0x8b
-	assert_decompress_error(data, 'An error occurred (e.g. invalid magic number, srcSize too small)')!
+	assert_decompress_error(data,
+		'An error occurred (e.g. invalid magic number, srcSize too small)')!
 }
 
 fn test_zstd_with_corruption1() {

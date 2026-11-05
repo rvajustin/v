@@ -1,3 +1,6 @@
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
 module veb
 
 import io
@@ -5,13 +8,9 @@ import net
 import net.http
 import net.urllib
 import os
-import time
+import strconv
 import strings
-import picoev
-
-// max read and write limits in bytes
-const max_read = 8096
-const max_write = 8096 * 2
+import time
 
 // A type which doesn't get filtered inside templates
 pub type RawHtml = string
@@ -26,179 +25,124 @@ pub fn no_result() Result {
 	return Result{}
 }
 
-pub const methods_with_form = [http.Method.post, .put, .patch]
-
-pub const headers_close = http.new_custom_header_from_map({
-	'Server': 'veb'
-}) or { panic('should never fail') }
-
-pub const http_302 = http.new_response(
-	status: .found
-	body: '302 Found'
-	header: headers_close
-)
-
-pub const http_400 = http.new_response(
-	status: .bad_request
-	body: '400 Bad Request'
-	header: http.new_header(
-		key: .content_type
-		value: 'text/plain'
-	).join(headers_close)
-)
-
-pub const http_404 = http.new_response(
-	status: .not_found
-	body: '404 Not Found'
-	header: http.new_header(
-		key: .content_type
-		value: 'text/plain'
-	).join(headers_close)
-)
-
-pub const http_408 = http.new_response(
-	status: .request_timeout
-	body: '408 Request Timeout'
-	header: http.new_header(
-		key: .content_type
-		value: 'text/plain'
-	).join(headers_close)
-)
-
-pub const http_413 = http.new_response(
-	status: .request_entity_too_large
-	body: '413 Request entity is too large'
-	header: http.new_header(
-		key: .content_type
-		value: 'text/plain'
-	).join(headers_close)
-)
-
-pub const http_500 = http.new_response(
-	status: .internal_server_error
-	body: '500 Internal Server Error'
-	header: http.new_header(
-		key: .content_type
-		value: 'text/plain'
-	).join(headers_close)
-)
-
-pub const mime_types = {
-	'.aac':    'audio/aac'
-	'.abw':    'application/x-abiword'
-	'.arc':    'application/x-freearc'
-	'.avi':    'video/x-msvideo'
-	'.azw':    'application/vnd.amazon.ebook'
-	'.bin':    'application/octet-stream'
-	'.bmp':    'image/bmp'
-	'.bz':     'application/x-bzip'
-	'.bz2':    'application/x-bzip2'
-	'.cda':    'application/x-cdf'
-	'.csh':    'application/x-csh'
-	'.css':    'text/css'
-	'.csv':    'text/csv'
-	'.doc':    'application/msword'
-	'.docx':   'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-	'.eot':    'application/vnd.ms-fontobject'
-	'.epub':   'application/epub+zip'
-	'.gz':     'application/gzip'
-	'.gif':    'image/gif'
-	'.htm':    'text/html'
-	'.html':   'text/html'
-	'.ico':    'image/vnd.microsoft.icon'
-	'.ics':    'text/calendar'
-	'.jar':    'application/java-archive'
-	'.jpeg':   'image/jpeg'
-	'.jpg':    'image/jpeg'
-	'.js':     'text/javascript'
-	'.json':   'application/json'
-	'.jsonld': 'application/ld+json'
-	'.mid':    'audio/midi audio/x-midi'
-	'.midi':   'audio/midi audio/x-midi'
-	'.mjs':    'text/javascript'
-	'.mp3':    'audio/mpeg'
-	'.mp4':    'video/mp4'
-	'.mpeg':   'video/mpeg'
-	'.mpkg':   'application/vnd.apple.installer+xml'
-	'.odp':    'application/vnd.oasis.opendocument.presentation'
-	'.ods':    'application/vnd.oasis.opendocument.spreadsheet'
-	'.odt':    'application/vnd.oasis.opendocument.text'
-	'.oga':    'audio/ogg'
-	'.ogv':    'video/ogg'
-	'.ogx':    'application/ogg'
-	'.opus':   'audio/opus'
-	'.otf':    'font/otf'
-	'.png':    'image/png'
-	'.pdf':    'application/pdf'
-	'.php':    'application/x-httpd-php'
-	'.ppt':    'application/vnd.ms-powerpoint'
-	'.pptx':   'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-	'.rar':    'application/vnd.rar'
-	'.rtf':    'application/rtf'
-	'.sh':     'application/x-sh'
-	'.svg':    'image/svg+xml'
-	'.swf':    'application/x-shockwave-flash'
-	'.tar':    'application/x-tar'
-	'.tif':    'image/tiff'
-	'.tiff':   'image/tiff'
-	'.ts':     'video/mp2t'
-	'.ttf':    'font/ttf'
-	'.txt':    'text/plain'
-	'.vsd':    'application/vnd.visio'
-	'.wasm':   'application/wasm'
-	'.wav':    'audio/wav'
-	'.weba':   'audio/webm'
-	'.webm':   'video/webm'
-	'.webp':   'image/webp'
-	'.woff':   'font/woff'
-	'.woff2':  'font/woff2'
-	'.xhtml':  'application/xhtml+xml'
-	'.xls':    'application/vnd.ms-excel'
-	'.xlsx':   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-	'.xml':    'application/xml'
-	'.xul':    'application/vnd.mozilla.xul+xml'
-	'.zip':    'application/zip'
-	'.3gp':    'video/3gpp'
-	'.3g2':    'video/3gpp2'
-	'.7z':     'application/x-7z-compressed'
-	'.m3u8':   'application/vnd.apple.mpegurl'
-}
-
-pub const max_http_post_size = 1024 * 1024
-
-pub const default_port = 8080
+// RouteHandler erases only the receiver and context pointers. The callback generated
+// beside each route restores their types before invoking its reflected method.
+type RouteHandler = fn (voidptr, voidptr, []string)
 
 struct Route {
-	methods []http.Method
-	path    string
-	host    string
+	methods         []http.Method
+	path            string
+	words           []string
+	host            string
+	parameter_names []string
+	parameter_kinds []ParamKind
+	attrs           []string
+	handler         RouteHandler = unsafe { nil }
 mut:
-	middlewares       []voidptr
-	after_middlewares []voidptr
+	middlewares       []RouteMiddleware
+	after_middlewares []RouteMiddleware
+}
+
+// ParamKind is the declared type of one handler parameter beyond the context,
+// recorded so the dispatcher can reject a value that cannot fill it instead
+// of coercing it to a zero. Only the types route parameters support are
+// distinguished; anything else rides through unchecked.
+enum ParamKind {
+	string_
+	integer
+	boolean
+	other
+}
+
+fn route_path_words(path string) []string {
+	if path.len == 0 || path == '/' {
+		return []string{}
+	}
+	return path.split('/').filter(it != '')
+}
+
+// Parse and assemble route metadata once, outside controller specializations.
+fn insert_route_metadata(mut routes map[string]Route, name string, attrs []string, parameter_names []string, parameter_kinds []ParamKind, handler RouteHandler) ! {
+	http_methods, route_path, host := parse_attrs(name, attrs) or {
+		return error('error parsing method attributes: ${err}')
+	}
+	routes[name] = Route{
+		methods:         http_methods
+		path:            route_path
+		words:           route_path_words(route_path)
+		host:            host
+		parameter_names: parameter_names
+		parameter_kinds: parameter_kinds
+		attrs:           attrs
+		handler:         handler
+	}
 }
 
 // Generate route structs for an app
 fn generate_routes[A, X](app &A) !map[string]Route {
-	// Parsing methods attributes
 	mut routes := map[string]Route{}
 	$for method in A.methods {
-		$if method.return_type is Result {
-			http_methods, route_path, host := parse_attrs(method.name, method.attrs) or {
-				return error('error parsing method attributes: ${err}')
+		$if method.return_type is Result || method.return_type is !Result {
+			mut parameter_names := []string{}
+			$if method.args.len > 1 {
+				for param in method.args[1..] {
+					parameter_names << param.name
+				}
 			}
-
-			mut route := Route{
-				methods: http_methods
-				path: route_path
-				host: host
+			// The kinds ride alongside the names by index. A nested `$for` over a
+			// sliced `method.args` unrolls to nothing, so this walks the full
+			// `method.params` instead and drops index 0, the request context,
+			// which the dispatcher passes separately.
+			mut parameter_kinds := []ParamKind{}
+			$for param in method.params {
+				$if param.typ is string {
+					parameter_kinds << .string_
+				} $else $if param.typ is int {
+					parameter_kinds << .integer
+				} $else $if param.typ is bool {
+					parameter_kinds << .boolean
+				} $else {
+					parameter_kinds << .other
+				}
 			}
-
-			$if A is MiddlewareApp {
-				route.middlewares = app.Middleware.get_handlers_for_route[X](route_path)
-				route.after_middlewares = app.Middleware.get_handlers_for_route_after[X](route_path)
+			if parameter_kinds.len > 0 {
+				parameter_kinds = parameter_kinds[1..]
 			}
-
-			routes[method.name] = route
+			handler := fn [method] [A, X](app_ptr voidptr, context_ptr voidptr, args []string) {
+				// Dispatch passes the same A and X used to generate this route table.
+				mut app := unsafe { &A(app_ptr) }
+				mut user_context := unsafe { &X(context_ptr) }
+				$if method.return_type is Result {
+					$if method.args.len > 1 {
+						app.$method(mut user_context, ...args)
+					} $else {
+						app.$method(mut user_context)
+					}
+				} $else $if method.return_type is !Result {
+					// A returned error becomes a JSON envelope through error_with.
+					$if method.args.len > 1 {
+						app.$method(mut user_context, ...args) or {
+							user_context.error_with(err)
+						}
+					} $else {
+						app.$method(mut user_context) or { user_context.error_with(err) }
+					}
+				}
+			}
+			insert_route_metadata(mut routes, method.name, method.attrs, parameter_names, parameter_kinds, handler)!
+		} $else {
+			// If we have route attributes, but the wrong return type, return an error
+			if has_route_attributes(method.attrs) {
+				return error('method `${method.name}` at `${method.location}` has route attributes but invalid return type. Handler methods must return `veb.Result` or `!veb.Result`')
+			}
+		}
+	}
+	$if A is MiddlewareApp {
+		for name, initial in routes {
+			mut route := initial
+			route.middlewares = app_route_handlers(app, route.path)
+			route.after_middlewares = app_route_handlers_after(app, route.path)
+			routes[name] = route
 		}
 	}
 	return routes
@@ -209,74 +153,332 @@ pub fn run[A, X](mut global_app A, port int) {
 	run_at[A, X](mut global_app, host: '', port: port, family: .ip6) or { panic(err.msg()) }
 }
 
-@[params]
-pub struct RunParams {
-pub:
-	// use `family: .ip, host: 'localhost'` when you want it to bind only to 127.0.0.1
-	family               net.AddrFamily = .ip6
-	host                 string
-	port                 int  = 8080
-	show_startup_message bool = true
-	timeout_in_seconds   int  = 30
+struct SslRequestParams {
+	global_app                voidptr
+	controllers_sorted        []&ControllerPath
+	routes                    &map[string]Route
+	benchmark_page_generation bool
+	max_request_buffer_size   int
+	max_request_body_size     int
 }
 
-struct FileResponse {
-pub mut:
-	open              bool
-	file              os.File
-	total             i64
-	pos               i64
-	should_close_conn bool
+// render_request dispatches one request without starting a listener and returns
+// the completed base context. Read the response from `ctx.res`; fields added to
+// the application's context type are only available inside its handlers.
+// Static file responses retain `return_type` and `return_file`, as on the server.
+// X must embed veb.Context. Context, route, and controller configuration errors
+// are returned to the caller.
+pub fn render_request[A, X](mut app A, req http.Request) !&Context {
+	$for field in X.fields {
+		$if field.name == 'Context' && field.is_embed {
+			routes := generate_routes[A, X](app)!
+			controllers_sorted := check_duplicate_routes_in_controllers[A](app, routes)!
+			params := RequestParams{
+				controllers_sorted: controllers_sorted
+				routes:             &routes
+			}
+			return handle_request_and_route[A, X](mut app, req, -1, params)
+		}
+	}
+	return error('the application context type must embed veb.Context')
 }
 
-// close the open file and reset the struct to its default values
-pub fn (mut fr FileResponse) done() {
-	fr.open = false
-	fr.file.close()
-	fr.total = 0
-	fr.pos = 0
-	fr.should_close_conn = false
+fn ssl_enabled(params RunParams) bool {
+	return params.ssl_config.cert != '' || params.ssl_config.cert_key != ''
 }
 
-struct StringResponse {
-pub mut:
-	open              bool
-	str               string
-	pos               i64
-	should_close_conn bool
+fn server_protocol(params RunParams) string {
+	if ssl_enabled(params) {
+		return 'https'
+	}
+	return 'http'
 }
 
-// free the current string and reset the struct to its default values
-@[manualfree]
-pub fn (mut sr StringResponse) done() {
-	sr.open = false
-	sr.pos = 0
-	sr.should_close_conn = false
-	unsafe { sr.str.free() }
+fn startup_host(params RunParams) string {
+	if params.host == '' {
+		return 'localhost'
+	}
+	// Bracket a bare IPv6 literal so the startup URL is valid (e.g. `[::1]`).
+	if params.host.contains(':') && !params.host.starts_with('[') {
+		return '[${params.host}]'
+	}
+	return params.host
 }
 
-// EV context
-struct RequestParams {
-	global_app         voidptr
-	controllers        []&ControllerPath
-	routes             &map[string]Route
-	timeout_in_seconds int
-mut:
-	// request body buffer
-	buf &u8 = unsafe { nil }
-	// idx keeps track of how much of the request body has been read
-	// for each incomplete request, see `handle_conn`
-	idx                 []int
-	incomplete_requests []http.Request
-	file_responses      []FileResponse
-	string_responses    []StringResponse
+fn listen_addr(params RunParams) string {
+	if params.host == '' {
+		return ':${params.port}'
+	}
+	return '${params.host}:${params.port}'
 }
 
-// reset request parameters for `fd`:
-// reset content-length index and the http request
-pub fn (mut params RequestParams) request_done(fd int) {
-	params.incomplete_requests[fd] = http.Request{}
-	params.idx[fd] = 0
+// request_read_error_response returns the response for a request that
+// `read_request_from_buffered_reader` could not read.
+fn request_read_error_response(err IError) http.Response {
+	if err is http.HeaderLimitError {
+		return http_431
+	}
+	if err is RequestBodyLimitError {
+		return http_413_close
+	}
+	return http_400
+}
+
+// RequestBodyLimitError is the error for a request whose body has more than
+// `RunParams.max_request_body_size` bytes.
+struct RequestBodyLimitError {
+	Error
+}
+
+// msg returns the description of the error.
+fn (err RequestBodyLimitError) msg() string {
+	return 'the request body is too large'
+}
+
+// read_request_from_buffered_reader reads one request. It returns a `RequestBodyLimitError`
+// for a body of more than `max_request_body_size` bytes (0 means no limit), and does not
+// read the rest of that body.
+fn read_request_from_buffered_reader(mut reader io.BufferedReader, max_request_body_size int) !http.Request {
+	mut req := http.parse_request_head(mut reader)!
+	length_values := req.header.values(.content_length)
+	if length_values.len > 0 && req.header.contains(.transfer_encoding) {
+		return error('conflicting request body framing')
+	}
+	mut content_length_i := 0
+	for i, value in length_values {
+		length := parse_request_content_length(value)!
+		if i > 0 && length != content_length_i {
+			return error('conflicting content lengths')
+		}
+		content_length_i = length
+	}
+	if transfer_encoding_is_chunked(req.header) {
+		req.data = read_chunked_request_body(mut reader, max_request_body_size)!
+		return req
+	}
+	if content_length_i <= 0 {
+		return req
+	}
+	if max_request_body_size > 0 && content_length_i > max_request_body_size {
+		return RequestBodyLimitError{}
+	}
+	mut body := []u8{len: content_length_i}
+	read_exact_bytes(mut reader, mut body)!
+	req.data = body.bytestr()
+	return req
+}
+
+// parse_request_content_length rejects prefixes, signs, junk, and integer overflow.
+fn parse_request_content_length(value string) !int {
+	if value.len == 0 {
+		return error('invalid content length')
+	}
+	mut length := 0
+	for byte in value {
+		if byte < `0` || byte > `9` {
+			return error('invalid content length')
+		}
+		digit := int(byte - `0`)
+		if length > (max_int - digit) / 10 {
+			return error('content length too large')
+		}
+		length = length * 10 + digit
+	}
+	return length
+}
+
+fn transfer_encoding_is_chunked(header http.Header) bool {
+	transfer_encoding := header.get(.transfer_encoding) or { return false }
+	for word in transfer_encoding.to_lower().split(',') {
+		if word.trim_space() == 'chunked' {
+			return true
+		}
+	}
+	return false
+}
+
+fn read_chunked_request_body(mut reader io.BufferedReader, max_request_body_size int) !string {
+	mut sb := strings.new_builder(1024)
+	for {
+		mut chunk_size_line := reader.read_line()!
+		if semicolon_idx := chunk_size_line.index(';') {
+			chunk_size_line = chunk_size_line[..semicolon_idx]
+		}
+		chunk_size_line = chunk_size_line.trim_space()
+		if chunk_size_line.len == 0 {
+			return error('invalid chunk size line')
+		}
+		for byte in chunk_size_line {
+			if !((byte >= `0` && byte <= `9`) || (byte >= `a` && byte <= `f`)
+				|| (byte >= `A` && byte <= `F`)) {
+				return error('invalid chunk size line')
+			}
+		}
+		chunk_size_u64 := strconv.parse_uint(chunk_size_line, 16, 64) or {
+			return error('invalid chunk size line')
+		}
+		if chunk_size_u64 > u64(max_int) {
+			return error('chunk size too large')
+		}
+		chunk_size := int(chunk_size_u64)
+		if chunk_size == 0 {
+			for {
+				trailer := reader.read_line()!
+				if trailer == '' {
+					return sb.str()
+				}
+			}
+		}
+		if max_request_body_size > 0 && chunk_size > max_request_body_size - sb.len {
+			return RequestBodyLimitError{}
+		}
+		mut chunk := []u8{len: chunk_size}
+		read_exact_bytes(mut reader, mut chunk)!
+		sb.write(chunk)!
+		mut delimiter := []u8{len: 2}
+		read_exact_bytes(mut reader, mut delimiter)!
+		if delimiter[0] != `\r` || delimiter[1] != `\n` {
+			return error('invalid chunk delimiter')
+		}
+	}
+	return error('invalid chunked body')
+}
+
+fn read_exact_bytes(mut reader io.BufferedReader, mut buf []u8) ! {
+	mut offset := 0
+	for offset < buf.len {
+		n := reader.read(mut buf[offset..]) or {
+			if err is io.Eof {
+				return error('unexpected end of request body')
+			}
+			return err
+		}
+		if n <= 0 {
+			return error('unexpected end of request body')
+		}
+		offset += n
+	}
+}
+
+fn handle_ssl_request[A, X](req http.Request, params &SslRequestParams) ?&Context {
+	mut global_app := unsafe { &A(params.global_app) }
+	page_gen_start := time.ticks()
+	mut url := urllib.parse(req.url) or {
+		eprintln('[veb] error parsing path "${req.url}": ${err}')
+		return none
+	}
+	query := parse_query_from_url(url)
+	form, files := parse_form_from_request(req) or {
+		eprintln('[veb] error parsing form: ${err.msg()}')
+		return none
+	}
+	host_with_port := req.header.get(.host) or { '' }
+	host := request_host_name(host_with_port)
+	mut ctx := &Context{
+		req:            req
+		page_gen_start: page_gen_start
+		query:          query
+		form:           form
+		files:          files
+	}
+	ctx.client_wants_to_close = request_has_connection_close(req)
+	mut user_context := X{
+		Context: ctx
+	}
+	$if A is StaticApp {
+		ctx.custom_mime_types_ref = unsafe { &global_app.static_mime_types }
+		if serve_if_static[X](static_handler_config(global_app.static_files,
+			global_app.static_mime_types, global_app.static_hosts, global_app.static_prefixes,
+			global_app.enable_static_gzip, global_app.enable_static_zstd,
+			global_app.enable_static_compression, global_app.static_compression_max_size,
+			global_app.static_compression_mime_types, global_app.enable_markdown_negotiation), mut
+			user_context, url, host)
+		{
+			// Preserve the handled context on the heap before the stack-local user context goes away.
+			ctx.preserve_for_response_writer(user_context.Context)
+			return ctx
+		}
+	}
+	$if A is ControllerInterface {
+		if completed_context := handle_controllers[X](params.controllers_sorted, ctx, mut url, host) {
+			return completed_context
+		}
+	}
+	handle_route[A, X](mut global_app, mut user_context, url, host, params.routes)
+	// Preserve the handled context on the heap before the stack-local user context goes away.
+	ctx.preserve_for_response_writer(user_context.Context)
+	return ctx
+}
+
+fn request_has_connection_close(req http.Request) bool {
+	conn := req.header.get(.connection) or { return false }
+	return ascii_eq_ignore_case(conn, 'close')
+}
+
+fn request_host_name(host_with_port string) string {
+	if host_with_port.len == 0 {
+		return ''
+	}
+	if host_with_port[0] == `[` {
+		end := host_with_port.index_u8(`]`)
+		if end > 0 {
+			return host_with_port[1..end]
+		}
+		return host_with_port
+	}
+	colon := host_with_port.last_index_u8(`:`)
+	if colon == -1 {
+		return host_with_port
+	}
+	for i in 0 .. colon {
+		if host_with_port[i] == `:` {
+			return host_with_port
+		}
+	}
+	return host_with_port[..colon]
+}
+
+fn ascii_eq_ignore_case(a string, b string) bool {
+	if a.len != b.len {
+		return false
+	}
+	for i in 0 .. a.len {
+		mut ca := a[i]
+		if ca >= `A` && ca <= `Z` {
+			ca += 32
+		}
+		mut cb := b[i]
+		if cb >= `A` && cb <= `Z` {
+			cb += 32
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+fn should_close_connection(req &http.Request, resp &http.Response, client_wants_to_close bool) bool {
+	if client_wants_to_close {
+		return true
+	}
+	if resp_conn := resp.header.get(.connection) {
+		if ascii_eq_ignore_case(resp_conn, 'close') {
+			return true
+		}
+		if ascii_eq_ignore_case(resp_conn, 'keep-alive') {
+			return false
+		}
+	}
+	if req_conn := req.header.get(.connection) {
+		if ascii_eq_ignore_case(req_conn, 'close') {
+			return true
+		}
+		if ascii_eq_ignore_case(req_conn, 'keep-alive') {
+			return false
+		}
+	}
+	return req.version != .v1_1
 }
 
 interface BeforeAcceptApp {
@@ -284,501 +486,110 @@ mut:
 	before_accept_loop()
 }
 
-// run_at - start a new veb server, listening only on a specific address `host`, at the specified `port`
-// Example: veb.run_at(new_app(), veb.RunParams{ host: 'localhost' port: 8099 family: .ip }) or { panic(err) }
-@[direct_array_access; manualfree]
-pub fn run_at[A, X](mut global_app A, params RunParams) ! {
-	if params.port <= 0 || params.port > 65535 {
-		return error('invalid port number `${params.port}`, it should be between 1 and 65535')
-	}
-
-	routes := generate_routes[A, X](global_app)!
-	controllers_sorted := check_duplicate_routes_in_controllers[A](global_app, routes)!
-
-	if params.show_startup_message {
-		host := if params.host == '' { 'localhost' } else { params.host }
-		println('[veb] Running app on http://${host}:${params.port}/')
-	}
-	flush_stdout()
-
-	mut pico_context := &RequestParams{
-		global_app: unsafe { global_app }
-		controllers: controllers_sorted
-		routes: &routes
-		timeout_in_seconds: params.timeout_in_seconds
-	}
-
-	pico_context.idx = []int{len: picoev.max_fds}
-	// reserve space for read and write buffers
-	pico_context.buf = unsafe { malloc_noscan(picoev.max_fds * veb.max_read + 1) }
-	defer {
-		unsafe { free(pico_context.buf) }
-	}
-	pico_context.incomplete_requests = []http.Request{len: picoev.max_fds}
-	pico_context.file_responses = []FileResponse{len: picoev.max_fds}
-	pico_context.string_responses = []StringResponse{len: picoev.max_fds}
-
-	mut pico := picoev.new(
-		port: params.port
-		raw_cb: ev_callback[A, X]
-		user_data: pico_context
-		timeout_secs: params.timeout_in_seconds
-		family: params.family
-		host: params.host
-	)!
-
-	$if A is BeforeAcceptApp {
-		global_app.before_accept_loop()
-	}
-
-	// Forever accept every connection that comes
-	pico.serve()
+interface HasBeforeRequestOnContext {
+mut:
+	before_request()
 }
 
-@[direct_array_access]
-fn ev_callback[A, X](mut pv picoev.Picoev, fd int, events int) {
-	mut params := unsafe { &RequestParams(pv.user_data) }
-
-	if events == picoev.picoev_timeout {
-		$if trace_picoev_callback ? {
-			eprintln('> request timeout on file descriptor ${fd}')
-		}
-
-		handle_timeout(mut pv, mut params, fd)
-	} else if events == picoev.picoev_write {
-		$if trace_picoev_callback ? {
-			eprintln('> write event on file descriptor ${fd}')
-		}
-
-		if params.file_responses[fd].open {
-			handle_write_file(mut pv, mut params, fd)
-		} else if params.string_responses[fd].open {
-			handle_write_string(mut pv, mut params, fd)
-		} else {
-			// This should never happen, but it does on pages, that refer to static resources,
-			// in folders, added with `mount_static_folder_at`. See also
-			// https://github.com/vlang/edu-platform/blob/0c203f0384cf24f917f9a7c9bb150f8d64aca00f/main.v#L92
-			$if debug_ev_callback ? {
-				eprintln('[veb] error: write event on connection should be closed')
-			}
-			pv.close_conn(fd)
-		}
-	} else if events == picoev.picoev_read {
-		$if trace_picoev_callback ? {
-			eprintln('> read event on file descriptor ${fd}')
-		}
-		handle_read[A, X](mut pv, mut params, fd)
-	} else {
-		// should never happen
-		eprintln('[veb] error: invalid picoev event ${events}')
-	}
-}
-
-fn handle_timeout(mut pv picoev.Picoev, mut params RequestParams, fd int) {
-	mut conn := &net.TcpConn{
-		sock: net.tcp_socket_from_handle_raw(fd)
-		handle: fd
-		is_blocking: false
-	}
-
-	fast_send_resp(mut conn, veb.http_408) or {}
-	pv.close_conn(fd)
-
-	params.request_done(fd)
-}
-
-// handle_write_file reads data from a file and sends that data over the socket.
-@[direct_array_access; manualfree]
-fn handle_write_file(mut pv picoev.Picoev, mut params RequestParams, fd int) {
-	mut bytes_to_write := int(params.file_responses[fd].total - params.file_responses[fd].pos)
-
-	$if linux || freebsd {
-		bytes_written := sendfile(fd, params.file_responses[fd].file.fd, bytes_to_write)
-		params.file_responses[fd].pos += bytes_written
-	} $else {
-		if bytes_to_write > veb.max_write {
-			bytes_to_write = veb.max_write
-		}
-
-		data := unsafe { malloc(bytes_to_write) }
-		defer {
-			unsafe { free(data) }
-		}
-
-		mut conn := &net.TcpConn{
-			sock: net.tcp_socket_from_handle_raw(fd)
-			handle: fd
-			is_blocking: false
-		}
-
-		params.file_responses[fd].file.read_into_ptr(data, bytes_to_write) or {
-			params.file_responses[fd].done()
-			pv.close_conn(fd)
-			return
-		}
-		actual_written := send_string_ptr(mut conn, data, bytes_to_write) or {
-			params.file_responses[fd].done()
-			pv.close_conn(fd)
-			return
-		}
-		params.file_responses[fd].pos += actual_written
-	}
-
-	if params.file_responses[fd].pos == params.file_responses[fd].total {
-		// file is done writing
-		params.file_responses[fd].done()
-		handle_complete_request(params.file_responses[fd].should_close_conn, mut pv, fd)
-		return
-	}
-}
-
-// handle_write_string reads data from a string and sends that data over the socket
-@[direct_array_access]
-fn handle_write_string(mut pv picoev.Picoev, mut params RequestParams, fd int) {
-	mut bytes_to_write := int(params.string_responses[fd].str.len - params.string_responses[fd].pos)
-
-	if bytes_to_write > veb.max_write {
-		bytes_to_write = veb.max_write
-	}
-
-	mut conn := &net.TcpConn{
-		sock: net.tcp_socket_from_handle_raw(fd)
-		handle: fd
-		is_blocking: false
-	}
-
-	// pointer magic to start at the correct position in the buffer
-	data := unsafe { params.string_responses[fd].str.str + params.string_responses[fd].pos }
-	actual_written := send_string_ptr(mut conn, data, bytes_to_write) or {
-		params.string_responses[fd].done()
-		pv.close_conn(fd)
-		return
-	}
-	params.string_responses[fd].pos += actual_written
-	if params.string_responses[fd].pos == params.string_responses[fd].str.len {
-		// done writing
-		params.string_responses[fd].done()
-		pv.close_conn(fd)
-		handle_complete_request(params.string_responses[fd].should_close_conn, mut pv,
-			fd)
-		return
-	}
-}
-
-// handle_read reads data from the connection and if the request is complete
-// it calls `handle_route` and closes the connection.
-// If the request is not complete it stores the incomplete request in `params`
-// and the connection stays open until it is ready to read again
-@[direct_array_access; manualfree]
-fn handle_read[A, X](mut pv picoev.Picoev, mut params RequestParams, fd int) {
-	mut conn := &net.TcpConn{
-		sock: net.tcp_socket_from_handle_raw(fd)
-		handle: fd
-		is_blocking: false
-	}
-
-	// cap the max_read to 8KB
-	mut reader := io.new_buffered_reader(reader: conn, cap: veb.max_read)
-	defer {
-		unsafe {
-			reader.free()
-		}
-	}
-
-	// take the previous incomplete request
-	mut req := params.incomplete_requests[fd]
-
-	// check if there is an incomplete request for this file descriptor
-	if params.idx[fd] == 0 {
-		// set the read and write timeout according to picoev settings when the
-		// connection is first encountered
-		conn.set_read_timeout(params.timeout_in_seconds)
-		conn.set_write_timeout(params.timeout_in_seconds)
-		// first time that this connection is being read from, so we parse the
-		// request header first
-		req = http.parse_request_head(mut reader) or {
-			// Prevents errors from being thrown when BufferedReader is empty
-			if err !is io.Eof {
-				eprintln('[veb] error parsing request: ${err}')
-			}
-			// the buffered reader was empty meaning that the client probably
-			// closed the connection.
-			pv.close_conn(fd)
-			params.incomplete_requests[fd] = http.Request{}
-			return
-		}
-		if reader.total_read >= veb.max_read {
-			// throw an error when the request header is larger than 8KB
-			// same limit that apache handles
-			eprintln('[veb] error parsing request: too large')
-			fast_send_resp(mut conn, veb.http_413) or {}
-
-			pv.close_conn(fd)
-			params.incomplete_requests[fd] = http.Request{}
-			return
-		}
-	}
-
-	// check if the request has a body
-	content_length := req.header.get(.content_length) or { '0' }
-	if content_length.int() > 0 {
-		mut max_bytes_to_read := veb.max_read - reader.total_read
-		mut bytes_to_read := content_length.int() - params.idx[fd]
-		// cap the bytes to read to 8KB for the body, including the request headers if any
-		if bytes_to_read > veb.max_read - reader.total_read {
-			bytes_to_read = veb.max_read - reader.total_read
-		}
-
-		mut buf_ptr := params.buf
-		unsafe {
-			buf_ptr += fd * veb.max_read // pointer magic
-		}
-		// convert to []u8 for BufferedReader
-		mut buf := unsafe { buf_ptr.vbytes(max_bytes_to_read) }
-
-		n := reader.read(mut buf) or {
-			eprintln('[veb] error parsing request: ${err}')
-			pv.close_conn(fd)
-			params.incomplete_requests[fd] = http.Request{}
-			params.idx[fd] = 0
-			return
-		}
-
-		// there is no more data to be sent, but it is less than the Content-Length header
-		// so it is a mismatch of body length and content length.
-		// Or if there is more data received then the Content-Length header specified
-		if (n == 0 && params.idx[fd] != 0) || params.idx[fd] + n > content_length.int() {
-			fast_send_resp(mut conn, http.new_response(
-				status: .bad_request
-				body: 'Mismatch of body length and Content-Length header'
-				header: http.new_header(
-					key: .content_type
-					value: 'text/plain'
-				).join(veb.headers_close)
-			)) or {}
-
-			pv.close_conn(fd)
-			params.incomplete_requests[fd] = http.Request{}
-			params.idx[fd] = 0
-			return
-		} else if n < bytes_to_read || params.idx[fd] + n < content_length.int() {
-			// request is incomplete wait until the socket becomes ready to read again
-			params.idx[fd] += n
-			// TODO: change this to a memcpy function?
-			req.data += buf[0..n].bytestr()
-			params.incomplete_requests[fd] = req
-			return
-		} else {
-			// request is complete: n = bytes_to_read
-			params.idx[fd] += n
-			req.data += buf[0..n].bytestr()
-		}
-	}
-
-	defer {
-		params.request_done(fd)
-	}
-
-	if completed_context := handle_request[A, X](mut conn, req, params) {
-		if completed_context.takeover {
-			// the connection should be kept open, but removed from the picoev loop.
-			// This way veb can continue handling other connections and the user can
-			// keep the connection open indefinitely
-			pv.delete(fd)
-			return
-		}
-
-		// TODO: At this point the Context can safely be freed when this function returns.
-		// The user will have to clone the context if the context object should be kept.
-		// defer {
-		// 	completed_context.free()
-		// }
-
-		match completed_context.return_type {
-			.normal {
-				// small optimization: if the response is small write it immediately
-				// the socket is most likely able to write all the data without blocking.
-				// See Context.send_file for why we use max_read instead of max_write.
-				if completed_context.res.body.len < veb.max_read {
-					fast_send_resp(mut conn, completed_context.res) or {}
-					handle_complete_request(completed_context.client_wants_to_close, mut
-						pv, fd)
-				} else {
-					params.string_responses[fd].open = true
-					params.string_responses[fd].str = completed_context.res.body
-					res := pv.add(fd, picoev.picoev_write, params.timeout_in_seconds,
-						picoev.raw_callback)
-					// picoev error
-					if res == -1 {
-						// should not happen
-						params.string_responses[fd].done()
-						fast_send_resp(mut conn, veb.http_500) or {}
-						handle_complete_request(completed_context.client_wants_to_close, mut
-							pv, fd)
-						return
-					}
-					// no errors we can send the HTTP headers
-					fast_send_resp_header(mut conn, completed_context.res) or {}
-				}
-			}
-			.file {
-				// save file information
-				length := completed_context.res.header.get(.content_length) or {
-					fast_send_resp(mut conn, veb.http_500) or {}
-					return
-				}
-				params.file_responses[fd].total = length.i64()
-				params.file_responses[fd].file = os.open(completed_context.return_file) or {
-					// Context checks if the file is valid, so this should never happen
-					fast_send_resp(mut conn, veb.http_500) or {}
-					params.file_responses[fd].done()
-					pv.close_conn(fd)
-					return
-				}
-				params.file_responses[fd].open = true
-
-				res := pv.add(fd, picoev.picoev_write, params.timeout_in_seconds, picoev.raw_callback)
-				// picoev error
-				if res == -1 {
-					// should not happen
-					fast_send_resp(mut conn, veb.http_500) or {}
-					params.file_responses[fd].done()
-					pv.close_conn(fd)
-					return
-				}
-				// no errors we can send the HTTP headers
-				fast_send_resp_header(mut conn, completed_context.res) or {}
-			}
-		}
-	} else {
-		// invalid request headers/data
-		pv.close_conn(fd)
-	}
-}
-
-// close the connection when `should_close` is true.
-@[inline]
-fn handle_complete_request(should_close bool, mut pv picoev.Picoev, fd int) {
-	if should_close {
-		pv.close_conn(fd)
-	}
-}
-
-fn handle_request[A, X](mut conn net.TcpConn, req http.Request, params &RequestParams) ?&Context {
-	mut global_app := unsafe { &A(params.global_app) }
-
-	// TODO: change this variable to include the total wait time over each network cycle
-	// maybe store it in Request.user_ptr ?
-	page_gen_start := time.ticks()
-
-	$if trace_request ? {
-		dump(req)
-	}
-	$if trace_request_url ? {
-		dump(req.url)
-	}
-
-	// parse the URL, query and form data
-	mut url := urllib.parse(req.url) or {
-		eprintln('[veb] error parsing path "${req.url}": ${err}')
-		return none
-	}
-	query := parse_query_from_url(url)
-	form, files := parse_form_from_request(req) or {
-		// Bad request
-		eprintln('[veb] error parsing form: ${err.msg()}')
-		conn.write(veb.http_400.bytes()) or {}
-		return none
-	}
-
-	// remove the port from the HTTP Host header
-	host_with_port := req.header.get(.host) or { '' }
-	host, _ := urllib.split_host_port(host_with_port)
-
-	// Create Context with request data
-	mut ctx := &Context{
-		req: req
-		page_gen_start: page_gen_start
-		conn: conn
-		query: query
-		form: form
-		files: files
-	}
-
-	if connection_header := req.header.get(.connection) {
-		// A client that does not support persistent connections MUST send the
-		// "close" connection option in every request message.
-		if connection_header.to_lower() == 'close' {
-			ctx.client_wants_to_close = true
-		}
-	}
-
-	$if A is StaticApp {
-		ctx.custom_mime_types = global_app.static_mime_types.clone()
-	}
-
-	// match controller paths
-	$if A is ControllerInterface {
-		if completed_context := handle_controllers[X](params.controllers, ctx, mut url,
-			host)
-		{
-			return completed_context
-		}
-	}
-
-	// create a new user context and pass the veb's context
-	mut user_context := X{}
-	user_context.Context = ctx
-
-	handle_route[A, X](mut global_app, mut user_context, url, host, params.routes)
-	// we need to explicitly tell the V compiler to return a reference
-	return &user_context.Context
+// Providers read live app configuration, including middleware added by a handler.
+// Only these small adapters depend on the controller type.
+struct RouteDispatch {
+	app voidptr
+mut:
+	global_handlers       fn (voidptr) []voidptr                         = unsafe { nil }
+	global_handlers_after fn (voidptr) []voidptr                         = unsafe { nil }
+	serve_static          fn (voidptr, voidptr, urllib.URL, string) bool = unsafe { nil }
 }
 
 fn handle_route[A, X](mut app A, mut user_context X, url urllib.URL, host string, routes &map[string]Route) {
+	mut dispatch := RouteDispatch{ app: voidptr(&app) }
+	$if A is MiddlewareApp {
+		dispatch.global_handlers = fn [A](app_ptr voidptr) []voidptr {
+			// The provider is installed only for the concrete app passed to dispatch.
+			return app_global_handlers(unsafe { &A(app_ptr) })
+		}
+		dispatch.global_handlers_after = fn [A](app_ptr voidptr) []voidptr {
+			return app_global_handlers_after(unsafe { &A(app_ptr) })
+		}
+	}
+	$if A is StaticApp {
+		dispatch.serve_static = fn [A, X](app_ptr voidptr, context_ptr voidptr, url urllib.URL, host string) bool {
+			// Both pointers retain the types used by this controller's route table.
+			app := unsafe { &A(app_ptr) }
+			mut user_context := unsafe { &X(context_ptr) }
+			sh := static_handler_config(app.static_files, app.static_mime_types,
+				app.static_hosts, app.static_prefixes, app.enable_static_gzip,
+				app.enable_static_zstd, app.enable_static_compression,
+				app.static_compression_max_size, app.static_compression_mime_types,
+				app.enable_markdown_negotiation)
+			return serve_static_route[X](sh, mut user_context, url, host)
+		}
+	}
+
+	// An app declares the peers veb may believe forwarding headers from with a
+	// `trusted_proxies` field; copy it into the request context where `ip()`
+	// reads it. This is comptime-unrolled like the middleware lookup below, so
+	// an app without the field compiles to nothing here.
+	$if A is $struct {
+		$for field in A.fields {
+			$if field.name == 'trusted_proxies' {
+				user_context.Context.trusted_proxies = app.$(field.name)
+			}
+		}
+	}
+
+	dispatch_route[X](mut user_context, url, host, routes, dispatch)
+}
+
+// Keep static serving reachable only when an app actually implements StaticApp.
+fn serve_static_route[X](sh StaticHandler, mut user_context X, url urllib.URL, host string) bool {
+	is_root_path := url.path.len == 0 || url.path == '/'
+	if is_root_path && !sh.enable_markdown_negotiation && sh.static_files['/'] == ''
+		&& sh.static_files['/index.html'] == '' && sh.static_files['/index.htm'] == '' {
+		return false
+	}
+	return serve_if_static[X](sh, mut user_context, url, host)
+}
+
+// dispatch_route shares request processing across controllers with the same context.
+// Route selection and argument preparation use metadata; only the selected
+// route's callback invokes a concrete controller method.
+fn dispatch_route[X](mut user_context X, url urllib.URL, host string, routes &map[string]Route, dispatch RouteDispatch) {
 	mut route := Route{}
 	mut middleware_has_sent_response := false
 	mut not_found := false
 
 	defer {
-		// execute middleware functions after veb is done and before the response is send
-		mut was_done := true
-		$if A is MiddlewareApp {
-			if !not_found && !middleware_has_sent_response {
-				// if the middleware doesn't send an alternate response, but only changes the
-				// response object we only have to check if the `done` was previously set to true
-				was_done = user_context.Context.done
-				// reset `done` so the middleware functions can return a different response
-				// 1 time only, since the `done` guard is still present in
-				// `Context.send_response_to_client`
-				user_context.Context.done = false
-
-				// no need to check the result of `validate_middleware`, since a response has to be sent
-				// anyhow. This function makes sure no further middleware is executed.
-				validate_middleware[X](mut user_context, app.Middleware.get_global_handlers_after[X]())
-				validate_middleware[X](mut user_context, route.after_middlewares)
-			}
+		// A panicking handler must not take the server down with it. Nothing between
+		// here and the accept loop recovers, so without this the process exits.
+		// `recover()` only stops the panic when called directly in a defer block, and
+		// V does not allow `return` in one, so recovery prepares its response here and
+		// skips the after-middleware through the else branch.
+		if msg := recover() {
+			handle_route_panic[X](mut user_context, url.path, msg)
+		} else {
+			finish_route[X](dispatch, mut user_context, route, url.path, not_found,
+				middleware_has_sent_response)
 		}
-		// send only the headers, because if the response body is too big, TcpConn code will
-		// actually block, because it has to wait for the socket to become ready to write. veb
-		// will handle this case.
-		if !was_done && !user_context.Context.done && !user_context.Context.takeover {
-			eprintln('[veb] handler for route "${url.path}" does not send any data!')
-			// send response anyway so the connection won't block
-			// fast_send_resp_header(mut user_context.conn, user_context.res) or {}
-		} else if !user_context.Context.takeover {
-			// fast_send_resp_header(mut user_context.conn, user_context.res) or {}
+		// Free the handler slots a throttle took for this request on every way
+		// out, including the 404 and refusing-middleware paths that skip the
+		// after-middleware above.
+		if user_context.Context.throttle_leases.len > 0 {
+			user_context.Context.release_throttle_leases()
 		}
-		// Context.takeover is set to true, so the user must close the connection and sent a response.
 	}
-
-	url_words := url.path.split('/').filter(it != '')
 
 	$if veb_livereload ? {
 		if url.path.starts_with('/veb_livereload/') {
-			if url.path.ends_with('current') {
-				user_context.handle_veb_livereload_current()
+			if url.path.ends_with('/events') {
+				user_context.handle_veb_livereload_events()
 				return
+			}
+			$if veb_livereload_polling ? {
+				if url.path.ends_with('current') {
+					user_context.handle_veb_livereload_current()
+					return
+				}
 			}
 			if url.path.ends_with('script.js') {
 				user_context.handle_veb_livereload_script()
@@ -788,130 +599,366 @@ fn handle_route[A, X](mut app A, mut user_context X, url urllib.URL, host string
 	}
 
 	// first execute before_request
-	$if A is HasBeforeRequest {
-		app.before_request()
+	$if X is HasBeforeRequestOnContext {
+		user_context.before_request()
 	}
 	// user_context.before_request()
 	if user_context.Context.done {
 		return
 	}
+	$if trace_prealloc ? {
+		unsafe { prealloc_scope_checkpoint(c'veb before_request done') }
+	}
 
 	// then execute global middleware functions
-	$if A is MiddlewareApp {
-		if validate_middleware[X](mut user_context, app.Middleware.get_global_handlers[X]()) == false {
+	if dispatch.global_handlers != unsafe { nil } {
+		if validate_middleware[X](mut user_context, dispatch.global_handlers(dispatch.app)) == false {
 			middleware_has_sent_response = true
 			return
 		}
 	}
 
-	$if A is StaticApp {
-		if serve_if_static[A, X](app, mut user_context, url, host) {
-			// successfully served a static file
-			return
-		}
+	if dispatch.serve_static != unsafe { nil }
+		&& dispatch.serve_static(dispatch.app, voidptr(&user_context), url, host) {
+		return
+	}
+	$if trace_prealloc ? {
+		unsafe { prealloc_scope_checkpoint(c'veb route static checked') }
+	}
+	$if trace_prealloc ? {
+		unsafe { prealloc_scope_checkpoint(c'veb before route match') }
 	}
 
-	// Route matching and match route specific middleware as last step
-	$for method in A.methods {
-		$if method.return_type is Result {
-			route = (*routes)[method.name] or {
-				eprintln('[veb] parsed attributes for the `${method.name}` are not found, skipping...')
-				Route{}
+	if matched := select_route(routes, url.path, host, user_context.Context.req.method) {
+		route = matched.route
+		if dispatch.global_handlers != unsafe { nil } {
+			if !validate_middleware[X](mut user_context, get_handlers_for_method(route.middlewares,
+				user_context.Context.req.method)) {
+				middleware_has_sent_response = true
+				return
 			}
-
-			// Skip if the HTTP request method does not match the attributes
-			if user_context.Context.req.method in route.methods {
-				// Used for route matching
-				route_words := route.path.split('/').filter(it != '')
-
-				// Skip if the host does not match or is empty
-				if route.host == '' || route.host == host {
-					can_have_data_args := user_context.Context.req.method == .post
-						|| user_context.Context.req.method == .get
-					// Route immediate matches first
-					// For example URL `/register` matches route `/:user`, but `fn register()`
-					// should be called first.
-					if !route.path.contains('/:') && url_words == route_words {
-						// We found a match
-						$if A is MiddlewareApp {
-							if validate_middleware[X](mut user_context, route.middlewares) == false {
-								middleware_has_sent_response = true
-								return
-							}
-						}
-
-						if method.args.len > 1 && can_have_data_args {
-							// Populate method args with form or query values
-							mut args := []string{cap: method.args.len + 1}
-							data := if user_context.Context.req.method == .get {
-								user_context.Context.query
-							} else {
-								user_context.Context.form
-							}
-
-							for param in method.args[1..] {
-								args << data[param.name]
-							}
-
-							app.$method(mut user_context, args)
-						} else {
-							app.$method(mut user_context)
-						}
+		}
+		mut args := matched.params
+		if matched.from_data {
+			data := if user_context.Context.req.method == .get {
+				user_context.Context.query
+			} else {
+				user_context.Context.form
+			}
+			for i, name in route.parameter_names {
+				value := data[name]
+				if i < route.parameter_kinds.len {
+					msg := route_param_error(name, route.parameter_kinds[i], value)
+					if msg != '' {
+						user_context.request_error(msg)
 						return
 					}
-
-					if url_words.len == 0 && route_words == ['index'] && method.name == 'index' {
-						$if A is MiddlewareApp {
-							if validate_middleware[X](mut user_context, route.middlewares) == false {
-								middleware_has_sent_response = true
-								return
-							}
-						}
-
-						if method.args.len > 1 && can_have_data_args {
-							// Populate method args with form or query values
-							mut args := []string{cap: method.args.len + 1}
-
-							data := if user_context.Context.req.method == .get {
-								user_context.Context.query
-							} else {
-								user_context.Context.form
-							}
-
-							for param in method.args[1..] {
-								args << data[param.name]
-							}
-
-							app.$method(mut user_context, args)
-						} else {
-							app.$method(mut user_context)
-						}
-						return
-					}
-
-					if params := route_matches(url_words, route_words) {
-						$if A is MiddlewareApp {
-							if validate_middleware[X](mut user_context, route.middlewares) == false {
-								middleware_has_sent_response = true
-								return
-							}
-						}
-
-						method_args := params.clone()
-						if method_args.len + 1 != method.args.len {
-							eprintln('[veb] warning: uneven parameters count (${method.args.len}) in `${method.name}`, compared to the veb route `${method.attrs}` (${method_args.len})')
-						}
-						app.$method(mut user_context, method_args)
+				}
+				args << value
+			}
+		} else {
+			// Path parameters arrive positionally, in the order the route declares
+			// them, which is the order the dispatcher passes them on.
+			for i, value in args {
+				if i < route.parameter_kinds.len && i < route.parameter_names.len {
+					msg := route_param_error(route.parameter_names[i], route.parameter_kinds[i],
+						value)
+					if msg != '' {
+						user_context.request_error(msg)
 						return
 					}
 				}
 			}
 		}
+		if route.parameter_names.len > 0 {
+			if matched.from_data && user_context.Context.req.method !in [.get, .post] {
+				return
+			}
+			if !matched.from_data && args.len != route.parameter_names.len {
+				eprintln('[veb] warning: uneven parameters count (${route.parameter_names.len + 1}) in `${matched.name}`, compared to the veb route `${route.attrs}` (${args.len})')
+			}
+		}
+		$if trace_prealloc ? {
+			unsafe { prealloc_scope_checkpoint(c'veb before route handler') }
+		}
+		route.handler(dispatch.app, voidptr(&user_context), args)
+		$if trace_prealloc ? {
+			unsafe { prealloc_scope_checkpoint(c'veb after route handler') }
+		}
+		return
+	}
+	// no route matched this method. A route that matches the path but not the
+	// verb is a 405 with an `Allow` header, which is what a client needs to
+	// discover the right method; a path nothing claims stays a 404.
+	// `not_found` is deliberately left false, so after-middleware such as
+	// compression still runs over the response this function sends.
+	if mismatch := select_route_ignoring_method(routes, url.path, host) {
+		user_context.method_not_allowed(allowed_methods_for_route(routes, mismatch, url.path, host))
+		return
 	}
 	// return 404
 	user_context.not_found()
 	not_found = true
 	return
+}
+
+// handle_route_panic builds the fallback response after a route handler panics.
+// It is specialized by context type, so this reset is emitted once per context
+// type instead of once per controller type.
+fn handle_route_panic[X](mut user_context X, path string, msg string) {
+	eprintln('[veb] handler for route "${path}" panicked: ${msg}')
+	// A takeover handler owns the connection and may already have written to it.
+	if user_context.Context.takeover_mode == .none {
+		// Discard the prepared representation, including file streaming and framing.
+		// server_error replaces and frees the old body through send_response_to_client.
+		user_context.Context.done = false
+		user_context.Context.return_type = .normal
+		user_context.Context.return_file = ''
+		user_context.Context.content_type = ''
+		user_context.Context.already_compressed = false
+		for header in [http.CommonHeader.content_type, .content_length, .content_encoding,
+			.transfer_encoding, .trailer, .content_range, .content_disposition, .accept_ranges,
+			.etag, .last_modified, .cache_control, .expires, .age, .location] {
+			user_context.Context.res.header.delete(header)
+		}
+		user_context.server_error('Internal Server Error')
+	}
+}
+
+// finish_route runs after-handlers once per request, shared by context type.
+fn finish_route[X](dispatch RouteDispatch, mut user_context X, route Route, path string, not_found bool, middleware_has_sent_response bool) {
+	// execute middleware functions after veb is done and before the response is send
+	mut was_done := true
+	if dispatch.global_handlers_after != unsafe { nil } {
+		// A deferred (`after`) response does not exist yet: the timer
+		// thread writes it later, so framing middleware (compression,
+		// ...) must not touch this context now. Throttle leases in the
+		// caller are still freed.
+		if !not_found && !middleware_has_sent_response && !user_context.Context.deferred {
+			// if the middleware doesn't send an alternate response, but only changes the
+			// response object we only have to check if the `done` was previously set to true
+			was_done = user_context.Context.done
+			// reset `done` so the middleware functions can return a different response
+			// 1 time only, since the `done` guard is still present in
+			// `Context.send_response_to_client`
+			user_context.Context.done = false
+
+			// no need to check the result of `validate_middleware`, since a response has to be sent
+			// anyhow. This function makes sure no further middleware is executed.
+			validate_middleware[X](mut user_context, dispatch.global_handlers_after(dispatch.app))
+			// skip route-specific after-middleware if global already sent a response
+			if !user_context.Context.done {
+				validate_middleware[X](mut user_context, get_handlers_for_method(route.after_middlewares,
+					user_context.Context.req.method))
+				// Preserve an after-middleware response, or restore the handler response state.
+				user_context.Context.done = user_context.Context.done || was_done
+			}
+		}
+	}
+	// send only the headers, because if the response body is too big, TcpConn code will
+	// actually block, because it has to wait for the socket to become ready to write. veb
+	// will handle this case.
+	if !was_done && !user_context.Context.done && user_context.Context.takeover_mode == .none {
+		eprintln('[veb] handler for route "${path}" does not send any data!')
+		// send response anyway so the connection won't block
+		// fast_send_resp_header(mut user_context.conn, user_context.res) or {}
+	} else if user_context.Context.takeover_mode == .none {
+		// fast_send_resp_header(mut user_context.conn, user_context.res) or {}
+	}
+	// Context.takeover_mode is set, so the user must send a response.
+}
+
+// RouteMatch holds runtime routing work shared by all controller types.
+struct RouteMatch {
+	name      string
+	route     Route
+	params    []string
+	from_data bool
+}
+
+// route_param_error checks one request value against the kind of handler
+// parameter it will fill, and returns '' when the value is acceptable. A
+// missing or unparsable value for a non-string parameter used to be coerced to
+// a zero while the handler answered 200; now it is the message for a 400.
+fn route_param_error(name string, kind ParamKind, value string) string {
+	match kind {
+		.string_, .other {
+			return ''
+		}
+		.integer {
+			if value == '' {
+				return 'missing integer value for parameter "${name}"'
+			}
+			_ = strconv.atoi(value) or {
+				return 'invalid integer value "${value}" for parameter "${name}"'
+			}
+			return ''
+		}
+		.boolean {
+			if value != 'true' && value != 'false' {
+				return 'invalid boolean value "${value}" for parameter "${name}": expected true or false'
+			}
+			return ''
+		}
+	}
+}
+
+fn select_route(routes &map[string]Route, path string, host string, method http.Method) ?RouteMatch {
+	is_root := path.len == 0 || path == '/'
+	if is_root {
+		if index_route := (*routes)['index'] {
+			if method in index_route.methods && (index_route.host == '' || index_route.host == host)
+				&& index_route.path in ['/', '/index'] {
+				return RouteMatch{ name: 'index', route: index_route, from_data: true }
+			}
+		}
+	}
+	url_words := route_path_words(path)
+	mut variadic_match := RouteMatch{}
+	for name, route in *routes {
+		if method !in route.methods || (route.host != '' && route.host != host) {
+			continue
+		}
+		if (!route.path.contains('/:') && url_words == route.words)
+			|| (url_words.len == 0 && route.words.len == 1 && route.words[0] == 'index' && name == 'index') {
+			return RouteMatch{ name: name, route: route, from_data: true }
+		}
+		if params := route_matches(url_words, route.words) {
+			if !route_is_variadic(route.words) {
+				return RouteMatch{ name: name, route: route, params: params }
+			}
+			if should_prefer_variadic_route(route.words, variadic_match.route.words) {
+				variadic_match = RouteMatch{ name: name, route: route, params: params }
+			}
+		}
+	}
+	if variadic_match.name != '' {
+		return variadic_match
+	}
+	return none
+}
+
+fn route_is_variadic(route_words []string) bool {
+	return route_words.len > 0 && route_words[route_words.len - 1].ends_with('...')
+}
+
+// route_path_matches reports whether a route's path matches the request path,
+// ignoring the HTTP method. Method-insensitive matching is what separates a
+// 405 ("right path, wrong verb") from a 404 ("no such path").
+fn route_path_matches(url_words []string, route_words []string) bool {
+	if route_words.len == 0 && url_words.len == 0 {
+		return true
+	}
+	if _ := route_matches(url_words, route_words) {
+		return true
+	}
+	return false
+}
+
+// select_route_ignoring_method finds a route by path and host alone. It runs
+// only on the path where select_route already failed, so it costs nothing on a
+// request that a handler answers, and it prefers an exact route over a variadic
+// one so the `Allow` header names the route the caller most likely meant.
+fn select_route_ignoring_method(routes &map[string]Route, path string, host string) ?RouteMatch {
+	is_root := path.len == 0 || path == '/'
+	if is_root {
+		if index_route := (*routes)['index'] {
+			if (index_route.host == '' || index_route.host == host)
+				&& index_route.path in ['/', '/index'] {
+				return RouteMatch{ name: 'index', route: index_route, from_data: true }
+			}
+		}
+	}
+	url_words := route_path_words(path)
+	mut variadic_match := RouteMatch{}
+	for name, route in *routes {
+		if route.host != '' && route.host != host {
+			continue
+		}
+		if !route_path_matches(url_words, route.words) {
+			continue
+		}
+		if !route_is_variadic(route.words) {
+			return RouteMatch{ name: name, route: route, from_data: !route.path.contains('/:') }
+		}
+		if should_prefer_variadic_route(route.words, variadic_match.route.words) {
+			variadic_match = RouteMatch{ name: name, route: route }
+		}
+	}
+	if variadic_match.name != '' {
+		return variadic_match
+	}
+	return none
+}
+
+// allowed_methods_for_route combines handlers for the selected resource without
+// including other route patterns that happen to match this particular URL.
+fn allowed_methods_for_route(routes &map[string]Route, selected RouteMatch, path string, host string) []http.Method {
+	is_root := path.len == 0 || path == '/'
+	selected_words := if is_root && selected.name == 'index' {
+		[]string{}
+	} else {
+		selected.route.words
+	}
+	mut allowed := []http.Method{}
+	for name, route in *routes {
+		if route.host != '' && route.host != host {
+			continue
+		}
+		// Only the index handler has the implicit / alias for /index.
+		words := if is_root && name == 'index' && route.path in ['/', '/index'] {
+			[]string{}
+		} else {
+			route.words
+		}
+		if !same_route_pattern(selected_words, words) {
+			continue
+		}
+		for method in route.methods {
+			if method !in allowed {
+				allowed << method
+			}
+		}
+	}
+	return allowed
+}
+
+fn same_route_pattern(left []string, right []string) bool {
+	if left.len != right.len {
+		return false
+	}
+	for i, word in left {
+		if word == right[i] {
+			continue
+		}
+		// Parameter names do not change the resource, but a variadic tail does.
+		if word.starts_with(':') && right[i].starts_with(':')
+			&& word.ends_with('...') == right[i].ends_with('...') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+fn should_prefer_variadic_route(candidate []string, current []string) bool {
+	if current.len == 0 {
+		return true
+	}
+	if candidate.len != current.len {
+		return candidate.len > current.len
+	}
+	return variadic_route_static_parts(candidate) > variadic_route_static_parts(current)
+}
+
+fn variadic_route_static_parts(route_words []string) int {
+	mut static_parts := 0
+	for route_word in route_words[..route_words.len - 1] {
+		if !route_word.starts_with(':') {
+			static_parts++
+		}
+	}
+	return static_parts
 }
 
 fn route_matches(url_words []string, route_words []string) ?[]string {
@@ -923,7 +970,6 @@ fn route_matches(url_words []string, route_words []string) ?[]string {
 	if url_words.len < route_words.len {
 		return none
 	}
-
 	mut params := []string{cap: url_words.len}
 	if url_words.len == route_words.len {
 		for i in 0 .. url_words.len {
@@ -958,30 +1004,71 @@ fn route_matches(url_words []string, route_words []string) ?[]string {
 
 // check if request is for a static file and serves it
 // returns true if we served a static file, false otherwise
-@[manualfree]
-fn serve_if_static[A, X](app &A, mut user_context X, url urllib.URL, host string) bool {
+fn serve_if_static[X](app StaticHandler, mut user_context X, url urllib.URL, host string) bool {
 	// TODO: handle url parameters properly - for now, ignore them
 	mut asked_path := url.path
-	base_path := os.base(asked_path)
+	static_handler := app
+	if !static_handler.enable_markdown_negotiation && asked_path == '/'
+		&& static_handler.static_files['/'] == ''
+		&& static_handler.static_files['/index.html'] == ''
+		&& static_handler.static_files['/index.htm'] == '' {
+		return false
+	}
+	if !static_handler.enable_markdown_negotiation
+		&& !static_handler.may_contain_static_path(asked_path) {
+		return false
+	}
 
+	// Content negotiation for markdown files (if enabled)
+	if static_handler.enable_markdown_negotiation {
+		accept_header := user_context.req.header.get(.accept) or { '' }
+		if accept_header.contains('text/markdown') {
+			// Try markdown variants in order of priority
+			markdown_variants := [
+				asked_path + '.md',
+				asked_path + '.html.md',
+				asked_path + '/index.html.md',
+			]
+
+			for variant in markdown_variants {
+				if static_handler.static_files[variant] != '' {
+					asked_path = variant
+					break
+				}
+			}
+		}
+	}
+
+	base_path := os.base(asked_path)
 	if !base_path.contains('.') && !asked_path.ends_with('/') {
 		asked_path += '/'
 	}
 
 	if asked_path.ends_with('/') {
-		if app.static_files[asked_path + 'index.html'] != '' {
+		// Check for markdown index first if Accept header requests it and feature is enabled
+		if static_handler.enable_markdown_negotiation {
+			accept_header := user_context.req.header.get(.accept) or { '' }
+			if accept_header.contains('text/markdown')
+				&& static_handler.static_files[asked_path + 'index.html.md'] != '' {
+				asked_path += 'index.html.md'
+			} else if static_handler.static_files[asked_path + 'index.html'] != '' {
+				asked_path += 'index.html'
+			} else if static_handler.static_files[asked_path + 'index.htm'] != '' {
+				asked_path += 'index.htm'
+			}
+		} else if static_handler.static_files[asked_path + 'index.html'] != '' {
 			asked_path += 'index.html'
-		} else if app.static_files[asked_path + 'index.htm'] != '' {
+		} else if static_handler.static_files[asked_path + 'index.htm'] != '' {
 			asked_path += 'index.htm'
 		}
 	}
-	static_file := app.static_files[asked_path] or { return false }
+	static_file := static_handler.static_files[asked_path] or { return false }
 
 	// StaticHandler ensures that the mime type exists on either the App or in veb
-	ext := os.file_ext(static_file)
-	mut mime_type := app.static_mime_types[ext] or { veb.mime_types[ext] }
+	ext := os.file_ext(static_file).to_lower()
+	mut mime_type := static_handler.static_mime_types[ext] or { mime_types[ext] }
 
-	static_host := app.static_hosts[asked_path] or { '' }
+	static_host := static_handler.static_hosts[asked_path] or { '' }
 	if static_file == '' || mime_type == '' {
 		return false
 	}
@@ -989,8 +1076,47 @@ fn serve_if_static[A, X](app &A, mut user_context X, url urllib.URL, host string
 		return false
 	}
 
+	// Configure static file compression settings
+	user_context.set_static_compression_config(static_handler.enable_static_gzip,
+		static_handler.enable_static_zstd, static_handler.enable_static_compression, if static_handler.static_compression_max_size >= 0 {
+			static_handler.static_compression_max_size
+		} else {
+			1048576 // Default: 1MB
+		}, static_handler.static_compression_mime_types)
+
 	user_context.send_file(mime_type, static_file)
 	return true
+}
+
+fn (sh StaticHandler) may_contain_static_path(path string) bool {
+	if sh.static_prefixes.len == 0 || path == '/' {
+		return true
+	}
+	for prefix in sh.static_prefixes {
+		if prefix.ends_with('/') {
+			if path.starts_with(prefix) {
+				return true
+			}
+		} else if path == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+fn static_handler_config(static_files map[string]string, static_mime_types map[string]string, static_hosts map[string]string, static_prefixes []string, enable_static_gzip bool, enable_static_zstd bool, enable_static_compression bool, static_compression_max_size int, static_compression_mime_types []string, enable_markdown_negotiation bool) StaticHandler {
+	return StaticHandler{
+		static_files:                  static_files
+		static_mime_types:             static_mime_types
+		static_hosts:                  static_hosts
+		static_prefixes:               static_prefixes
+		enable_static_gzip:            enable_static_gzip
+		enable_static_zstd:            enable_static_zstd
+		enable_static_compression:     enable_static_compression
+		static_compression_max_size:   static_compression_max_size
+		static_compression_mime_types: static_compression_mime_types
+		enable_markdown_negotiation:   enable_markdown_negotiation
+	}
 }
 
 // send a string over `conn`
@@ -1007,18 +1133,10 @@ fn send_string(mut conn net.TcpConn, s string) ! {
 	conn.write_string(s)!
 }
 
-// send a string ptr over `conn`
-fn send_string_ptr(mut conn net.TcpConn, ptr &u8, len int) !int {
-	$if trace_send_string_conn ? {
-		eprintln('> send_string: conn: ${ptr_str(conn)}')
-	}
-	// $if trace_response ? {
-	// 	eprintln('> send_string:\n${s}\n')
-	// }
-	if voidptr(conn) == unsafe { nil } {
-		return error('connection was closed before send_string')
-	}
-	return conn.write_ptr(ptr, len)
+// Set s to the form error
+pub fn (mut ctx Context) error(s string) {
+	eprintln('[veb] Context.error: ${s}')
+	ctx.form_error = s
 }
 
 fn fast_send_resp_header(mut conn net.TcpConn, resp http.Response) ! {
@@ -1044,10 +1162,4 @@ fn fast_send_resp_header(mut conn net.TcpConn, resp http.Response) ! {
 fn fast_send_resp(mut conn net.TcpConn, resp http.Response) ! {
 	fast_send_resp_header(mut conn, resp)!
 	send_string(mut conn, resp.body)!
-}
-
-// Set s to the form error
-pub fn (mut ctx Context) error(s string) {
-	eprintln('[veb] Context.error: ${s}')
-	ctx.form_error = s
 }

@@ -35,8 +35,12 @@ pub const days_before = [
 ]!
 
 // Time contains various time units for a point in time.
+@[markused]
 pub struct Time {
 	unix i64
+	// loc uses nil so existing Time literals remain unzoned; V requires unsafe
+	// to initialize a reference field with that sentinel.
+	loc &Location = unsafe { nil }
 pub:
 	year       int
 	month      int
@@ -46,8 +50,12 @@ pub:
 	second     int
 	nanosecond int
 	is_local   bool // used to make time.now().local().local() == time.now().local()
-	//
-	microsecond int @[deprecated: 'use t.nanosecond / 1000 instead'; deprecated_after: '2023-08-05']
+}
+
+@[inline]
+fn (t Time) has_location() bool {
+	// V requires unsafe to construct the nil reference used by loc's sentinel.
+	return t.loc != unsafe { nil }
 }
 
 // FormatDelimiter contains different time formats.
@@ -86,13 +94,62 @@ pub enum FormatDelimiter {
 	no_delimiter
 }
 
+fn check_new_time(t Time) ! {
+	month := if t.month == 0 { 1 } else { t.month }
+	day := if t.day == 0 { 1 } else { t.day }
+	if t.year < -9999 || t.year > 9999 {
+		return error('invalid time: year must be between -9999 and 9999')
+	}
+	if month < 1 || month > 12 {
+		return error('invalid time: month must be between 1 and 12')
+	}
+	max_day := month_days[month - 1] + if month == 2 && is_leap_year(t.year) {
+		1
+	} else {
+		0
+	}
+	if day < 1 || day > max_day {
+		return error('invalid time: day must be between 1 and ${max_day} for year ${t.year}, month ${month}')
+	}
+	if t.hour < 0 || t.hour > 23 {
+		return error('invalid time: hour must be between 0 and 23')
+	}
+	if t.minute < 0 || t.minute > 59 {
+		return error('invalid time: minute must be between 0 and 59')
+	}
+	if t.second < 0 || t.second > 59 {
+		return error('invalid time: second must be between 0 and 59')
+	}
+	if t.nanosecond < 0 || t.nanosecond >= 1_000_000_000 {
+		return error('invalid time: nanosecond must be between 0 and 999999999')
+	}
+}
+
+fn normalize_new_time(t Time) Time {
+	check_new_time(t) or { panic(err.msg()) }
+	return Time{
+		...t
+		month: if t.month == 0 { 1 } else { t.month }
+		day:   if t.day == 0 { 1 } else { t.day }
+	}
+}
+
+// new_checked is like `new`, but returns an error instead of panicking when
+// the fields do not form a valid date and time. The parse functions use it so
+// that malformed input, such as February 30th, is reported to the caller.
+fn new_checked(t Time) !Time {
+	check_new_time(t)!
+	return Time.new(t)
+}
+
+// Time.new returns a time struct with the calculated Unix time.
 pub fn Time.new(t Time) Time {
-	return time_with_unix(t)
+	return time_with_unix(normalize_new_time(t))
 }
 
 // new returns a time struct with the calculated Unix time.
 pub fn new(t Time) Time {
-	return time_with_unix(t)
+	return Time.new(t)
 }
 
 // smonth returns the month name abbreviation.
@@ -101,13 +158,44 @@ pub fn (t Time) smonth() string {
 		return '---'
 	}
 	i := t.month - 1
-	return time.months_string[i * 3..(i + 1) * 3]
+	return months_string[i * 3..(i + 1) * 3]
 }
 
 // unix returns the UNIX time with second resolution.
 @[inline]
 pub fn (t Time) unix() i64 {
+	if t.has_location() {
+		return t.unix
+	}
+	return time_with_unix(t.local_to_utc()).unix
+}
+
+// local_unix returns the UNIX local time with second resolution.
+// For IANA locations this is the absolute unix instant plus the zone offset
+// active at that instant (wall-clock seconds since epoch in that location).
+@[inline]
+pub fn (t Time) local_unix() i64 {
+	if t.has_location() {
+		loc := t.loc
+		// zone_at only fails for empty/corrupt locations; use the first zone
+		// offset rather than silently treating the instant as UTC.
+		zone_offset := loc.offset_at(t.unix) or {
+			if loc.zones.len > 0 {
+				loc.zones[0].offset
+			} else {
+				0
+			}
+		}
+		return t.unix + i64(zone_offset)
+	}
 	return time_with_unix(t).unix
+}
+
+// is_zero returns true when `t` is the zero value of `time.Time`.
+@[inline]
+pub fn (t Time) is_zero() bool {
+	return t.unix == 0 && t.year == 0 && t.month == 0 && t.day == 0 && t.hour == 0 && t.minute == 0
+		&& t.second == 0 && t.nanosecond == 0 && !t.is_local
 }
 
 // unix_milli returns the UNIX time with millisecond resolution.
@@ -129,34 +217,6 @@ pub fn (t Time) unix_nano() i64 {
 	return t.unix() * 1_000_000_000 + i64(t.nanosecond)
 }
 
-// unix_time returns the UNIX time with second resolution.
-@[deprecated: 'use `t.unix()` instead']
-@[deprecated_after: '2024-05-31']
-pub fn (t Time) unix_time() i64 {
-	return t.unix()
-}
-
-// unix_time_milli returns the UNIX time with millisecond resolution.
-@[deprecated: 'use `t.unix_milli()` instead']
-@[deprecated_after: '2024-05-31']
-pub fn (t Time) unix_time_milli() i64 {
-	return t.unix_milli()
-}
-
-// unix_time_micro returns the UNIX time with microsecond resolution.
-@[deprecated: 'use `t.unix_micro()` instead']
-@[deprecated_after: '2024-05-31']
-pub fn (t Time) unix_time_micro() i64 {
-	return t.unix_micro()
-}
-
-// unix_time_nano returns the UNIX time with nanosecond resolution.
-@[deprecated: 'use `t.unix_nano()` instead']
-@[deprecated_after: '2024-05-31']
-pub fn (t Time) unix_time_nano() i64 {
-	return t.unix_nano()
-}
-
 // add returns a new time with the given duration added.
 pub fn (t Time) add(duration_in_nanosecond Duration) Time {
 	// This expression overflows i64 for big years (and we do not have i128 yet):
@@ -164,24 +224,50 @@ pub fn (t Time) add(duration_in_nanosecond Duration) Time {
 	// ... so instead, handle the addition manually in parts ¯\_(ツ)_/¯
 	mut increased_time_nanosecond := i64(t.nanosecond) + duration_in_nanosecond.nanoseconds()
 	// increased_time_second
-	mut increased_time_second := t.unix() + (increased_time_nanosecond / second)
+	base_unix := if t.has_location() { t.unix } else { t.local_unix() }
+	mut increased_time_second := base_unix + (increased_time_nanosecond / second)
 	increased_time_nanosecond = increased_time_nanosecond % second
 	if increased_time_nanosecond < 0 {
 		increased_time_second--
 		increased_time_nanosecond += second
 	}
 	res := unix_nanosecond(increased_time_second, int(increased_time_nanosecond))
-	return if t.is_local { res.as_local() } else { res }
+
+	if t.has_location() {
+		loc := t.loc
+		return loc.unix_nanosecond_to_local(res.unix, res.nanosecond) or {
+			// Keep the location even if projection fails so later operations
+			// still treat this value as an IANA-zoned instant.
+			Time{
+				...res
+				loc:  loc
+				unix: res.unix
+			}
+		}
+	}
+
+	if t.is_local {
+		// we need to reset unix to 0, because we don't know the offset
+		// and we can't calculate it without it without causing infinite recursion
+		// so unfortunately we need to recalculate unix next time it is needed
+		return Time{
+			...res
+			is_local: true
+			unix:     0
+		}
+	}
+
+	return res
 }
 
 // add_seconds returns a new time struct with an added number of seconds.
 pub fn (t Time) add_seconds(seconds int) Time {
-	return time_with_unix(t).add(seconds * second)
+	return time_with_unix(t).add(i64(seconds) * second)
 }
 
 // add_days returns a new time struct with an added number of days.
 pub fn (t Time) add_days(days int) Time {
-	return time_with_unix(t).add(days * 24 * hour)
+	return time_with_unix(t).add(i64(days) * 24 * hour)
 }
 
 // since returns the time duration elapsed since a given time.
@@ -206,7 +292,7 @@ pub fn since(t Time) Duration {
 // ```
 pub fn (t Time) relative() string {
 	znow := now()
-	mut secs := znow.unix - t.unix()
+	mut secs := znow.unix() - t.unix()
 	mut prefix := ''
 	mut suffix := ''
 	if secs < 0 {
@@ -215,37 +301,37 @@ pub fn (t Time) relative() string {
 	} else {
 		suffix = ' ago'
 	}
-	if secs < time.seconds_per_minute / 2 {
+	if secs < seconds_per_minute / 2 {
 		return 'now'
 	}
-	if secs < time.seconds_per_hour {
-		m := secs / time.seconds_per_minute
+	if secs < seconds_per_hour {
+		m := secs / seconds_per_minute
 		if m == 1 {
 			return '${prefix}1 minute${suffix}'
 		}
 		return '${prefix}${m} minutes${suffix}'
 	}
-	if secs < time.seconds_per_hour * 24 {
-		h := secs / time.seconds_per_hour
+	if secs < seconds_per_hour * 24 {
+		h := secs / seconds_per_hour
 		if h == 1 {
 			return '${prefix}1 hour${suffix}'
 		}
 		return '${prefix}${h} hours${suffix}'
 	}
-	if secs < time.seconds_per_hour * 24 * 7 {
-		d := secs / time.seconds_per_hour / 24
+	if secs < seconds_per_hour * 24 * 7 {
+		d := secs / seconds_per_hour / 24
 		if d == 1 {
 			return '${prefix}1 day${suffix}'
 		}
 		return '${prefix}${d} days${suffix}'
 	}
-	if secs < time.seconds_per_hour * 24 * time.days_in_year {
+	if secs < seconds_per_hour * 24 * days_in_year {
 		if prefix == 'in ' {
 			return 'on ${t.md()}'
 		}
 		return 'last ${t.md()}'
 	}
-	y := secs / time.seconds_per_hour / 24 / time.days_in_year
+	y := secs / seconds_per_hour / 24 / days_in_year
 	if y == 1 {
 		return '${prefix}1 year${suffix}'
 	}
@@ -268,7 +354,7 @@ pub fn (t Time) relative() string {
 // ```
 pub fn (t Time) relative_short() string {
 	znow := now()
-	mut secs := znow.unix - t.unix()
+	mut secs := znow.unix() - t.unix()
 	mut prefix := ''
 	mut suffix := ''
 	if secs < 0 {
@@ -277,48 +363,56 @@ pub fn (t Time) relative_short() string {
 	} else {
 		suffix = ' ago'
 	}
-	if secs < time.seconds_per_minute / 2 {
+	if secs < seconds_per_minute / 2 {
 		return 'now'
 	}
-	if secs < time.seconds_per_hour {
-		m := secs / time.seconds_per_minute
+	if secs < seconds_per_hour {
+		m := secs / seconds_per_minute
 		if m == 1 {
 			return '${prefix}1m${suffix}'
 		}
 		return '${prefix}${m}m${suffix}'
 	}
-	if secs < time.seconds_per_hour * 24 {
-		h := secs / time.seconds_per_hour
+	if secs < seconds_per_hour * 24 {
+		h := secs / seconds_per_hour
 		if h == 1 {
 			return '${prefix}1h${suffix}'
 		}
 		return '${prefix}${h}h${suffix}'
 	}
-	if secs < time.seconds_per_hour * 24 * time.days_in_year {
-		d := secs / time.seconds_per_hour / 24
+	if secs < seconds_per_hour * 24 * days_in_year {
+		d := secs / seconds_per_hour / 24
 		if d == 1 {
 			return '${prefix}1d${suffix}'
 		}
 		return '${prefix}${d}d${suffix}'
 	}
-	y := secs / time.seconds_per_hour / 24 / time.days_in_year
+	y := secs / seconds_per_hour / 24 / days_in_year
 	if y == 1 {
 		return '${prefix}1y${suffix}'
 	}
 	return '${prefix}${y}y${suffix}'
 }
 
-// day_of_week returns the current day of a given year, month, and day,
-// as an integer.
+// sakamoto_month_offsets is Sakamoto's day-of-week lookup table.
+// A fixed array avoids a heap allocation on every call.
+const sakamoto_month_offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]!
+
+// day_of_week returns the current day of a given year, month, and day, as an integer.
+// The result is from 1 (Monday) to 7 (Sunday), also for the years before 1 of the
+// proleptic Gregorian calendar, where the year 0 is 1 BC.
 pub fn day_of_week(y int, m int, d int) int {
-	// Sakomotho's algorithm is explained here:
-	// https://stackoverflow.com/a/6385934
-	t := [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
 	mut sy := y
 	if m < 3 {
 		sy = sy - 1
 	}
-	return (sy + sy / 4 - sy / 100 + sy / 400 + t[m - 1] + d - 1) % 7 + 1
+	if sy < 0 {
+		// The formula needs floored divisions and a floored remainder, but `/` and `%`
+		// truncate toward zero. The Gregorian calendar repeats every 400 years (146097
+		// days, which is 20871 whole weeks), so use the same year of a later cycle.
+		sy = sy % 400 + 400
+	}
+	return (sy + sy / 4 - sy / 100 + sy / 400 + sakamoto_month_offsets[iclamp(0, m - 1, 11)] + d - 1) % 7 + 1
 }
 
 // day_of_week returns the current day as an integer.
@@ -326,10 +420,43 @@ pub fn (t Time) day_of_week() int {
 	return day_of_week(t.year, t.month, t.day)
 }
 
+// week_of_year returns the current week of year as an integer.
+// follow ISO 8601 standard
+pub fn (t Time) week_of_year() int {
+	// ISO 8601 Week of Year Rules:
+	// --------------------------------------------
+	// 1. Week Definition:
+	//    - A week starts on ​**Monday**​ (Day 1) and ends on ​**Sunday**​ (Day 7).
+	// 2. First Week of the Year:
+	//    - The first week is the one containing the year's ​**first Thursday**.
+	//    - Equivalently, the week with January 4th always belongs to Week 1.
+	// 3. Year Assignment:
+	//    - Dates in December/January may belong to the previous/next ISO year,
+	//      depending on the week's Thursday.
+	// 4. Week Number Format:
+	//    - Expressed as `YYYY-Www` (e.g., `2026-W01` for the first week of 2026).
+	// --------------------------------------------
+	// Algorithm Steps:
+	// 1. Find the Thursday of the current week:
+	//    - If date is Monday-Wednesday, add days to reach Thursday.
+	//    - If date is Thursday-Sunday, subtract days to reach Thursday.
+	// 2. The ISO year is the calendar year of this Thursday.
+	// 3. Compute the week number as:
+	//    week_number = (thursday's day_of_year - 1) / 7 + 1
+	dow := t.day_of_week()
+	days_to_thursday := 4 - dow
+	// Shift calendar dates rather than absolute 24-hour periods, which can cross
+	// a zone transition without reaching the intended local Thursday.
+	thursday_date := date_from_days_after_unix_epoch(t.days_from_unix_epoch() + days_to_thursday)
+	thursday_day_of_year := thursday_date.year_day()
+	week_number := (thursday_day_of_year - 1) / 7 + 1
+	return week_number
+}
+
 // year_day returns the current day of the year as an integer.
 // See also #Time.custom_format .
 pub fn (t Time) year_day() int {
-	yday := t.day + time.days_before[t.month - 1]
+	yday := t.day + days_before[iclamp(0, t.month - 1, 12)]
 	if is_leap_year(t.year) && t.month > 2 {
 		return yday + 1
 	}
@@ -339,13 +466,13 @@ pub fn (t Time) year_day() int {
 // weekday_str returns the current day as a string 3 letter abbreviation.
 pub fn (t Time) weekday_str() string {
 	i := t.day_of_week() - 1
-	return time.long_days[i][0..3]
+	return long_days[iclamp(0, i, 6)][0..3]
 }
 
 // long_weekday_str returns the current day as a string.
 pub fn (t Time) long_weekday_str() string {
 	i := t.day_of_week() - 1
-	return time.long_days[i]
+	return long_days[iclamp(0, i, 6)]
 }
 
 // is_leap_year checks if a given a year is a leap year.
@@ -359,13 +486,13 @@ pub fn days_in_month(month int, year int) !int {
 		return error('Invalid month: ${month}')
 	}
 	extra := if month == 2 && is_leap_year(year) { 1 } else { 0 }
-	res := time.month_days[month - 1] + extra
+	res := month_days[month - 1] + extra
 	return res
 }
 
-// debug returns detailed breakdown of time (`Time{ year: YYYY month: MM day: dd hour: HH: minute: mm second: ss nanosecond: nanos unix: unix }`)
+// debug returns detailed breakdown of time (`Time{ year: YYYY month: MM day: dd hour: HH: minute: mm second: ss nanosecond: nanos unix: unix is_local: false }`).
 pub fn (t Time) debug() string {
-	return 'Time{ year: ${t.year:04} month: ${t.month:02} day: ${t.day:02} hour: ${t.hour:02} minute: ${t.minute:02} second: ${t.second:02} nanosecond: ${t.nanosecond:09} unix: ${t.unix:07} }'
+	return 'Time{ year: ${t.year:04} month: ${t.month:02} day: ${t.day:02} hour: ${t.hour:02} minute: ${t.minute:02} second: ${t.second:02} nanosecond: ${t.nanosecond:09} unix: ${t.unix:07} is_local: ${t.is_local} }'
 }
 
 // offset returns time zone UTC offset in seconds.
@@ -378,11 +505,14 @@ pub fn offset() int {
 // local_to_utc converts the receiver `t` to the corresponding UTC time, if it contains local time.
 // If the receiver already does contain UTC time, it returns it unchanged.
 pub fn (t Time) local_to_utc() Time {
+	if t.has_location() {
+		return unix_nanosecond(t.unix, t.nanosecond)
+	}
 	if !t.is_local {
 		return t
 	}
 	return Time{
-		...t.add(-offset() * second)
+		...t.add(i64(-offset()) * second)
 		is_local: false
 	}
 }
@@ -390,11 +520,14 @@ pub fn (t Time) local_to_utc() Time {
 // utc_to_local converts the receiver `u` to the corresponding local time, if it contains UTC time.
 // If the receiver already does contain local time, it returns it unchanged.
 pub fn (u Time) utc_to_local() Time {
+	if u.has_location() {
+		return u
+	}
 	if u.is_local {
 		return u
 	}
 	return Time{
-		...u.add(offset() * second)
+		...u.add(i64(offset()) * second)
 		is_local: true
 	}
 }
@@ -420,5 +553,12 @@ pub fn (t Time) as_utc() Time {
 // is_utc returns true, when the receiver `t` is a UTC time, and false otherwise.
 // See also #Time.utc_to_local .
 pub fn (t Time) is_utc() bool {
-	return !t.is_local
+	return !t.is_local && t.location() == none
+}
+
+// until returns the duration until t.
+// It is shorthand for t - now(), using the wall clock.
+// As with Time subtraction, the interval must fit in Duration.
+pub fn until(t Time) Duration {
+	return t - now()
 }

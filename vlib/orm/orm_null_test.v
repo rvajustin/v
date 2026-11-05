@@ -1,5 +1,5 @@
-// vtest flaky: true
 // vtest retry: 3
+// vtest vflags: -w
 import orm
 import db.sqlite
 
@@ -23,25 +23,25 @@ fn MockDB.new() &MockDB {
 	}
 }
 
-fn (db MockDB) @select(config orm.SelectConfig, data orm.QueryData, where orm.QueryData) ![][]orm.Primitive {
+fn (db MockDB) select(config orm.SelectConfig, data orm.QueryData, where orm.QueryData) ![][]orm.Primitive {
 	mut st := db.st
 	st.last = orm.orm_select_gen(config, '`', false, '?', 5, where)
 	st.data = data.data
 	st.where = where.data
-	return db.db.@select(config, data, where)
+	return db.db.select(config, data, where)
 }
 
-fn (db MockDB) insert(table string, data orm.QueryData) ! {
+fn (db MockDB) insert(table orm.Table, data orm.QueryData) ! {
 	mut st := db.st
-	last, qdata := orm.orm_stmt_gen(.sqlite, table, '`', .insert, false, '?', 1, data,
-		orm.QueryData{})
+	last, qdata :=
+		orm.orm_stmt_gen(.sqlite, table, '`', .insert, false, '?', 1, data, orm.QueryData{})
 	st.last = last
 	st.data = qdata.data
 	st.where = []orm.Primitive{}
 	return db.db.insert(table, data)
 }
 
-fn (db MockDB) update(table string, data orm.QueryData, where orm.QueryData) ! {
+fn (db MockDB) update(table orm.Table, data orm.QueryData, where orm.QueryData) ! {
 	mut st := db.st
 	st.last, _ = orm.orm_stmt_gen(.sqlite, table, '`', .update, false, '?', 1, data, where)
 	st.data = data.data
@@ -49,7 +49,7 @@ fn (db MockDB) update(table string, data orm.QueryData, where orm.QueryData) ! {
 	return db.db.update(table, data, where)
 }
 
-fn (db MockDB) delete(table string, where orm.QueryData) ! {
+fn (db MockDB) delete(table orm.Table, where orm.QueryData) ! {
 	mut st := db.st
 	st.last, _ = orm.orm_stmt_gen(.sqlite, table, '`', .delete, false, '?', 1, orm.QueryData{},
 		where)
@@ -82,14 +82,18 @@ fn mock_type_from_v(typ int) !string {
 	}
 }
 
-fn (db MockDB) create(table string, fields []orm.TableField) ! {
+fn (db MockDB) create(table orm.Table, fields []orm.TableField) ! {
 	mut st := db.st
-	st.last = orm.orm_table_gen(table, '`', true, 0, fields, mock_type_from_v, false)!
+	st.last = orm.orm_table_gen(.sqlite, table, '`', true, 0, fields, mock_type_from_v, false)!
 	return db.db.create(table, fields)
 }
 
-fn (db MockDB) drop(table string) ! {
+fn (db MockDB) drop(table orm.Table) ! {
 	return db.db.drop(table)
+}
+
+fn (db MockDB) execute(query string) ![]orm.Row {
+	return db.db.execute(query)
 }
 
 fn (db MockDB) last_id() int {
@@ -101,15 +105,33 @@ fn (db MockDB) last_id() int {
 @[table: 'foo']
 struct Foo {
 mut:
-	id u64    @[primary; sql: serial]
+	id u64 @[primary; sql: serial]
 	a  string
-	//	b  string  [default: '"yes"']
-	c ?string
-	d ?string = 'hi'
-	e int
-	//	f  int     [default: 33]
-	g ?int
-	h ?int = 55
+	b  string @[default: '"yes"']
+	c  ?string
+	d  ?string = 'hi'
+	e  int
+	f  int @[default: 33]
+	g  ?int
+	h  ?int = 55
+}
+
+@[unique_key: 'role_id, api_id, source_type, source_id']
+@[table: 'core_role_api']
+struct CoreRoleApi {
+	role_id     string
+	api_id      string
+	source_type string
+	source_id   string
+}
+
+fn test_struct_unique_key_attribute() {
+	db := MockDB.new()
+
+	sql db {
+		create table CoreRoleApi
+	}!
+	assert db.st.last == 'CREATE TABLE IF NOT EXISTS `core_role_api` (`role_id` string-type NOT NULL, `api_id` string-type NOT NULL, `source_type` string-type NOT NULL, `source_id` string-type NOT NULL, UNIQUE(`role_id`, `api_id`, `source_type`, `source_id`));'
 }
 
 fn test_option_struct_fields_and_none() {
@@ -118,12 +140,12 @@ fn test_option_struct_fields_and_none() {
 	sql db {
 		create table Foo
 	}!
-	assert db.st.last == 'CREATE TABLE IF NOT EXISTS `foo` (`id` serial-type NOT NULL, `a` string-type NOT NULL, `c` string-type, `d` string-type, `e` int-type NOT NULL, `g` int-type, `h` int-type, PRIMARY KEY(`id`));'
+	assert db.st.last == 'CREATE TABLE IF NOT EXISTS `foo` (`id` serial-type NOT NULL, `a` string-type NOT NULL, `b` string-type DEFAULT "yes" NOT NULL, `c` string-type, `d` string-type, `e` int-type NOT NULL, `f` int-type DEFAULT 33 NOT NULL, `g` int-type, `h` int-type, PRIMARY KEY(`id`));'
 
 	_ := sql db {
 		select from Foo where e > 5 && c is none && c !is none && h == 2
 	}!
-	assert db.st.last == 'SELECT `id`, `a`, `c`, `d`, `e`, `g`, `h` FROM `foo` WHERE `e` > ? AND `c` IS NULL AND `c` IS NOT NULL AND `h` = ?;'
+	assert db.st.last == 'SELECT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo` WHERE `e` > ? AND `c` IS NULL AND `c` IS NOT NULL AND `h` = ?;'
 	assert db.st.data.len == 0
 	assert db.st.where.len == 2
 	assert db.st.where == [orm.Primitive(int(5)), orm.Primitive(int(2))]
@@ -141,19 +163,21 @@ fn test_option_struct_fields_and_none() {
 	res1 := sql db {
 		select from Foo where id == id
 	}!
-	assert db.st.last == 'SELECT `id`, `a`, `c`, `d`, `e`, `g`, `h` FROM `foo` WHERE `id` = ?;'
+	assert db.st.last == 'SELECT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo` WHERE `id` = ?;'
 	assert db.st.data.len == 0
 	assert db.st.where.len == 1
 	assert db.st.where == [orm.Primitive(int(id))]
 	assert res1.len == 1
 	assert res1[0] == Foo{
 		id: 1
-		a: ''
-		c: none
-		d: 'hi'
-		e: 0
-		g: none
-		h: 55
+		a:  ''
+		b:  'yes'
+		c:  none
+		d:  'hi'
+		e:  0
+		f:  33
+		g:  none
+		h:  55
 	}
 
 	sql db {
@@ -168,27 +192,42 @@ fn test_option_struct_fields_and_none() {
 	res2 := sql db {
 		select from Foo where id == id
 	}!
-	assert db.st.last == 'SELECT `id`, `a`, `c`, `d`, `e`, `g`, `h` FROM `foo` WHERE `id` = ?;'
+	assert db.st.last == 'SELECT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo` WHERE `id` = ?;'
 	assert db.st.data.len == 0
 	assert db.st.where.len == 1
 	assert db.st.where == [orm.Primitive(int(id))]
 	assert res2.len == 1
 	assert res2[0] == Foo{
 		id: 1
-		a: ''
-		c: 'yo'
-		d: none
-		e: 0
-		g: 44
-		h: none
+		a:  ''
+		b:  'yes'
+		c:  'yo'
+		d:  none
+		e:  0
+		f:  33
+		g:  44
+		h:  none
 	}
+
+	_ := sql db {
+		select from Foo where d == nil && c != nil && a == nil
+	}!
+	assert db.st.last == 'SELECT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo` WHERE `d` IS NULL AND `c` IS NOT NULL AND `a` IS NULL;'
+	assert db.st.data.len == 0
+	assert db.st.where.len == 0
 
 	assert sql db {
 		select count from Foo where a == 'yo'
 	}! == 0
 	assert sql db {
+		select count from Foo where b == 'yes'
+	}! == 1
+	assert sql db {
 		select count from Foo where d == 'yo'
 	}! == 0
+	assert sql db {
+		select count from Foo where f == 33
+	}! == 1
 	assert sql db {
 		select count from Foo where c == 'yo'
 	}! == 1
@@ -201,6 +240,15 @@ fn test_option_struct_fields_and_none() {
 	assert sql db {
 		select count from Foo where c == ''
 	}! == 0
+	assert sql db {
+		select count from Foo where a == nil
+	}! == 0
+	assert sql db {
+		select count from Foo where d == nil
+	}! == 1
+	assert sql db {
+		select count from Foo where c != nil
+	}! == 1
 	assert sql db {
 		select count from Foo where a is none
 	}! == 0
@@ -222,7 +270,7 @@ fn test_option_struct_fields_and_none() {
 }
 
 struct Bar {
-	id   u64     @[primary; sql: serial]
+	id   u64 @[primary; sql: serial]
 	name ?string
 	age  int
 }
@@ -254,11 +302,11 @@ fn test_inserting_passed_optionals() {
 	entry1 := Bar{}
 	entry2 := Bar{
 		name: 'Alice'
-		age: 55
+		age:  55
 	}
 	entry3 := Bar{
 		name: 'Bob'
-		age: 66
+		age:  66
 	}
 	sql db {
 		create table Bar
@@ -303,4 +351,22 @@ fn test_inserting_passed_optionals() {
 	assert res3[0].name == none
 	assert res3[1].name == none
 	assert res3[2].name or { '' } == 'www'
+}
+
+fn test_distinct_select() {
+	db := MockDB.new()
+
+	sql db {
+		create table Foo
+	}!
+
+	_ := sql db {
+		select distinct from Foo
+	}!
+	assert db.st.last == 'SELECT DISTINCT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo`;'
+
+	_ := sql db {
+		select distinct from Foo where e > 5
+	}!
+	assert db.st.last == 'SELECT DISTINCT `id`, `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h` FROM `foo` WHERE `e` > ?;'
 }

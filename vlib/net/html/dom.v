@@ -1,6 +1,7 @@
 module html
 
 import os
+import strings
 
 // The W3C Document Object Model (DOM) is a platform and language-neutral
 // interface that allows programs and scripts to dynamically access and
@@ -57,23 +58,14 @@ fn (mut dom DocumentObjectModel) where_is(item_name string, attribute_name strin
 }
 
 fn (mut dom DocumentObjectModel) add_tag_attribute(tag &Tag) {
-	for attribute_name, _ in tag.attributes {
-		attribute_value := tag.attributes[attribute_name]
+	for attribute_name, attribute_value in tag.attributes {
 		location := dom.where_is(attribute_value, attribute_name)
-		if attribute_name !in dom.tag_attributes {
-			dom.tag_attributes[attribute_name] = []
+		mut attribute_tags := dom.tag_attributes[attribute_name] or { [][]&Tag{} }
+		for attribute_tags.len <= location {
+			attribute_tags << []&Tag{}
 		}
-		for {
-			mut temp_array := unsafe { dom.tag_attributes[attribute_name] }
-			temp_array << []&Tag{}
-			dom.tag_attributes[attribute_name] = temp_array
-			if location < unsafe { dom.tag_attributes[attribute_name].len } + 1 {
-				break
-			}
-		}
-		mut temp_array := unsafe { dom.tag_attributes[attribute_name][location] }
-		temp_array << tag
-		dom.tag_attributes[attribute_name][location] = temp_array
+		attribute_tags[location] << tag
+		dom.tag_attributes[attribute_name] = attribute_tags
 	}
 }
 
@@ -118,6 +110,13 @@ fn (mut dom DocumentObjectModel) construct(tag_list []&Tag) {
 	temp_map['0'] = dom.btree.add_children(tag_list[0])
 	stack.push(0)
 	root_index := 0
+	// the root never passes through the loop below, so index it like
+	// every other tag, or no lookup can ever find it
+	if !is_close_tag(tag_list[0]) && tag_list[0].name != '' {
+		dom.add_tag_attribute(tag_list[0])
+		dom.add_tag_by_attribute(tag_list[0])
+		dom.add_tag_by_type(tag_list[0])
+	}
 
 	for index := 1; index < tag_list.len; index++ {
 		mut tag := tag_list[index]
@@ -125,12 +124,17 @@ fn (mut dom DocumentObjectModel) construct(tag_list []&Tag) {
 		if is_close_tag(tag) {
 			temp_int = stack.peek()
 			temp_string = tag.name[1..]
+			old_stack_size := stack.size
 			for !is_null(temp_int) && temp_string != tag_list[temp_int].name
 				&& !tag_list[temp_int].closed {
 				dom.print_debug(temp_string + ' >> ' + tag_list[temp_int].name + ' ' +
 					(temp_string == tag_list[temp_int].name).str())
 				stack.pop()
 				temp_int = stack.peek()
+			}
+			if is_null(temp_int) || temp_string != tag_list[temp_int].name {
+				stack.size = old_stack_size
+				continue
 			}
 			temp_int = stack.peek()
 			temp_int = if !is_null(temp_int) { stack.pop() } else { root_index }
@@ -167,21 +171,33 @@ fn (mut dom DocumentObjectModel) construct(tag_list []&Tag) {
 		}
 	} // println(tag_list[root_index]) for debug purposes
 	dom.root = tag_list[0]
+	mut root := dom.root
+	dom.normalize_tag_content(mut root)
+}
+
+fn (mut dom DocumentObjectModel) normalize_tag_content(mut tag Tag) {
+	tag.text_content = tag.content
+	tag.content_is_inner_html = true
+	if tag.children.len == 0 {
+		return
+	}
+	mut inner_html := strings.new_builder(tag.content.len + tag.children.len * 32)
+	inner_html.write_string(tag.text_content)
+	for idx := 0; idx < tag.children.len; idx++ {
+		mut child := tag.children[idx]
+		dom.normalize_tag_content(mut child)
+		inner_html.write_string(child.str())
+	}
+	tag.content = inner_html.str()
 }
 
 // get_root returns the root of the document.
-pub fn (dom DocumentObjectModel) get_root() &Tag {
+pub fn (dom &DocumentObjectModel) get_root() &Tag {
 	return dom.root
 }
 
-// get_tag retrieves all tags in the document that have the given tag name.
-@[deprecated: 'use get_tags instead']
-pub fn (dom DocumentObjectModel) get_tag(name string) []&Tag {
-	return dom.get_tags(name: name)
-}
-
 // get_tags returns all tags stored in the document.
-pub fn (dom DocumentObjectModel) get_tags(options GetTagsOptions) []&Tag {
+pub fn (dom &DocumentObjectModel) get_tags(options GetTagsOptions) []&Tag {
 	if options.name != '' {
 		return if options.name in dom.tag_type {
 			unsafe { dom.tag_type[options.name] }
@@ -193,18 +209,28 @@ pub fn (dom DocumentObjectModel) get_tags(options GetTagsOptions) []&Tag {
 }
 
 // get_tags_by_class_name retrieves all tags recursively in the document root that have the given class name(s).
-pub fn (dom DocumentObjectModel) get_tags_by_class_name(names ...string) []&Tag {
-	return dom.root.get_tags_by_class_name(...names)
-}
-
-// get_tag_by_attribute retrieves all tags in the document that have the given attribute name.
-@[deprecated: 'use get_tags_by_attribute instead']
-pub fn (dom DocumentObjectModel) get_tag_by_attribute(name string) []&Tag {
-	return dom.get_tags_by_attribute(name)
+pub fn (dom &DocumentObjectModel) get_tags_by_class_name(names ...string) []&Tag {
+	if names.len == 0 || dom.all_tags.len == 0 {
+		return []&Tag{}
+	}
+	mut res := []&Tag{}
+	// the tag level search only looks at children, so consider the root itself here
+	mut matched := true
+	for name in names {
+		matched = dom.root.class_set.exists(name)
+		if !matched {
+			break
+		}
+	}
+	if matched {
+		res << dom.root
+	}
+	res << dom.root.get_tags_by_class_name(...names)
+	return res
 }
 
 // get_tags_by_attribute retrieves all tags in the document that have the given attribute name.
-pub fn (dom DocumentObjectModel) get_tags_by_attribute(name string) []&Tag {
+pub fn (dom &DocumentObjectModel) get_tags_by_attribute(name string) []&Tag {
 	return if name in dom.all_attributes { unsafe { dom.all_attributes[name] } } else { []&Tag{} }
 }
 
@@ -216,10 +242,4 @@ pub fn (mut dom DocumentObjectModel) get_tags_by_attribute_value(name string, va
 		return attributes[location]
 	}
 	return []
-}
-
-// get_tag_by_attribute_value retrieves all tags in the document that have the given attribute name and value.
-@[deprecated: 'use get_tags_by_attribute_value instead']
-pub fn (mut dom DocumentObjectModel) get_tag_by_attribute_value(name string, value string) []&Tag {
-	return dom.get_tags_by_attribute_value(name, value)
 }

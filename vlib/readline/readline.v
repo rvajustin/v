@@ -18,13 +18,12 @@ struct Winsize {
 }
 
 // Readline is the key struct for reading and holding user input via a terminal.
-// Example: import readline { Readline }
 pub struct Readline {
 pub mut:
 	is_raw                 bool
 	orig_termios           termios.Termios // Linux
-	current                []rune // Line being edited
-	cursor                 int    // Cursor position
+	current                []rune          // Line being edited
+	cursor                 int             // Cursor position
 	overwrite              bool
 	cursor_row_offset      int
 	prompt                 string
@@ -37,4 +36,6 @@ pub mut:
 	last_completion_offset int
 	completion_list        []string
 	completion_callback    fn (string) []string = unsafe { nil }
+mut:
+	orig_stdin_mode u32 // Windows
 }

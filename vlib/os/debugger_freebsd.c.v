@@ -1,10 +1,8 @@
 module os
 
-#include <sys/ptrace.h>
+fn C.ptrace(i32, u32, voidptr, i32) i32
 
-fn C.ptrace(int, u32, voidptr, int) int
-
-// debugger_present returns a bool indicating if the process is being debugged
+// debugger_present returns a bool indicating if the process is being debugged.
 pub fn debugger_present() bool {
 	$if freebsd {
 		// check if a child process could trace its parent process,
@@ -21,7 +19,7 @@ pub fn debugger_present() bool {
 				// no external debugger
 				exit(0)
 			} else {
-				// an error occured, a external debugger must be present
+				// an error occurred, a external debugger must be present
 				exit(1)
 			}
 		} else {
@@ -29,7 +27,7 @@ pub fn debugger_present() bool {
 			// wait until the child process dies
 			C.waitpid(pid, &status, 0)
 			// check the exit code of the child process check
-			if C.WEXITSTATUS(status) == 0 {
+			if posix_wait_status_exit_code(status) == 0 {
 				return false
 			} else {
 				return true

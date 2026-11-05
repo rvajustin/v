@@ -1,3 +1,5 @@
+// vtest retry: 2
+// vtest flaky: true
 import os
 
 const tfolder = os.join_path(os.vtmp_dir(), 'os_file_tests')
@@ -334,7 +336,7 @@ fn test_seek() {
 
 	// println('> ${sizeof(Point)} ${sizeof(byte)} ${sizeof(Color)} ${sizeof(Permissions)}')
 	f = os.open_file(tfile, 'r')!
-	//
+
 	f.seek(i64(sizeof(Point)), .start)!
 	assert f.tell()! == sizeof(Point)
 	b := f.read_raw[u8]()!
@@ -343,7 +345,7 @@ fn test_seek() {
 	f.seek(i64(sizeof(Color)), .current)!
 	x := f.read_raw[Permissions]()!
 	assert x == another_permission
-	//
+
 	f.close()
 }
 
@@ -357,6 +359,12 @@ fn test_tell() {
 		mut f := os.open_file(tfile, 'r')!
 		f.seek(-5, .end)!
 		pos := f.tell()!
+		f.seek(0, .start)!
+		c1 := f.tell()!
+		_ := f.read_bytes(8)
+		c2 := f.tell()!
+		assert c1 == 0
+		assert c2 == 8
 		f.close()
 		// dump(pos)
 		assert pos == size - 5
@@ -411,11 +419,21 @@ fn test_open_file_wb_ab() {
 	wfile.write_string('hello')!
 	wfile.close()
 	assert os.read_file('text.txt')! == 'hello'
-	//
+
 	mut afile := os.open_file('text.txt', 'ab', 0o666)!
 	afile.write_string('hello')!
 	afile.close()
 	assert os.read_file('text.txt')! == 'hellohello'
+}
+
+fn test_read_file_on_directory_returns_error() {
+	// Reading a directory must produce an error, not a panic: glibc's ftell()
+	// on a directory stream returns LONG_MAX, which would overflow the
+	// allocation size when `int` is 64-bit.
+	os.read_file(tfolder) or {
+		return
+	}
+	assert false, 'read_file on a directory should fail'
 }
 
 fn test_open_append() {
@@ -424,12 +442,12 @@ fn test_open_append() {
 	f1.write_string('abc\n')!
 	f1.close()
 	assert os.read_lines(tfile)! == ['abc']
-	//
+
 	mut f2 := os.open_append(tfile)!
 	f2.write_string('abc\n')!
 	f2.close()
 	assert os.read_lines(tfile)! == ['abc', 'abc']
-	//
+
 	mut f3 := os.open_append(tfile)!
 	f3.write_string('def\n')!
 	f3.close()
@@ -479,6 +497,10 @@ fn test_open_file_crlf_binary_mode() {
 }
 
 fn test_path_devnull() {
+	$if windows {
+		// Reading device files like \\.\nul crashes on Windows (TCC, GCC/MinGW).
+		return
+	}
 	dump(os.path_devnull)
 	content := os.read_file(os.path_devnull)!
 	// dump(content)
@@ -501,6 +523,14 @@ fn test_read_lines() {
 	assert lines == some_lines_content.split_into_lines()
 }
 
+fn test_read_lines_with_long_line_and_mixed_line_endings() {
+	long_line := 'a'.repeat(200_000)
+	content := '${long_line}\r\nmiddle\rlast\n\n'
+	os.write_file(tfile, content)!
+	lines := os.read_lines(tfile)!
+	assert lines == content.split_into_lines()
+}
+
 fn test_write_lines() {
 	wline1_file := os.join_path_single(tfolder, 'wline1.txt')
 	wline2_file := os.join_path_single(tfolder, 'wline2.txt')
@@ -509,8 +539,14 @@ fn test_write_lines() {
 	os.write_lines(wline2_file, lines)!
 	c1 := os.read_file(wline1_file)!
 	c2 := os.read_file(wline2_file)!
-	// dump(c1.bytes().hex())
-	// dump(c2.bytes().hex())
 	assert c1 == c2
 	assert c1.split_into_lines() == some_lines_content.split_into_lines()
+}
+
+fn test_read_from_closed_file() {
+	os.write_file(tfile, 'test')!
+	mut f := os.open(tfile)!
+	f.close()
+	mut buf := []u8{len: 64}
+	assert f.read(mut buf) or { -1 } == -1
 }

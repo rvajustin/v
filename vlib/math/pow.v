@@ -21,10 +21,10 @@ pub fn powf(a f32, b f32) f32 {
 // pow10(n) = +inf for n > 308
 pub fn pow10(n int) f64 {
 	if 0 <= n && n <= 308 {
-		return math.pow10postab32[u32(n) / 32] * math.pow10tab[u32(n) % 32]
+		return pow10postab32[u32(n) / 32] * pow10tab[u32(n) % 32]
 	}
 	if -323 <= n && n <= 0 {
-		return math.pow10negtab32[u32(-n) / 32] / math.pow10tab[u32(-n) % 32]
+		return pow10negtab32[u32(-n) / 32] / pow10tab[u32(-n) % 32]
 	}
 	// n < -323 || 308 < n
 	if n > 0 {
@@ -38,6 +38,7 @@ pub fn pow10(n int) f64 {
 //
 // special case:
 // powi(a, b) = -1 for a = 0 and b < 0
+@[ignore_overflow]
 pub fn powi(a i64, b i64) i64 {
 	mut b_ := b
 	mut p := a
@@ -67,6 +68,11 @@ pub fn powi(a i64, b i64) i64 {
 	}
 
 	return v
+}
+
+fn is_odd_int(x f64) bool {
+	xi, xf := modf(x)
+	return xf == 0 && (i64(xi) & 1) == 1
 }
 
 // pow returns the base x, raised to the provided power y. (float64)
@@ -168,8 +174,8 @@ pub fn pow(x f64, y f64) f64 {
 	mut x1, mut xe := frexp(x)
 
 	for i := i64(yi); i != 0; i >>= 1 {
-		// these series of casts is a little weird but we have to do them to prevent left shift of negative error
-		if xe < int(u32(u32(-1) << 12)) || 1 << 12 < xe {
+		// Negate a positive shift so the lower bound stays negative for any int width.
+		if xe < -(1 << 12) || 1 << 12 < xe {
 			// catch xe before it overflows the left shift below
 			// Since i !=0 it has at least one bit still set, so ae will accumulate xe
 			// on at least one more iteration, ae += xe is a lower bound on ae

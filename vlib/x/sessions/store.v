@@ -3,8 +3,8 @@ module sessions
 import time
 
 pub interface Store[T] {
-mut:
 	// get the current session data if the id exists and if it's not expired
+mut:
 	get(sid string, max_age time.Duration) !T
 	// destroy session data for `sid`
 	destroy(sid string) !
@@ -12,10 +12,10 @@ mut:
 	set(sid string, val T) !
 }
 
-// get data from all sessions, optional to implement
-pub fn (mut s Store) all[T]() ![]T {
+// get data from all sessions, optional to implement.
+pub fn (mut s Store[T]) all[T]() ![]T {
 	return []T{}
 }
 
-// clear all session data, optional to implement
-pub fn (mut s Store) clear[T]() ! {}
+// clear all session data, optional to implement.
+pub fn (mut s Store[T]) clear[T]() ! {}

@@ -65,7 +65,7 @@ At the present time all the rendering are made on the CPU, sokol is used only to
 rendered text to the screen.
 Let's start with a simple snippet of code:
 
-```v oksyntax
+```v
 import os
 import x.ttf
 
@@ -85,7 +85,7 @@ This simple code load a TTF font and display its basic information.
 The draw text function draw simple strings without indentation or other imagination tasks.
 At this point we can render a simple text:
 
-```v oksyntax
+```v
 import os
 import x.ttf
 
@@ -112,14 +112,14 @@ fn main() {
 
 	// declare the bitmap struct
 	mut bmp := ttf.BitMap{
-		tf: &ttf_font
-		buf: malloc(bmp_size)
+		tf:       &ttf_font
+		buf:      unsafe { malloc(bmp_size) }
 		buf_size: bmp_size
-		width: bmp_width
-		height: bmp_height
-		bp: bmp_layers
-		color: 0x000000_FF // RGBA black
-		scale: scale
+		width:    bmp_width
+		height:   bmp_height
+		bp:       bmp_layers
+		color:    0x000000_FF // RGBA black
+		scale:    scale
 	}
 	bmp.init_filler()
 	bmp.clear()
@@ -155,7 +155,7 @@ Use this level only if you want achieve particular result on text rendering.
 
 Draw text block draw a justified and indented block of multiline text in the bitmap.
 
-```v oksyntax
+```v
 import os
 import x.ttf
 
@@ -187,14 +187,14 @@ But Vwill prevail for sure, V is the way!!
 "
 	// declare the bitmap struct
 	mut bmp := ttf.BitMap{
-		tf: &ttf_font
-		buf: malloc(bmp_size)
+		tf:       &ttf_font
+		buf:      malloc(bmp_size)
 		buf_size: bmp_size
-		width: bmp_width
-		height: bmp_height
-		bp: bmp_layers
-		color: 0x000000_FF // RGBA black
-		scale: scale
+		width:    bmp_width
+		height:   bmp_height
+		bp:       bmp_layers
+		color:    0x000000_FF // RGBA black
+		scale:    scale
 	}
 	bmp.init_filler()
 	bmp.clear()
@@ -210,10 +210,10 @@ A text block is defined from a `Text_block` struct:
 
 ```v
 struct Text_block {
-	x         int  // x position of the left high corner
-	y         int  // y position of the left high corner
-	w         int  // width of the text block
-	h         int  // height of the text block
+	x         int // x position of the left high corner
+	y         int // y position of the left high corner
+	w         int // width of the text block
+	h         int // height of the text block
 	cut_lines bool = true // force to cut the line if the length is over the text block width
 }
 ```
@@ -235,12 +235,11 @@ It is possible to modify these parameters to obtain the desired effect on the te
 The sokol render use the bitmap render to create the text and the `gg` functions to render
 the text to the screen.
 It is simpler to use in a `gg app` than the raw bitmap render.
-Each single text rendered need its own reder to be declared, after you can modify it.
+Each single rendered text needs its own render to be declared, after which you can modify it.
 Here a simple example of the usage:
 
 ```v oksyntax
 import gg
-import gx
 import sokol.sapp
 import sokol.sgl
 import sokol.gfx
@@ -249,7 +248,7 @@ import os
 
 const win_width = 600
 const win_height = 700
-const bg_color = gx.white
+const bg_color = gg.white
 const font_paths = [
 	'arial.ttf',
 ]
@@ -295,14 +294,14 @@ fn main() {
 	mut app := &App_data{}
 
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'Test TTF module'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: draw_frame
-		init_fn: my_init
+		window_title:  'Test TTF module'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      draw_frame
+		init_fn:       my_init
 	)
 
 	// load TTF fonts
@@ -318,10 +317,10 @@ fn main() {
 	// TTF render 0 Frame counter
 	app.ttf_render << &ttf.TTF_render_Sokol{
 		bmp: &ttf.BitMap{
-			tf: &app.tf[0]
-			buf: unsafe { malloc(32000000) }
+			tf:       &app.tf[0]
+			buf:      unsafe { malloc(32000000) }
 			buf_size: (32000000)
-			color: 0xFF0000FF
+			color:    0xFF0000FF
 			// style: .raw
 		}
 	}
@@ -329,3 +328,7 @@ fn main() {
 	app.gg.run()
 }
 ```
+
+The supported format 0 and format 4 character maps cover the Basic Multilingual Plane.
+`map_code` returns glyph zero for character codes outside `0 .. 0xffff`. `clear_filler` and
+`exec_filler` initialize missing filler rows automatically, including after height increases.

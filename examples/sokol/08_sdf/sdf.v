@@ -1,5 +1,6 @@
 // A Signed Distance Field rendering demo, ported from https://github.com/floooh/sokol-samples/blob/master/sapp/sdf-sapp.c
 // which in turn is based on https://iquilezles.org/articles/mandelbulb/ and https://www.shadertoy.com/view/ltfSWn
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 import sokol.sapp
 import sokol.gfx
 
@@ -28,12 +29,12 @@ fn init(mut state State) {
 	fsq_verts := [f32(-1.0), -3.0, 3.0, 1.0, -1.0, 1.0]!
 	state.bind.vertex_buffers[0] = gfx.make_buffer(gfx.BufferDesc{
 		label: c'fsq vertices'
-		data: unsafe { gfx.Range{&fsq_verts[0], sizeof(fsq_verts)} }
+		data:  unsafe { gfx.Range{&fsq_verts[0], sizeof(fsq_verts)} }
 	})
 
 	mut pipeline := gfx.PipelineDesc{}
 	pipeline.layout.attrs[C.ATTR_vs_position].format = .float2
-	pipeline.shader = gfx.make_shader(C.sdf_shader_desc(gfx.query_backend()))
+	pipeline.shader = gfx.make_shader(voidptr(C.sdf_shader_desc(gfx.query_backend())))
 	state.pip = gfx.make_pipeline(&pipeline)
 
 	// No need to clear the window, since the shader will overwrite the whole framebuffer
@@ -47,7 +48,7 @@ fn frame(mut state State) {
 	gfx.begin_pass(sapp.create_default_pass(state.paction))
 	gfx.apply_pipeline(state.pip)
 	gfx.apply_bindings(state.bind)
-	gfx.apply_uniforms(.vs, C.SLOT_vs_params, unsafe { gfx.Range{&state.params, sizeof(state.params)} })
+	gfx.apply_uniforms(.vs, C.SLOT_vs_params, gfx.Range{&state.params, sizeof(state.params)})
 	gfx.draw(0, 3, 1)
 	gfx.end_pass()
 	gfx.commit()
@@ -55,15 +56,15 @@ fn frame(mut state State) {
 
 fn main() {
 	sapp.run(sapp.Desc{
-		window_title: c'SDF Rendering'
-		width: 512
-		height: 512
+		window_title:      c'SDF Rendering'
+		width:             512
+		height:            512
 		frame_userdata_cb: frame
-		init_userdata_cb: init
-		cleanup_cb: gfx.shutdown
-		icon: sapp.IconDesc{
+		init_userdata_cb:  init
+		cleanup_cb:        gfx.shutdown
+		icon:              sapp.IconDesc{
 			sokol_default: true
 		}
-		user_data: &State{}
+		user_data:         &State{}
 	})
 }

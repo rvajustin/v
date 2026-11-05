@@ -137,45 +137,33 @@ pub fn mul_128(x Uint128, y Uint128) (Uint128, Uint128) {
 }
 
 // div_128 returns u / v
-pub fn div_128(hi Uint128, lo Uint128, y_ Uint128) (Uint128, Uint128) {
-	mut y := y_
-	if y.is_zero() {
-		panic('integer divide by zero')
+pub fn div_128(a_hi Uint128, a_lo Uint128, b Uint128) (Uint128, Uint128) {
+	a := uint256_new(a_lo, a_hi)
+	b_256 := uint256_new(b, uint128_zero)
+	if a < b_256 {
+		return uint128_zero, a_lo
 	}
-
-	if y.cmp(hi) <= 0 {
-		panic('integer overflow')
+	if b.is_zero() {
+		panic('Division by zero')
 	}
-
-	s := u32(y.leading_zeros())
-	y = y.lsh(s)
-
-	un32 := hi.lsh(s).or_(lo.rsh(128 - s))
-	un10 := lo.lsh(s)
-	mut q1, rhat := un32.quo_rem_64(y.hi)
-	mut r1 := uint128_from_64(rhat)
-	tmp := Uint128{r1.lo, un10.hi}
-	for q1.hi != 0 || q1.mul_64(y.lo).cmp(tmp) > 0 {
-		q1 = q1.sub_64(1)
-		r1 = r1.add_64(y.hi)
-		if r1.hi != 0 {
-			break
-		}
+	if a.hi.is_zero() {
+		return a.lo.quo_rem(b)
 	}
+	shift := u32(b_256.leading_zeros() - a.leading_zeros())
+	mut af := a
+	mut bf := b_256.lsh(shift)
+	mut quotient := uint128_zero
 
-	un21 := Uint128{un32.lo, un10.hi}.sub(q1.mul(y))
-	mut q0, rhat2 := un21.quo_rem_64(y.hi)
-	mut r0 := uint128_from_64(rhat2)
-	tmp2 := Uint128{r0.lo, un10.lo}
-	for q0.hi != 0 || q0.mul_64(y.lo).cmp(tmp2) > 0 {
-		q0 = q0.sub_64(1)
-		r0 = r0.add_64(y.hi)
-		if r0.hi != 0 {
-			break
-		}
+	for _ in 0 .. shift + 1 {
+		quotient = quotient.lsh(1)
+		diff_result := bf.add(af.not())
+		s := u64(i64(diff_result.hi.hi) >> 63)
+		quotient.lo |= s & 1
+		mask := uint256_new(uint128_new(s, s), uint128_new(s, s))
+		af = af.sub(bf.and(mask))
+		bf = bf.rsh(1)
 	}
-
-	return Uint128{q1.lo, q0.lo}, Uint128{un21.lo, un10.lo}.sub(q0.mul(y)).rsh(s)
+	return quotient, af.lo
 }
 
 // add_64 returns u + v with wraparound semantics
@@ -213,7 +201,7 @@ pub fn (u Uint128) mul_64(v u64) Uint128 {
 	return Uint128{lo, hi}
 }
 
-// overflowing_mul_64 returns u x v even if result size > 64
+// overflowing_mul_64 returns u x v even if result size > 128
 pub fn (u Uint128) overflowing_mul_64(v u64) (Uint128, bool) {
 	hi, lo := bits.mul_64(u.lo, v)
 	p0, p1 := bits.mul_64(u.hi, v)
@@ -222,7 +210,7 @@ pub fn (u Uint128) overflowing_mul_64(v u64) (Uint128, bool) {
 	return Uint128{lo, hi2}, p0 != 0 || c0 != 0
 }
 
-// overflowing_add_64 returns u = v even if result size > 64
+// overflowing_add_64 returns u + v even if result size > 128
 pub fn (u Uint128) overflowing_add_64(v u64) (Uint128, u64) {
 	lo, carry := bits.add_64(u.lo, v, 0)
 	hi, carry2 := bits.add_64(u.hi, 0, carry)
@@ -267,40 +255,47 @@ pub fn (u Uint128) quo_rem_64(v u64) (Uint128, u64) {
 }
 
 // quo_rem returns q = u/v and r = u%v
-pub fn (u Uint128) quo_rem(v Uint128) (Uint128, Uint128) {
-	mut q := Uint128{}
-	mut r := Uint128{}
-	if v.hi == 0 {
-		mut r64 := u64(0)
-		q, r64 = u.quo_rem_64(v.lo)
-		r = Uint128{r64, 0}
-	} else {
-		n := bits.leading_zeros_64(v.hi)
-		v1 := v.lsh(u32(n))
-		u1 := v.rsh(1)
-
-		mut tq, _ := bits.div_64(u1.hi, u1.lo, v1.hi)
-		tq >>= u64(64 - n)
-		if tq != 0 {
-			tq -= 1
-		}
-
-		q = Uint128{tq, 0}
-		r = u - v.mul_64(tq)
-
-		if r.cmp(v) >= 0 {
-			q = q.add_64(1)
-			r = r - v
-		}
+pub fn (a Uint128) quo_rem(b Uint128) (Uint128, Uint128) {
+	if a < b {
+		return uint128_zero, a
 	}
+	if b.is_zero() {
+		panic('Division by zero')
+	}
+	if b.hi == 0 {
+		quotient, remainder := a.quo_rem_64(b.lo)
+		return quotient, uint128_from_64(remainder)
+	}
+	shift := u32(b.leading_zeros() - a.leading_zeros())
+	mut af := a
+	mut bf := b.lsh(shift)
+	mut quotient := uint128_zero
 
-	return q, r
+	for _ in 0 .. shift + 1 {
+		quotient = quotient.lsh(1)
+		diff_result := bf.add(af.not())
+		s := u64(i64(diff_result.hi) >> 63)
+		quotient.lo |= s & 1
+		mask := uint128_new(s, s)
+		af = af.sub(bf.and(mask))
+		bf = bf.rsh(1)
+	}
+	return quotient, af
 }
 
 // lsh returns u << n
 pub fn (u Uint128) lsh(n u32) Uint128 {
 	mut s := Uint128{}
-	if n > 64 {
+	if n == 0 {
+		s.lo = u.lo
+		s.hi = u.hi
+	} else if n >= 128 {
+		s.lo = 0
+		s.hi = 0
+	} else if n == 64 {
+		s.lo = 0
+		s.hi = u.lo
+	} else if n > 64 {
 		s.lo = 0
 		s.hi = u.lo << (n - 64)
 	} else {
@@ -314,9 +309,18 @@ pub fn (u Uint128) lsh(n u32) Uint128 {
 // rsh returns u >> n
 pub fn (u Uint128) rsh(n u32) Uint128 {
 	mut s := Uint128{}
-	if n > 64 {
+	if n == 0 {
+		s.lo = u.lo
+		s.hi = u.hi
+	} else if n >= 128 {
+		s.lo = 0
 		s.hi = 0
-		s.lo = u.hi << (n - 64)
+	} else if n == 64 {
+		s.hi = 0
+		s.lo = u.hi
+	} else if n > 64 {
+		s.hi = 0
+		s.lo = u.hi >> (n - 64)
 	} else {
 		s.lo = u.lo >> n | u.hi << (64 - n)
 		s.hi = u.hi >> n
@@ -409,8 +413,8 @@ pub fn (u_ Uint128) str() string {
 
 // put_bytes stores u in b in little-endian order
 pub fn (u Uint128) put_bytes(mut b []u8) {
-	binary.little_endian_put_u64(mut b, u.lo)
-	binary.little_endian_put_u64(mut b, u.hi)
+	binary.little_endian_put_u64(mut b[..8], u.lo)
+	binary.little_endian_put_u64(mut b[8..], u.hi)
 }
 
 // uint128_from_64 converts v to a Uint128 value
@@ -426,7 +430,7 @@ pub fn uint128_new(lo u64, hi u64) Uint128 {
 // unint_from_dec_str returns an error or new Uint128 from given string.
 // The `_` character is allowed as a separator.
 pub fn uint128_from_dec_str(value string) !Uint128 {
-	mut res := unsigned.uint128_zero
+	mut res := uint128_zero
 	underscore := `_`
 
 	for b_ in value {

@@ -4,9 +4,9 @@ module picoev
 #include <sys/types.h>
 #include <sys/event.h>
 
-fn C.kevent(int, changelist voidptr, nchanges int, eventlist voidptr, nevents int, timeout &C.timespec) int
-fn C.kqueue() int
-fn C.EV_SET(kev voidptr, ident int, filter i16, flags u16, fflags u32, data voidptr, udata voidptr)
+fn C.kevent(i32, changelist voidptr, nchanges i32, eventlist voidptr, nevents i32, timeout &C.timespec) i32
+fn C.kqueue() i32
+fn C.EV_SET(kev voidptr, ident i32, filter i16, flags u16, fflags u32, data voidptr, udata voidptr)
 
 pub struct C.kevent {
 pub mut:
@@ -34,7 +34,7 @@ mut:
 
 type LoopType = KqueueLoop
 
-// create_kqueue_loop creates a new kernel event queue with loop_id=`id`
+// create_kqueue_loop creates a new kernel event queue with loop_id=`id`.
 pub fn create_kqueue_loop(id int) !&KqueueLoop {
 	mut loop := &KqueueLoop{
 		id: id
@@ -48,7 +48,7 @@ pub fn create_kqueue_loop(id int) !&KqueueLoop {
 	return loop
 }
 
-// ev_set sets a new `kevent` with file descriptor `index`
+// ev_set sets a new `kevent` with file descriptor `index`.
 @[inline]
 pub fn (mut pv Picoev) ev_set(index int, operation int, events int) {
 	mut filter := 0
@@ -60,31 +60,30 @@ pub fn (mut pv Picoev) ev_set(index int, operation int, events int) {
 	}
 	filter = i16(filter)
 
-	C.EV_SET(&pv.loop.changelist[index], pv.loop.changed_fds, filter, operation, 0, 0,
-		0)
+	C.EV_SET(&pv.loop.changelist[index], pv.loop.changed_fds, filter, operation, 0, 0, 0)
 }
 
 // backend_build uses the lower 8 bits to store the old events and the higher 8
-// bits to store the next file descriptor in `Target.backend`
+// bits to store the next file descriptor in `Target.backend`.
 @[inline]
 fn backend_build(next_fd int, events u32) int {
 	return int((u32(next_fd) << 8) | (events & 0xff))
 }
 
-// get the lower 8 bits
+// get the lower 8 bits.
 @[inline]
 fn backend_get_old_events(backend int) int {
 	return backend & 0xff
 }
 
-// get the higher 8 bits
+// get the higher 8 bits.
 @[inline]
 fn backend_get_next_fd(backend int) int {
 	return backend >> 8
 }
 
 // apply pending processes all changes for the file descriptors and updates `loop.changelist`
-// if `aplly_all` is `true` the changes are immediately applied
+// if `aplly_all` is `true` the changes are immediately applied.
 fn (mut pv Picoev) apply_pending_changes(apply_all bool) int {
 	mut total, mut nevents := 0, 0
 
@@ -103,8 +102,7 @@ fn (mut pv Picoev) apply_pending_changes(apply_all bool) int {
 			}
 			// Apply the changes if the total changes exceed the changelist size
 			if total + 1 >= pv.loop.changelist.len {
-				nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, C.NULL,
-					0, C.NULL)
+				nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, unsafe { nil }, 0, unsafe { nil })
 				assert nevents == 0
 				total = 0
 			}
@@ -115,7 +113,7 @@ fn (mut pv Picoev) apply_pending_changes(apply_all bool) int {
 	}
 
 	if apply_all && total != 0 {
-		nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, C.NULL, 0, C.NULL)
+		nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, unsafe { nil }, 0, unsafe { nil })
 		assert nevents == 0
 		total = 0
 	}
@@ -160,7 +158,7 @@ fn (mut pv Picoev) update_events(fd int, events int) int {
 @[direct_array_access]
 fn (mut pv Picoev) poll_once(max_wait_in_sec int) int {
 	ts := C.timespec{
-		tv_sec: max_wait_in_sec
+		tv_sec:  max_wait_in_sec
 		tv_nsec: 0
 	}
 
@@ -168,8 +166,8 @@ fn (mut pv Picoev) poll_once(max_wait_in_sec int) int {
 	// apply changes later when the callback is called.
 	total = pv.apply_pending_changes(false)
 
-	nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, &pv.loop.events, pv.loop.events.len,
-		&ts)
+	nevents = C.kevent(pv.loop.kq_id, &pv.loop.changelist, total, &pv.loop.events,
+		pv.loop.events.len, &ts)
 	if nevents == -1 {
 		// the errors we can only rescue
 		assert C.errno == C.EACCES || C.errno == C.EFAULT || C.errno == C.EINTR

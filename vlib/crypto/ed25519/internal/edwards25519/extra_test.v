@@ -7,7 +7,7 @@ import encoding.hex
 const github_job = os.getenv('GITHUB_JOB')
 
 fn testsuite_begin() {
-	if edwards25519.github_job != '' {
+	if github_job != '' {
 		// ensure that the CI does not run flaky tests:
 		rand.seed([u32(0xffff24), 0xabcd])
 	}
@@ -66,14 +66,14 @@ fn test_bytes_montgomery_infinity() {
 }
 
 const loworder_string = '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85'
-const loworder_bytes = hex.decode(loworder_string) or { panic(err) }
+const loworder_bytes = hex.decode(loworder_string) or { []u8{} }
 
 fn fn_cofactor(mut data []u8) bool {
 	if data.len != 64 {
 		panic('data.len should be 64')
 	}
 	mut loworder := Point{}
-	loworder.set_bytes(edwards25519.loworder_bytes) or { panic(err) }
+	loworder.set_bytes(loworder_bytes) or { return false }
 
 	mut s := new_scalar()
 	mut p := Point{}
@@ -112,7 +112,6 @@ fn fn_cofactor(mut data []u8) bool {
 }
 
 fn test_mult_by_cofactor() {
-	mut loworder := Point{}
 	mut data := rand.bytes(64)!
 
 	assert fn_cofactor(mut data) == true

@@ -1,7 +1,6 @@
-// vtest flaky: true
 // vtest retry: 3
 import db.sqlite
-import json
+import json2 as json
 import os
 import time
 import x.sessions
@@ -24,7 +23,7 @@ pub struct User {
 
 const default_user = User{
 	name: 'john'
-	age: 99
+	age:  99
 }
 const default_user_encoded = json.encode(default_user)
 
@@ -83,7 +82,7 @@ fn test_store_session_expired() {
 
 	time.sleep(2 * max_age)
 
-	if data := store.get('c', max_age) {
+	if _ := store.get('c', max_age) {
 		assert false, 'session should be expired!'
 	} else {
 		assert err.msg() == 'session is expired'

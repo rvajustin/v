@@ -1,3 +1,4 @@
+// vtest build: !(macos || windows)
 import os
 import db.sqlite
 import db.mysql
@@ -33,9 +34,9 @@ const pg_db = os.getenv_opt('PGDATABASE') or { 'test' }
 
 @[table: 'modules']
 struct Module {
-	id           int    @[primary; sql: serial]
+	id           int @[primary; sql: serial]
 	name         string
-	nr_downloads int    @[sql: u64]
+	nr_downloads int @[sql: u64]
 	creator      User
 }
 
@@ -48,13 +49,13 @@ struct User {
 }
 
 struct Parent {
-	id       int     @[primary; sql: serial]
+	id       int @[primary; sql: serial]
 	name     string
 	children []Child @[fkey: 'parent_id']
 }
 
 struct Child {
-	id        int    @[primary; sql: serial]
+	id        int @[primary; sql: serial]
 	parent_id int
 	name      string
 }
@@ -77,7 +78,7 @@ fn sqlite3_array() ! {
 		create table Child
 	}!
 	par := Parent{
-		name: 'test'
+		name:     'test'
 		children: [
 			Child{
 				name: 'abc'
@@ -99,17 +100,17 @@ fn sqlite3_array() ! {
 fn msql_array() ! {
 	eprintln('------------ ${@METHOD} -----------------')
 	mut db := mysql.connect(
-		host: mysql_host
-		port: mysql_port
+		host:     mysql_host
+		port:     mysql_port
 		username: mysql_user
 		password: mysql_pass
-		dbname: mysql_db
+		dbname:   mysql_db
 	)!
 	defer {
 		sql db {
 			drop table Parent
 		} or {}
-		db.close()
+		db.close() or {}
 	}
 
 	db.query('drop table if exists Parent')!
@@ -119,7 +120,7 @@ fn msql_array() ! {
 		create table Child
 	}!
 	par := Parent{
-		name: 'test'
+		name:     'test'
 		children: [
 			Child{
 				name: 'abc'
@@ -143,7 +144,7 @@ fn psql_array() ! {
 	mut db := pg.connect(host: pg_host, user: pg_user, password: pg_pass, dbname: pg_db)!
 	defer {
 		db.exec_one('drop table if exists "Parent", "Child"') or { eprintln(err) }
-		db.close()
+		db.close() or {}
 	}
 	db.exec_one('drop table if exists "Parent", "Child"') or { eprintln(err) }
 
@@ -152,7 +153,7 @@ fn psql_array() ! {
 		create table Child
 	}!
 	par := Parent{
-		name: 'test'
+		name:     'test'
 		children: [
 			Child{
 				name: 'abc'
@@ -189,11 +190,11 @@ fn sqlite3() ! {
 		create table User
 	}!
 	mod := Module{
-		name: 'test'
+		name:         'test'
 		nr_downloads: 10
-		creator: User{
-			age: 21
-			name: 'VUser'
+		creator:      User{
+			age:         21
+			name:        'VUser'
 			is_customer: true
 		}
 	}
@@ -209,16 +210,16 @@ fn sqlite3() ! {
 fn msql() ! {
 	eprintln('------------ ${@METHOD} -----------------')
 	mut conn := mysql.connect(
-		host: mysql_host
-		port: mysql_port
+		host:     mysql_host
+		port:     mysql_port
 		username: mysql_user
 		password: mysql_pass
-		dbname: mysql_db
+		dbname:   mysql_db
 	)!
 	defer {
 		conn.query('DROP TABLE IF EXISTS Module') or { eprintln(err) }
 		conn.query('DROP TABLE IF EXISTS User') or { eprintln(err) }
-		conn.close()
+		conn.close() or {}
 	}
 	conn.query('DROP TABLE IF EXISTS Module') or { eprintln(err) }
 	conn.query('DROP TABLE IF EXISTS User') or { eprintln(err) }
@@ -230,11 +231,11 @@ fn msql() ! {
 		create table User
 	}!
 	mod := Module{
-		name: 'test'
+		name:         'test'
 		nr_downloads: 10
-		creator: User{
-			age: 21
-			name: 'VUser'
+		creator:      User{
+			age:         21
+			name:        'VUser'
 			is_customer: true
 		}
 	}
@@ -252,7 +253,7 @@ fn psql() ! {
 	mut db := pg.connect(host: pg_host, user: pg_user, password: pg_pass, dbname: pg_db)!
 	defer {
 		db.exec_one('drop table if exists "modules", "User"') or { eprintln(err) }
-		db.close()
+		db.close() or {}
 	}
 	db.exec_one('drop table if exists "modules", "User"') or { eprintln(err) }
 	sql db {
@@ -260,11 +261,11 @@ fn psql() ! {
 		create table User
 	}!
 	mod := Module{
-		name: 'test'
+		name:         'test'
 		nr_downloads: 10
-		creator: User{
-			age: 21
-			name: 'VUser'
+		creator:      User{
+			age:         21
+			name:        'VUser'
 			is_customer: true
 		}
 	}

@@ -1,7 +1,6 @@
 module main
 
 import gg // actual graphics lib
-import gx // lib have some constants like colors 
 import math // for math related function
 
 const window_width = 800
@@ -48,7 +47,7 @@ mut:
 	col       int
 	width     int
 	pos       Point
-	color     gx.Color
+	color     gg.Color
 	flag      int // 0->empty, 1-> closed, 2-> open, 3-> barrier, 4-> start, 5-> end, 6-> path
 	neighbors []Point
 }
@@ -76,17 +75,17 @@ fn main() {
 
 	// setting values of app
 	app.gg = gg.new_context(
-		bg_color: gx.black // background color
-		width: window_width // window width
-		height: window_height // window height
-		create_window: true // this will create a different window
-		window_title: 'A* Path finding algorithm visusalizer' // title of the window
-		frame_fn: frame // this is frame function update the frame
-		event_fn: on_event // it calls on every event
-		init_fn: init_images // run at start of application
-		user_data: app // store user data
+		bg_color:      gg.black                              // background color
+		width:         window_width                          // window width
+		height:        window_height                         // window height
+		create_window: true                                  // this will create a different window
+		window_title:  'A* Path finding algorithm visusalizer' // title of the window
+		frame_fn:      frame    // this is frame function update the frame
+		event_fn:      on_event // it calls on every event
+		user_data:     app      // store user data
 	)
-	mut grid := initialise_grid() // initialize the grid variable and populate the matrix with each cell as empty
+	mut grid :=
+		initialise_grid() // initialize the grid variable and populate the matrix with each cell as empty
 	app.grid = grid // set grid to app attribute so you can access it by just passing app variable or with method of app
 	app.ui.dpi_scale = 1.0 // set scale this is use to make it responsive
 	app.start = &Point{ // set start point to -1, -1
@@ -103,15 +102,9 @@ fn main() {
 // this function will run for every frame actually in a loop
 fn frame(mut app App) {
 	app.gg.begin()
-	draw_grid(mut app, mut app.grid)
+	draw_grid(mut app)
 	draw_gridlines(mut app)
 	app.gg.end()
-}
-
-// this will run at start of app
-fn init_images(mut app App) {
-	//	app.resize()
-	return
 }
 
 // this will handle user event which is stored in gg.event variable
@@ -193,7 +186,7 @@ fn (mut app App) on_key_down(key gg.KeyCode) {
 			app.gg.quit()
 		}
 		.c {
-			draw_grid(mut app, mut app.grid)
+			draw_grid(mut app)
 			draw_gridlines(mut app)
 			mut grid := initialise_grid()
 			app.grid = grid // set grid to app attribute so you can access it by just passing app variable or with method of app
@@ -217,24 +210,15 @@ fn draw_gridlines(mut app App) {
 	dy := window_height / nrows
 	for i := 0; i < nrows; i++ {
 		// horizontal lines
-		app.gg.draw_line(0, i * dy, window_width, i * dy, gx.black)
+		app.gg.draw_line(0, i * dy, window_width, i * dy, gg.black)
 		// vertical lines
-		app.gg.draw_line(i * dx, 0, dx * i, window_height, gx.black)
+		app.gg.draw_line(i * dx, 0, dx * i, window_height, gg.black)
 	}
 }
 
 // heuristic function(point manhatten distance) that calculate approximate cost to reach from a given point to end(target)
 fn hf(p1 Point, p2 Point) int {
 	return math.abs(p1.x - p2.x) + math.abs(p1.y - p2.y)
-}
-
-// get the position of mouse in terms of which cells' row and column
-fn get_clicked_pos(pos Point, rows int, width int) (int, int) {
-	x := pos.x
-	y := pos.y
-	row := y / rows
-	col := x / rows
-	return row, col
 }
 
 // initialize grid attribute of app
@@ -244,15 +228,15 @@ fn initialise_grid() [][]Cell {
 	for i := 0; i < nrows; i++ {
 		for j := 0; j < nrows; j++ {
 			grid[i][j] = &Cell{
-				row: i
-				col: j
+				row:   i
+				col:   j
 				width: gap
-				pos: &Point{
+				pos:   &Point{
 					x: j * gap
 					y: i * gap
 				}
-				color: gx.white
-				flag: 0
+				color: gg.white
+				flag:  0
 			}
 		}
 	}
@@ -260,7 +244,7 @@ fn initialise_grid() [][]Cell {
 }
 
 // draw the cells of grid
-fn draw_grid(mut app App, mut grid [][]Cell) {
+fn draw_grid(mut app App) {
 	for i := 0; i < nrows; i++ {
 		for j := 0; j < nrows; j++ {
 			pos := app.grid[i][j].pos
@@ -300,7 +284,7 @@ fn update_neighbors(mut grid [][]Cell, row int, col int) {
 }
 
 // construct the path after finding it shows as pink color
-fn reconstruct_path(mut grid [][]Cell, mut came_from [][]Point, start Point, end Point) {
+fn reconstruct_path(mut grid [][]Cell, mut came_from [][]Point, _start Point, end Point) {
 	mut x := end.x
 	mut y := end.y
 	for !(x == -1 && y == -1) {
@@ -311,7 +295,7 @@ fn reconstruct_path(mut grid [][]Cell, mut came_from [][]Point, start Point, end
 }
 
 // a* path finding algorithm
-fn astar_path_finding(mut app App, mut grid [][]Cell, start Point, end Point) {
+fn astar_path_finding(mut _app App, mut grid [][]Cell, start Point, end Point) {
 	mut priority_queue := &MinHeap{}
 	mut g_score := [][]int{len: nrows, init: []int{len: nrows}}
 	mut f_score := [][]int{len: nrows, init: []int{len: nrows}}
@@ -329,13 +313,13 @@ fn astar_path_finding(mut app App, mut grid [][]Cell, start Point, end Point) {
 
 	g_score[start.x][start.y] = 0
 	f_score[start.x][start.y] = g_score[start.x][start.y] + hf(start, end)
-	priority_queue.insert(&Node{
+	priority_queue.insert(Node{
 		f_score: f_score[start.x][start.y]
-		cell: &Point{
+		cell:    &Point{
 			x: start.x
 			y: start.y
 		}
-		count: 0
+		count:   0
 	})
 
 	for priority_queue.len() > 0 {
@@ -360,10 +344,10 @@ fn astar_path_finding(mut app App, mut grid [][]Cell, start Point, end Point) {
 			if temp_g_score < g_score[neighbor.x][neighbor.y] {
 				g_score[neighbor.x][neighbor.y] = temp_g_score
 				if !(neighbor.x == start.x && neighbor.y == start.y) {
-					priority_queue.insert(&Node{
+					priority_queue.insert(Node{
 						f_score: g_score[neighbor.x][neighbor.y] + hf(neighbor, end)
-						cell: neighbor
-						count: curr_node.count + 1
+						cell:    neighbor
+						count:   curr_node.count + 1
 					})
 					came_from[neighbor.x][neighbor.y] = curr_pos
 					set_cell_type(mut grid, neighbor.x, neighbor.y, 'open')
@@ -378,31 +362,31 @@ fn astar_path_finding(mut app App, mut grid [][]Cell, start Point, end Point) {
 fn set_cell_type(mut grid [][]Cell, row int, col int, typ string) {
 	match typ {
 		'reset' {
-			grid[row][col].color = gx.white
+			grid[row][col].color = gg.white
 			grid[row][col].flag = 0
 		}
 		'close' {
-			grid[row][col].color = gx.red
+			grid[row][col].color = gg.red
 			grid[row][col].flag = 1
 		}
 		'open' {
-			grid[row][col].color = gx.green
+			grid[row][col].color = gg.green
 			grid[row][col].flag = 2
 		}
 		'barrier' {
-			grid[row][col].color = gx.black
+			grid[row][col].color = gg.black
 			grid[row][col].flag = 3
 		}
 		'start' {
-			grid[row][col].color = gx.orange
+			grid[row][col].color = gg.orange
 			grid[row][col].flag = 4
 		}
 		'end' {
-			grid[row][col].color = gx.blue
+			grid[row][col].color = gg.blue
 			grid[row][col].flag = 5
 		}
 		'path' {
-			grid[row][col].color = gx.pink
+			grid[row][col].color = gg.pink
 			grid[row][col].flag = 6
 		}
 		else {}
@@ -468,12 +452,4 @@ fn (mut heap MinHeap) right_child(idx int) !int {
 // Index of parent of a node in heap //TODO heap not implemented
 fn (mut heap MinHeap) parent(idx int) int {
 	return (idx - 1) / 2
-}
-
-// comaparator of heap //TODO not used
-fn comparator(n1 Node, n2 Node) bool {
-	if n1.f_score == n2.f_score {
-		return n1.count > n2.count
-	}
-	return n1.f_score > n2.f_score
 }

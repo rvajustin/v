@@ -1,24 +1,22 @@
-// vtest retry: 3
+// vtest build: network?
 import os
 import time
 import rand
 import v.vmod
-import test_utils { cmd_ok }
+import test_utils { cmd_ok_args }
 
-const v = os.quoted_path(@VEXE)
+const v = @VEXE
 const test_path = os.join_path(os.vtmp_dir(), 'vpm_dependency_test_${rand.ulid()}')
 
 fn testsuite_begin() {
-	$if !network ? {
-		eprintln('> skipping ${@FILE}, when `-d network` is missing')
-		exit(0)
-	}
-	os.setenv('VMODULES', test_path, true)
-	os.setenv('VPM_DEBUG', '', true)
-	os.setenv('VPM_NO_INCREMENT', '1', true)
+	dump(test_path)
+	test_utils.set_test_env(test_path)
+	os.mkdir_all(test_path) or {}
+	os.chdir(test_path)!
 }
 
 fn testsuite_end() {
+	dump(os.system_args(['find', test_path]))
 	os.rmdir_all(test_path) or {}
 }
 
@@ -32,7 +30,6 @@ fn get_mod_name(path string) string {
 
 // Case: running `v install` without specifying modules in a V project directory.
 fn test_install_dependencies_in_module_dir() {
-	os.mkdir_all(test_path) or {}
 	mod := 'my_module'
 	mod_path := os.join_path(test_path, mod)
 	os.mkdir(mod_path)!
@@ -53,26 +50,28 @@ fn test_install_dependencies_in_module_dir() {
 	}
 	assert v_mod.dependencies == ['markdown', 'pcre', 'https://github.com/spytheman/vtray']
 	// Run `v install`
-	mut res := cmd_ok(@LOCATION, '${v} install --once')
+	mut res := cmd_ok_args(@LOCATION, ['${v}', 'install', '--once'])
 	assert res.output.contains('Detected v.mod file inside the project directory. Using it...'), res.output
-	assert res.output.contains('Installing `markdown`'), res.output
-	assert res.output.contains('Installing `pcre`'), res.output
-	assert res.output.contains('Installing `vtray`'), res.output
+	expect_installing(@LOCATION, res.output, 'markdown')
+	expect_installing(@LOCATION, res.output, 'pcre')
+	expect_installing(@LOCATION, res.output, 'spytheman.vtray')
 
 	assert get_mod_name(os.join_path(test_path, 'markdown', 'v.mod')) == 'markdown'
 	assert get_mod_name(os.join_path(test_path, 'pcre', 'v.mod')) == 'pcre'
-	assert get_mod_name(os.join_path(test_path, 'vtray', 'v.mod')) == 'vtray'
-	res = cmd_ok(@LOCATION, '${v} install --once')
+	assert get_mod_name(os.join_path(test_path, 'spytheman', 'vtray', 'v.mod')) == 'vtray'
+	res = cmd_ok_args(@LOCATION, ['${v}', 'install', '--once'])
 	assert res.output.contains('All modules are already installed.'), res.output
 }
 
 fn test_resolve_external_dependencies_during_module_install() {
-	res := cmd_ok(@LOCATION, '${v} install -v https://github.com/ttytm/emoji-mart-desktop')
+	res := cmd_ok_args(@LOCATION, ['${v}', 'install', '-v',
+		'https://github.com/ttytm/emoji-mart-desktop'])
 	assert res.output.contains('Found 2 dependencies'), res.output
-	assert res.output.contains('Installing `webview`'), res.output
-	assert res.output.contains('Installing `miniaudio`'), res.output
-	// The external dependencies should have been installed to `<vmodules_dir>/<dependency_name>`
-	assert get_mod_name(os.join_path(test_path, 'webview', 'v.mod')) == 'webview'
+	expect_installing(@LOCATION, res.output, 'ttytm.webview')
+	expect_installing(@LOCATION, res.output, 'miniaudio')
+	// `ttytm.webview` is a registered VPM module, so it lands in `<vmodules_dir>/ttytm/webview`.
+	// `miniaudio` is unregistered, so it lands in `<vmodules_dir>/miniaudio`.
+	assert get_mod_name(os.join_path(test_path, 'ttytm', 'webview', 'v.mod')) == 'webview'
 	assert get_mod_name(os.join_path(test_path, 'miniaudio', 'v.mod')) == 'miniaudio'
 }
 
@@ -82,11 +81,16 @@ fn test_install_with_recursive_dependencies() {
 		eprintln('Timeout while testing installation with recursive dependencies.')
 		exit(1)
 	}()
-	cmd_ok(@LOCATION, '${v} install https://gitlab.com/tobealive/a')
+	cmd_ok_args(@LOCATION, ['${v}', 'install', 'https://gitlab.com/tobealive/a'])
 
 	// Test the installation of a module when passing its URL with the `.git` extension.
 	// One of the modules dependencies `https://gitlab.com/tobealive/c` has the
 	// `https://gitlab.com/tobealive/a` dependency without `.git`.
-	cmd_ok(@LOCATION, '${v} remove a b c')
-	cmd_ok(@LOCATION, '${v} install https://gitlab.com/tobealive/a.git')
+	cmd_ok_args(@LOCATION, ['${v}', 'remove', 'a', 'b', 'c'])
+	cmd_ok_args(@LOCATION, ['${v}', 'install', 'https://gitlab.com/tobealive/a.git'])
+}
+
+fn expect_installing(location string, output string, what string) {
+	eprintln('>>> location: ${location}')
+	assert output.contains('Installing `${what}`') || output.contains('Scanning `${what}`'), output
 }

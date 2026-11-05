@@ -1,9 +1,9 @@
 module os
 
-// stat returns a platform-agnostic Stat struct comparable to what is
-// available in other programming languages and fails with the POSIX
-// error if the stat call fails. Symlinks are followed and the resulting
-// Stat provided. (If this is not desired, use lstat().)
+// stat returns a platform-agnostic Stat struct, containing metadata about the given file/folder path.
+// It returns a POSIX error, if it can not do so.
+// Note: symlinks are followed, and the resulting Stat for their target will be returned.
+// If this is not desired, call lstat/1 instead.
 pub fn stat(path string) !Stat {
 	mut s := C.stat{}
 	unsafe {
@@ -12,14 +12,14 @@ pub fn stat(path string) !Stat {
 			return error_posix()
 		}
 		return Stat{
-			dev: s.st_dev
+			dev:   u64(s.st_dev)
 			inode: s.st_ino
 			nlink: s.st_nlink
-			mode: s.st_mode
-			uid: s.st_uid
-			gid: s.st_gid
-			rdev: s.st_rdev
-			size: s.st_size
+			mode:  s.st_mode
+			uid:   s.st_uid
+			gid:   s.st_gid
+			rdev:  u64(s.st_rdev)
+			size:  u64(s.st_size)
 			atime: s.st_atime
 			mtime: s.st_mtime
 			ctime: s.st_ctime
@@ -27,10 +27,8 @@ pub fn stat(path string) !Stat {
 	}
 }
 
-// lstat returns a platform-agnostic Stat struct comparable to what is
-// available in other programming languages and fails with the POSIX
-// error if the stat call fails. If a link is stat'd, the stat info
-// for the link is provided.
+// lstat is similar to stat/1 for normal files/folders.
+// Unlike stat/1, however, it will return the stat info for a symlink, instead of its target.
 pub fn lstat(path string) !Stat {
 	mut s := C.stat{}
 	unsafe {
@@ -39,14 +37,14 @@ pub fn lstat(path string) !Stat {
 			return error_posix()
 		}
 		return Stat{
-			dev: s.st_dev
+			dev:   u64(s.st_dev)
 			inode: s.st_ino
 			nlink: s.st_nlink
-			mode: s.st_mode
-			uid: s.st_uid
-			gid: s.st_gid
-			rdev: s.st_rdev
-			size: s.st_size
+			mode:  s.st_mode
+			uid:   s.st_uid
+			gid:   s.st_gid
+			rdev:  u64(s.st_rdev)
+			size:  u64(s.st_size)
 			atime: s.st_atime
 			mtime: s.st_mtime
 			ctime: s.st_ctime
@@ -54,7 +52,7 @@ pub fn lstat(path string) !Stat {
 	}
 }
 
-// get_filetype returns the FileType from the Stat struct
+// get_filetype returns the FileType from the Stat struct.
 pub fn (st Stat) get_filetype() FileType {
 	match st.mode & u32(C.S_IFMT) {
 		u32(C.S_IFREG) {
@@ -84,24 +82,23 @@ pub fn (st Stat) get_filetype() FileType {
 	}
 }
 
-// get_mode returns the file type and permissions (readable, writable, executable)
-// in owner/group/others format
+// get_mode returns the file type and permissions (readable, writable, executable) in owner/group/others format.
 pub fn (st Stat) get_mode() FileMode {
 	return FileMode{
-		typ: st.get_filetype()
-		owner: FilePermission{
-			read: (st.mode & u32(C.S_IRUSR)) != 0
-			write: (st.mode & u32(C.S_IWUSR)) != 0
+		typ:    st.get_filetype()
+		owner:  FilePermission{
+			read:    (st.mode & u32(C.S_IRUSR)) != 0
+			write:   (st.mode & u32(C.S_IWUSR)) != 0
 			execute: (st.mode & u32(C.S_IXUSR)) != 0
 		}
-		group: FilePermission{
-			read: (st.mode & u32(C.S_IRGRP)) != 0
-			write: (st.mode & u32(C.S_IWGRP)) != 0
+		group:  FilePermission{
+			read:    (st.mode & u32(C.S_IRGRP)) != 0
+			write:   (st.mode & u32(C.S_IWGRP)) != 0
 			execute: (st.mode & u32(C.S_IXGRP)) != 0
 		}
 		others: FilePermission{
-			read: (st.mode & u32(C.S_IROTH)) != 0
-			write: (st.mode & u32(C.S_IWOTH)) != 0
+			read:    (st.mode & u32(C.S_IROTH)) != 0
+			write:   (st.mode & u32(C.S_IWOTH)) != 0
 			execute: (st.mode & u32(C.S_IXOTH)) != 0
 		}
 	}
@@ -115,13 +112,13 @@ pub fn is_dir(path string) bool {
 
 // is_link returns a boolean indicating whether `path` is a link.
 // Warning: `is_link()` is known to cause a TOCTOU vulnerability when used incorrectly
-// (for more information: https://github.com/vlang/v/blob/master/vlib/os/README.md)
+// (for more information: https://github.com/vlang/v/blob/master/vlib/os/README.md).
 pub fn is_link(path string) bool {
 	attr := lstat(path) or { return false }
 	return attr.get_filetype() == .symbolic_link
 }
 
-// kind_of_existing_path identifies whether path is a file, directory, or link
+// kind_of_existing_path identifies whether path is a file, directory, or link.
 fn kind_of_existing_path(path string) PathKind {
 	mut res := PathKind{}
 	attr := lstat(path) or { return res }

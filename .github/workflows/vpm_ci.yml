@@ -2,71 +2,78 @@ name: VPM CI
 
 on:
   push:
-    paths:
-      - '**/vpm_ci.yml'
-      - '**/cmd/tools/vpm/**'
-  pull_request:
+    branches:
+      - master
     paths:
       - '**/vpm_ci.yml'
       - '**/cmd/tools/vpm/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  group: vpm-${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  setup:
+  setup-vpm:
     strategy:
       matrix:
-        os: [ubuntu-20.04, windows-2019, macos-12]
+        os: [ubuntu-latest, windows-latest, macos-latest]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           path: vlang
+      - name: Show git version
+        run: git version
       - name: Build V
         if: runner.os != 'Windows'
         run: cd vlang && make -j4 && ./v doctor
       - name: Build V (Windows)
         if: runner.os == 'Windows'
-        run: cd vlang && ./make.bat && ./v doctor
+        run: cd vlang && ./makev.bat && ./v doctor
       - name: Cache V
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: vlang
           key: ${{ runner.os }}-${{ github.sha }}
 
-  test:
-    needs: setup
+  test-vpm:
+    needs: setup-vpm
     strategy:
       matrix:
         include:
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             cc: tcc
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             cc: gcc
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             cc: clang
-          - os: windows-2019
+          - os: macos-latest
+            cc: clang
+          - os: windows-latest
             cc: tcc
-          - os: windows-2019
+          - os: windows-latest
             cc: gcc
-          - os: windows-2019
+          - os: windows-latest
             cc: msvc
-          - os: macos-12
-            cc: clang
-          - os: macos-14
-            cc: clang
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    env:
-      VFLAGS: -cc ${{ matrix.cc }} -d network
+    timeout-minutes: 60
     steps:
       - name: Restore V cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: vlang
           key: ${{ runner.os }}-${{ github.sha }}
-      - name: Test
-        run: cd vlang && ./v test cmd/tools/vpm
+      - name: Show git version
+        run: git version
+      - name: Build and test VPM
+        run: |
+          cd vlang
+          ./v -W -N cmd/tools/vpm
+          ./v -cc ${{ matrix.cc }} -d network test cmd/tools/vpm

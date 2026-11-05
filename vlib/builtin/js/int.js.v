@@ -1,7 +1,5 @@
 module builtin
 
-type byte = u8
-
 pub const min_i8 = i8(-128)
 pub const max_i8 = i8(127)
 
@@ -11,14 +9,14 @@ pub const max_i16 = i16(32767)
 pub const min_i32 = i32(-2147483648)
 pub const max_i32 = i32(2147483647)
 
-pub const min_int = min_i32
-pub const max_int = max_i32
-
 // -9223372036854775808 is wrong, because C compilers parse literal values
 // without sign first, and 9223372036854775808 overflows i64, hence the
 // consecutive subtraction by 1
 pub const min_i64 = i64(-9223372036854775807 - 1)
 pub const max_i64 = i64(9223372036854775807)
+
+pub const min_int = $if new_int ?&& x64 { int(min_i64) } $else { int(min_i32) }
+pub const max_int = $if new_int ?&& x64 { int(max_i64) } $else { int(max_i32) }
 
 pub const min_u8 = u8(0)
 pub const max_u8 = u8(255)
@@ -176,8 +174,7 @@ pub fn (x u8) hex() string {
 	return res
 }
 
-// hex returns a string with the hexadecimal representation
-// of the byte elements of the array.
+// hex returns a string with the hexadecimal representation of the byte elements of the array.
 pub fn (b []u8) hex() string {
 	mut hex := ''
 	for i in b {

@@ -4,6 +4,30 @@
 import crypto.aes
 import crypto.cipher
 
+fn test_aes_cbc_double() {
+	orig1 := []u8{len: 64, init: index}
+	orig2 := []u8{len: 16, init: index}
+	key := []u8{len: 16}
+	iv := []u8{len: 16}
+
+	mut block := aes.new_cipher(key) or { panic(err) }
+	mut en_cbc := cipher.new_cbc(block, iv)
+	mut cip1 := []u8{len: orig1.len}
+	mut cip2 := []u8{len: orig2.len}
+	en_cbc.encrypt_blocks(mut cip1, orig1)
+	en_cbc.encrypt_blocks(mut cip2, orig2)
+
+	mut block2 := aes.new_cipher(key) or { panic(err) }
+	mut dec_cbc := cipher.new_cbc(block2, iv)
+	mut plain1 := []u8{len: orig1.len}
+	mut plain2 := []u8{len: orig2.len}
+	dec_cbc.decrypt_blocks(mut plain1, cip1)
+	dec_cbc.decrypt_blocks(mut plain2, cip2)
+
+	assert plain1 == orig1
+	assert plain2 == orig2
+}
+
 fn test_aes_cbc() {
 	key := '6368616e676520746869732070617373'.bytes()
 	iv := '1234567890123456'.bytes()
@@ -20,13 +44,13 @@ fn test_aes_cbc() {
 }
 
 fn aes_cbc_en(mut src []u8, key []u8, iv []u8) {
-	block := aes.new_cipher(key)
+	block := aes.new_cipher(key) or { panic(err) }
 	mut mode := cipher.new_cbc(block, iv)
 	mode.encrypt_blocks(mut src, src.clone())
 }
 
 fn aes_cbc_de(mut src []u8, key []u8, iv []u8) {
-	block := aes.new_cipher(key)
+	block := aes.new_cipher(key) or { panic(err) }
 	mut mode := cipher.new_cbc(block, iv)
 	mode.decrypt_blocks(mut src, src.clone())
 }

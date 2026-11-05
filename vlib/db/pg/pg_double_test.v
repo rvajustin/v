@@ -1,3 +1,4 @@
+// vtest build: started_postgres?
 module main
 
 import db.pg
@@ -15,10 +16,10 @@ fn test_float_field() {
 		eprintln('> This test requires a working postgres server running on localhost.')
 		return
 	}
-	conn := 'host=localhost user=test password=test' // insert own connection string
-	db := pg.connect_with_conninfo(conn)!
+	conn := 'host=localhost user=postgres password=12345678' // insert own connection string
+	mut db := pg.connect_with_conninfo(conn)!
 	defer {
-		db.close()
+		db.close() or {}
 	}
 
 	sql db {

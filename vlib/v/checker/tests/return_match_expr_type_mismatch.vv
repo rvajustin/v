@@ -26,9 +26,9 @@ fn main() {
 	}
 
 	r := get_file(item) or {
-		println('err=$err')
+		println('no tuple')
 		return
 	}
 
-	println('got $r')
+	println('got ${r}')
 }

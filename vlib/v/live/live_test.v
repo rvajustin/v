@@ -1,13 +1,12 @@
-import os
-import time
-
-// vtest flaky: true
 // vtest retry: 4
+import os
+import log
+import time
 
 /*
 The goal of this test, is to simulate a developer, that has run a program, compiled with -live flag.
 
-It does so by writing a new generated program containing a [live] fn pmessage() string {...} function,
+It does so by writing a new generated program containing a @[live] fn pmessage() string {...} function,
 (that program is in `vlib/v/live/live_test_template.vv`)
 then runs the generated program at the start *in the background*,
 waits some time, so that the program could run a few iterations, then modifies its source
@@ -32,11 +31,11 @@ not very flaky way.
 TODO: Cleanup this when/if v has better process control/communication primitives.
 */
 const vexe = os.getenv('VEXE')
-const vtmp_folder = os.join_path(os.vtmp_dir(), 'live_tests')
+const vtmp_folder = os.join_path(os.vtmp_dir(), 'live_tests_${os.getpid()}')
 const main_source_file = os.join_path(vtmp_folder, 'main.v')
 const tmp_file = os.join_path(vtmp_folder, 'mymodule', 'generated_live_module.tmp')
 const source_file = os.join_path(vtmp_folder, 'mymodule', 'mymodule.v')
-const genexe_file = os.join_path(vtmp_folder, 'generated_live_program')
+const genexe_file = os.join_path(vtmp_folder, 'generated_live_program.exe')
 const output_file = os.join_path(vtmp_folder, 'generated_live_program.output.txt')
 const res_original_file = os.join_path(vtmp_folder, 'ORIGINAL.txt')
 const res_changed_file = os.join_path(vtmp_folder, 'CHANGED.txt')
@@ -46,10 +45,16 @@ const live_program_source = get_source_template()
 
 fn get_source_template() string {
 	src := os.read_file(os.join_path(os.dir(@FILE), 'live_test_template.vv')) or { panic(err) }
-	return src.replace('#OUTPUT_FILE#', output_file)
+	return src.replace('#OUTPUT_FILE#', output_file.replace('\\', '\\\\'))
 }
 
 fn atomic_write_source(source string) {
+	// The reloader compares whole-second modification times.
+	previous_mtime := os.file_last_mod_unix(source_file)
+	for time.now().unix() <= previous_mtime {
+		time.sleep(10 * time.millisecond)
+	}
+
 	// Note: here wrtiting is done in 2 steps, since os.write_file can take some time,
 	// during which the file will be modified, but it will still be not completely written.
 	// The os.mv after that, guarantees that the reloader will see a complete valid V program.
@@ -63,20 +68,16 @@ fn testsuite_begin() {
 	os.mkdir_all(vtmp_folder) or {}
 	os.mkdir_all(os.join_path(vtmp_folder, 'mymodule'))!
 	os.write_file(os.join_path(vtmp_folder, 'v.mod'), '')!
-	os.write_file(os.join_path(vtmp_folder, 'main.v'), '
-import mymodule
-fn main() {
-	mymodule.mymain()
-}
-')!
-	if os.user_os() !in ['linux', 'solaris'] && os.getenv('FORCE_LIVE_TEST').len == 0 {
+	os.cp(os.join_path(os.dir(@FILE), 'live_test_template_main.vv'), os.join_path(vtmp_folder,
+		'main.v'))!
+	if os.user_os() !in ['linux', 'macos', 'solaris'] && os.getenv('FORCE_LIVE_TEST').len == 0 {
 		eprintln('Testing the runtime behaviour of -live mode,')
 		eprintln('is reliable only on Linux/macOS for now.')
 		eprintln('You can still do it by setting FORCE_LIVE_TEST=1 .')
 		exit(0)
 	}
 	atomic_write_source(live_program_source)
-	// os.system('tree $vtmp_folder') exit(1)
+	// os.system('tree ${vtmp_folder}') exit(1)
 	spawn watchdog()
 }
 
@@ -94,21 +95,24 @@ fn watchdog() {
 	sw := time.new_stopwatch()
 	for {
 		elapsed_time_in_seconds := sw.elapsed().seconds()
-		dump(elapsed_time_in_seconds)
+		$if print_watchdog_time ? {
+			log.warn('> dt: ${elapsed_time_in_seconds:6.3f}s')
+		}
 		if elapsed_time_in_seconds > 5 * 60 {
+			log.warn('> watchdog triggered, elapsed time: ${elapsed_time_in_seconds:6.3f}s')
 			exit(3)
 		}
 		time.sleep(1 * time.second)
 	}
 }
 
-@[debuglivetest]
+@[if debuglivetest ?]
 fn vprintln(s string) {
 	eprintln(s)
 }
 
 fn testsuite_end() {
-	// os.system('tree $vtmp_folder') exit(1)
+	// os.system('tree ${vtmp_folder}') exit(1)
 	vprintln('source: ${source_file}')
 	vprintln('output: ${output_file}')
 	vprintln('---------------------------------------------------------------------------')
@@ -116,8 +120,9 @@ fn testsuite_end() {
 		panic('could not read ${output_file}, error: ${err}')
 	}
 	mut histogram := map[string]int{}
-	for line in output_lines {
-		histogram[line] = histogram[line] + 1
+	for oline in output_lines {
+		line := oline.all_after('|| ')
+		histogram[line]++
 	}
 	for k, v in histogram {
 		eprintln('> found ${v:5d} times: ${k}')
@@ -127,76 +132,131 @@ fn testsuite_end() {
 	assert histogram['ORIGINAL'] > 0
 	assert histogram['CHANGED'] + histogram['ANOTHER'] > 0
 	// assert histogram['END'] > 0
-	os.rmdir_all(vtmp_folder) or {}
+	$if !keep_results ? {
+		os.rmdir_all(vtmp_folder) or {}
+		log.info('Removed ${vtmp_folder} . Use `-d keep_results` to override.')
+	}
 }
 
 fn change_source(new string) {
-	time.sleep(100 * time.millisecond)
-	vprintln('> change ORIGINAL to: ${new}')
+	log.info('> change ORIGINAL to: ${new} ...')
 	atomic_write_source(live_program_source.replace('ORIGINAL', new))
 	wait_for_file(new)
 }
 
+fn remove_live_attr_from_source() {
+	log.info('> remove @[live] attr from pmessage() while program is running ...')
+	source_without_live :=
+		live_program_source.replace('ORIGINAL', 'NO_LIVE').replace('@[live]\n', '')
+	atomic_write_source(source_without_live)
+}
+
 fn wait_for_file(new string) {
-	time.sleep(100 * time.millisecond)
 	expected_file := os.join_path(vtmp_folder, new + '.txt')
-	eprintln('waiting for ${expected_file} ...')
-	// os.system('tree $vtmp_folder')
-	max_wait_cycles := os.getenv_opt('WAIT_CYCLES') or { '1' }.int()
+	max_wait_cycles := os.getenv_opt('WAIT_CYCLES') or { '60000' }.int()
+	log.info('waiting max_wait_cycles: ${max_wait_cycles} for file: ${expected_file} ...')
+	mut sw := time.new_stopwatch()
 	for i := 0; i <= max_wait_cycles; i++ {
-		if i % 25 == 0 {
-			vprintln('   checking ${i:-10d} for ${expected_file} ...')
+		if i > 0 && i % 500 == 0 {
+			log.info('   checking ${i:3d}/${max_wait_cycles:-3d}, waited for: ${sw.elapsed().seconds():6.3f}s, for ${expected_file} ...')
 		}
 		if os.exists(expected_file) {
 			assert true
-			vprintln('> done.')
-			time.sleep(100 * time.millisecond)
-			break
+			log.info('> done waiting for ${expected_file}, iteration: ${i:3d}, waited for: ${sw.elapsed().seconds():6.3f}s')
+			time.sleep(80 * time.millisecond)
+			return
 		}
-		time.sleep(5 * time.millisecond)
+		time.sleep(1 * time.millisecond)
 	}
+	assert false, 'timed out waiting for ${expected_file}'
 }
 
 fn setup_cycles_environment() {
-	mut max_live_cycles := 1000
-	mut max_wait_cycles := 400
-	if os.user_os() == 'macos' {
-		//		max_live_cycles *= 5
-		//		max_wait_cycles *= 5
-	}
+	mut max_live_cycles := 30000 // read by live_test_template.vv
+	mut max_wait_cycles := 60000
 	os.setenv('LIVE_CYCLES', '${max_live_cycles}', true)
 	os.setenv('WAIT_CYCLES', '${max_wait_cycles}', true)
 }
 
-//
+fn run_in_background(cmd string) {
+	log.warn('running in background: ${cmd} ...')
+	spawn fn (cmd string) {
+		res := os.exec(os.split_args(cmd) or { panic(err) })
+		log.warn('Background cmd ended. res.exit_code: ${res.exit_code} | res.output.len: ${res.output.len}')
+		if res.exit_code != 0 {
+			eprintln('----------------------- background command failed: --------------------------')
+			eprintln('----- exit_code: ${res.exit_code}, cmd: ${cmd}, output:')
+			eprintln(res.output)
+			eprintln('-----------------------------------------------------------------------------')
+		}
+		assert res.exit_code == 0
+	}(cmd)
+	log.warn('the live program should be running in the background now')
+}
+
+fn must_exec_cmd(cmd string) {
+	res := os.exec(os.split_args(cmd) or { panic(err) })
+	if res.exit_code == 0 {
+		return
+	}
+	panic('command failed: ${cmd}\n${res.output}')
+}
+
 fn test_live_program_can_be_compiled() {
 	setup_cycles_environment()
-	eprintln('Compiling...')
 	compile_cmd := '${os.quoted_path(vexe)} -cg -keepc -nocolor -live -o ${os.quoted_path(genexe_file)} ${os.quoted_path(main_source_file)}'
-	eprintln('> compile_cmd: ${compile_cmd}')
-	os.system(compile_cmd)
-	//
-	cmd := '${os.quoted_path(genexe_file)} > /dev/null &'
-	eprintln('Running with: ${cmd}')
-	res := os.system(cmd)
-	assert res == 0
-	eprintln('... running in the background')
+	log.info('Compiling with compile_cmd:')
+	eprintln('> ${compile_cmd}')
+	compile_res := os.system_args([vexe, '-cg', '-keepc', '-nocolor', '-live', '-o', genexe_file,
+		main_source_file])
+	log.info('> DONE')
+	assert compile_res == 0
+	run_in_background('${os.quoted_path(genexe_file)}')
 	wait_for_file('ORIGINAL')
 }
 
 fn test_live_program_can_be_changed_1() {
 	change_source('CHANGED')
+	time.sleep(250 * time.millisecond)
 	assert true
 }
 
 fn test_live_program_can_be_changed_2() {
-	change_source('ANOTHER')
+	remove_live_attr_from_source()
+	time.sleep(1 * time.second)
 	assert true
 }
 
 fn test_live_program_can_be_changed_3() {
+	change_source('ANOTHER')
+	time.sleep(250 * time.millisecond)
+	assert true
+}
+
+fn test_live_program_can_be_changed_4() {
+	time.sleep(500 * time.millisecond)
 	change_source('STOP')
+	time.sleep(250 * time.millisecond)
 	change_source('STOP')
 	change_source('STOP')
 	assert true
+}
+
+fn test_live_windows_sokol_sharedlive_build_uses_host_import_lib() {
+	$if !windows || !msvc {
+		return
+	}
+	tmp_dir := os.join_path(os.vtmp_dir(), 'live_windows_sokol_compile')
+	os.mkdir_all(tmp_dir) or { panic(err) }
+	defer {
+		os.rmdir_all(tmp_dir) or {}
+	}
+	source := os.join_path(@VEXEROOT, 'examples', 'sokol', 'drawing.v')
+	exe_path := os.join_path(tmp_dir, 'drawing_live.exe')
+	lib_path := exe_path[..exe_path.len - 4] + '.lib'
+	dll_path := os.join_path(tmp_dir, 'drawing_live_shared.dll')
+	must_exec_cmd('${os.quoted_path(vexe)} -nocolor -cc msvc -live -o ${os.quoted_path(exe_path)} ${os.quoted_path(source)}')
+	assert os.exists(lib_path)
+	must_exec_cmd('${os.quoted_path(vexe)} -nocolor -cc msvc -sharedlive -shared -ldflags ${os.quoted_path(lib_path)} -o ${os.quoted_path(dll_path)} ${os.quoted_path(source)}')
+	assert os.exists(dll_path)
 }

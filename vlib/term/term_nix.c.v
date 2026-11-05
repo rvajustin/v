@@ -2,8 +2,7 @@ module term
 
 import os
 import term.termios
-
-#include <sys/ioctl.h>
+import time
 
 pub struct C.winsize {
 pub:
@@ -13,7 +12,7 @@ pub:
 	ws_ypixel u16
 }
 
-fn C.ioctl(fd int, request u64, arg voidptr) int
+fn C.ioctl(fd i32, request u64, args ...voidptr) i32
 
 // get_terminal_size returns a number of columns and rows of terminal window.
 pub fn get_terminal_size() (int, int) {
@@ -25,7 +24,7 @@ pub fn get_terminal_size() (int, int) {
 	return int(w.ws_col), int(w.ws_row)
 }
 
-// get_cursor_position returns a Coord containing the current cursor position
+// get_cursor_position returns a Coord containing the current cursor position.
 pub fn get_cursor_position() !Coord {
 	if os.is_atty(1) <= 0 || os.getenv('TERM') == 'dumb' {
 		return Coord{0, 0}
@@ -45,7 +44,7 @@ pub fn get_cursor_position() !Coord {
 		return os.last_error()
 	}
 
-	state.c_lflag &= termios.invert(u32(C.ICANON) | u32(C.ECHO))
+	state.c_lflag &= termios.invert(termios.flag(int(C.ICANON) | int(C.ECHO)))
 	termios.tcsetattr(0, C.TCSANOW, mut state)
 
 	print('\e[6n')
@@ -77,7 +76,7 @@ pub fn get_cursor_position() !Coord {
 	return Coord{x, y}
 }
 
-// set_terminal_title change the terminal title (usually that is the containing terminal window title)
+// set_terminal_title change the terminal title (usually that is the containing terminal window title).
 pub fn set_terminal_title(title string) bool {
 	if os.is_atty(1) <= 0 || os.getenv('TERM') == 'dumb' {
 		return false
@@ -89,7 +88,7 @@ pub fn set_terminal_title(title string) bool {
 	return true
 }
 
-// set_tab_title changes the terminal *tab title*, for terminal emulators like Konsole, that support several tabs
+// set_tab_title changes the terminal *tab title*, for terminal emulators like Konsole, that support several tabs.
 pub fn set_tab_title(title string) bool {
 	if os.is_atty(1) <= 0 || os.getenv('TERM') == 'dumb' {
 		return false
@@ -141,7 +140,7 @@ pub fn supports_sixel() bool {
 		return false
 	}
 
-	state.c_lflag &= termios.invert(u32(C.ICANON) | u32(C.ECHO))
+	state.c_lflag &= termios.invert(termios.flag(int(C.ICANON) | int(C.ECHO)))
 	termios.tcsetattr(0, C.TCSANOW, mut state)
 
 	// Send a "Query Device Code"
@@ -193,7 +192,7 @@ pub fn graphics_num_colors() u16 {
 		return 0
 	}
 
-	state.c_lflag &= termios.invert(u32(C.ICANON) | u32(C.ECHO))
+	state.c_lflag &= termios.invert(termios.flag(int(C.ICANON) | int(C.ECHO)))
 	termios.tcsetattr(0, C.TCSANOW, mut state)
 
 	// Send "CSI ? Pi ; Pa ; Pv S"
@@ -214,4 +213,69 @@ pub fn graphics_num_colors() u16 {
 		}
 	}
 	return buf.bytestr().u16()
+}
+
+// enable_echo enable/disable echo input characters.
+pub fn enable_echo(enable bool) {
+	mut state := termios.Termios{}
+	termios.tcgetattr(0, mut state)
+	if enable {
+		state.c_lflag |= C.ECHO
+	} else {
+		state.c_lflag &= ~C.ECHO
+	}
+	termios.tcsetattr(0, C.TCSANOW, mut state)
+}
+
+// KeyPressedParams contains the optional parameters that you can pass to key_pressed.
+@[params]
+pub struct KeyPressedParams {
+pub mut:
+	blocking bool // whether to wait for a pressed key
+	echo     bool // whether to output the pressed key to stdout
+}
+
+// key_pressed gives back a single character, read from the standard input.
+// It returns -1 on error or no character in non-blocking mode
+pub fn key_pressed(params KeyPressedParams) i64 {
+	mut state := termios.Termios{}
+	if termios.tcgetattr(0, mut state) != 0 {
+		return -1
+	}
+	mut old_state := state
+	defer {
+		// restore the old terminal state:
+		termios.tcsetattr(0, C.TCSANOW, mut old_state)
+	}
+
+	// disable line by line input
+	state.c_lflag &= ~C.ICANON
+
+	if params.echo {
+		state.c_lflag |= C.ECHO
+	} else {
+		state.c_lflag &= ~C.ECHO
+	}
+	termios.tcsetattr(0, C.TCSANOW, mut state)
+
+	mut ret := i64(0)
+
+	for {
+		pending := os.fd_is_pending(0)
+		if pending {
+			r := C.read(0, &ret, 8)
+			if r < 0 {
+				return r
+			} else {
+				return ret
+			}
+		}
+		if !params.blocking {
+			// in non-blocking mode, we need to return immediately
+			return -1
+		}
+		time.sleep(1 * time.millisecond)
+	}
+
+	return ret
 }

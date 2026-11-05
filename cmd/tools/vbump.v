@@ -46,17 +46,17 @@ struct Options {
 
 type ReplacementFunction = fn (re regex.RE, input string, start int, end int) string
 
-fn replace_with_increased_patch_version(re regex.RE, input string, start int, end int) string {
+fn replace_with_increased_patch_version(_re regex.RE, input string, start int, end int) string {
 	version := semver.from(input[start..end]) or { return input }
 	return version.increment(.patch).str()
 }
 
-fn replace_with_increased_minor_version(re regex.RE, input string, start int, end int) string {
+fn replace_with_increased_minor_version(_re regex.RE, input string, start int, end int) string {
 	version := semver.from(input[start..end]) or { return input }
 	return version.increment(.minor).str()
 }
 
-fn replace_with_increased_major_version(re regex.RE, input string, start int, end int) string {
+fn replace_with_increased_major_version(_re regex.RE, input string, start int, end int) string {
 	version := semver.from(input[start..end]) or { return input }
 	return version.increment(.major).str()
 }
@@ -144,10 +144,10 @@ Try ${tool_name} -h for more help...')
 
 	options := Options{
 		show_help: fp.bool('help', `h`, false, 'Show this help text.')
-		patch: fp.bool('patch', `p`, false, 'Bump the patch version.')
-		minor: fp.bool('minor', `n`, false, 'Bump the minor version.')
-		major: fp.bool('major', `m`, false, 'Bump the major version.')
-		skip: fp.string('skip', `s`, '', 'Skip lines matching this substring.').trim_space()
+		patch:     fp.bool('patch', `p`, false, 'Bump the patch version.')
+		minor:     fp.bool('minor', `n`, false, 'Bump the minor version.')
+		major:     fp.bool('major', `m`, false, 'Bump the major version.')
+		skip:      fp.string('skip', `s`, '', 'Skip lines matching this substring.').trim_space()
 	}
 
 	remaining := fp.finalize() or {

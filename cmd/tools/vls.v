@@ -16,7 +16,6 @@ import net.http
 import runtime
 import crypto.sha256
 import time
-import json
 
 enum UpdateSource {
 	github_releases
@@ -25,7 +24,7 @@ enum UpdateSource {
 }
 
 enum SetupKind {
-	none_
+	none
 	install
 	update
 }
@@ -39,7 +38,7 @@ enum OutputMode {
 struct VlsUpdater {
 mut:
 	output        OutputMode   = .text
-	setup_kind    SetupKind    = .none_
+	setup_kind    SetupKind    = .none
 	update_source UpdateSource = .github_releases
 	ls_path       string // --path
 	pass_to_ls    bool   // --ls
@@ -48,6 +47,8 @@ mut:
 	is_help       bool   // --help
 	args          []string
 }
+
+const vexe = os.real_path(os.getenv_opt('VEXE') or { @VEXE })
 
 const vls_folder = os.join_path(os.home_dir(), '.vls')
 
@@ -59,14 +60,7 @@ const vls_manifest_path = os.join_path(vls_folder, 'vls.config.json')
 
 const vls_src_folder = os.join_path(vls_folder, 'src')
 
-const server_not_found_err = error_with_code('Language server is not installed nor found.',
-	101)
-
-const json_enc = json2.Encoder{
-	newline: `\n`
-	newline_spaces_count: 2
-	escape_unicode: false
-}
+const server_not_found_err = error_with_code('Language server is not installed nor found.', 101)
 
 fn (upd VlsUpdater) check_or_create_vls_folder() ! {
 	if !os.exists(vls_folder) {
@@ -77,7 +71,7 @@ fn (upd VlsUpdater) check_or_create_vls_folder() ! {
 
 fn (upd VlsUpdater) manifest_config() !map[string]json2.Any {
 	manifest_buf := os.read_file(vls_manifest_path) or { '{}' }
-	manifest_contents := json2.raw_decode(manifest_buf)!.as_map()
+	manifest_contents := json2.decode[json2.Any](manifest_buf)!.as_map()
 	return manifest_contents
 }
 
@@ -104,22 +98,11 @@ fn (upd VlsUpdater) update_manifest(new_path string, from_source bool, timestamp
 		}
 	}
 
-	mut manifest_file := os.open_file(vls_manifest_path, 'w+')!
-	defer {
-		manifest_file.close()
-	}
-
 	manifest['server_path'] = json2.Any(new_path)
 	manifest['last_updated'] = json2.Any(timestamp.format_ss())
 	manifest['from_source'] = json2.Any(from_source)
 
-	mut buffer := []u8{}
-
-	json_enc.encode_value(manifest, mut buffer)!
-
-	manifest_file.write(buffer)!
-
-	unsafe { buffer.free() }
+	os.write_file(vls_manifest_path, json2.encode(manifest))!
 }
 
 fn (upd VlsUpdater) init_download_prebuilt() ! {
@@ -166,13 +149,13 @@ fn (upd VlsUpdater) download_prebuilt() ! {
 
 	upd.log('Finding prebuilt executables from GitHub release..')
 	resp := http.get('https://api.github.com/repos/vlang/vls/releases')!
-	releases_json := json2.raw_decode(resp.body)!.arr()
+	releases_json := json2.decode[json2.Any](resp.body)!.as_array()
 	if releases_json.len == 0 {
 		return error('Unable to fetch latest VLS release data: No releases found.')
 	}
 
 	latest_release := releases_json[0].as_map()
-	assets := latest_release['assets']!.arr()
+	assets := latest_release['assets']!.as_array()
 
 	mut checksum_asset_idx := -1
 	mut exec_asset_idx := -1
@@ -210,7 +193,7 @@ fn (upd VlsUpdater) download_prebuilt() ! {
 	}
 
 	if has_last_updated_at && !upd.is_force && asset_last_updated_at <= last_updated_at {
-		upd.log("VLS was already updated to it's latest version.")
+		upd.log('VLS was already updated to its latest version.')
 		return
 	}
 
@@ -239,7 +222,7 @@ fn (upd VlsUpdater) download_prebuilt() ! {
 }
 
 fn (upd VlsUpdater) print_new_vls_version(new_vls_exec_path string) {
-	exec_version := os.execute('${new_vls_exec_path} --version')
+	exec_version := os.exec([new_vls_exec_path, '--version'])
 	if exec_version.exit_code == 0 {
 		upd.log('VLS was updated to version: ${exec_version.output.all_after('vls version ').trim_space()}')
 	}
@@ -250,20 +233,32 @@ fn calculate_checksum(file_path string) !string {
 	return sha256.hexhash(data)
 }
 
+fn source_exec_file_name() string {
+	$if windows {
+		return 'vls.exe'
+	}
+	return 'vls'
+}
+
 fn (upd VlsUpdater) compile_from_source() ! {
 	git := os.find_abs_path_of_executable('git') or { return error('Git not found.') }
+	exec_path := os.join_path(vls_src_folder, 'bin', source_exec_file_name())
 
 	if !os.exists(vls_src_folder) {
 		upd.log('Cloning VLS repo...')
-		clone_result := os.execute('${git} clone --filter=blob:none https://github.com/vlang/vls ${vls_src_folder}')
+		clone_result :=
+			os.exec([vexe, 'retry', '--', '${git}', 'clone', '--filter=blob:none',
+				'https://github.com/vlang/vls', '${vls_src_folder}'])
 		if clone_result.exit_code != 0 {
 			return error('Failed to build VLS from source. Reason: ${clone_result.output}')
 		}
 	} else {
 		upd.log('Updating VLS repo...')
-		pull_result := os.execute('${git} -C ${vls_src_folder} pull')
-		if !upd.is_force && pull_result.output.trim_space() == 'Already up to date.' {
-			upd.log("VLS was already updated to it's latest version.")
+		pull_result :=
+			os.exec([vexe, 'retry', '--', '${git}', '-C', '${vls_src_folder}', 'pull'])
+		if !upd.is_force && pull_result.output.trim_space() == 'Already up to date.'
+			&& os.is_executable(exec_path) {
+			upd.log('VLS was already updated to its latest version.')
 			return
 		}
 	}
@@ -282,12 +277,13 @@ fn (upd VlsUpdater) compile_from_source() ! {
 		return error('Cannot compile VLS from source: no appropriate C compiler found.')
 	}
 
-	compile_result := os.execute('v run ${os.join_path(vls_src_folder, 'build.vsh')} ${possible_compilers[selected_compiler_idx]}')
+	os.mkdir_all(os.dir(exec_path))!
+	compile_result := os.exec([vexe, '-cc', '${possible_compilers[selected_compiler_idx]}', '-o',
+		exec_path, '${vls_src_folder}'])
 	if compile_result.exit_code != 0 {
 		return error('Cannot compile VLS from source: ${compile_result.output}')
 	}
 
-	exec_path := os.join_path(vls_src_folder, 'bin', 'vls')
 	upd.update_manifest(exec_path, true, time.now()) or {
 		upd.log('Unable to update config but the executable was updated successfully.')
 	}
@@ -348,16 +344,24 @@ fn (mut upd VlsUpdater) parse(mut fp flag.FlagParser) ! {
 
 		upd.ls_path = ls_path
 
-		if upd.setup_kind != .none_ {
+		if upd.setup_kind != .none {
 			upd.update_source = .local_file // use local path if both -p and --source are used
 		}
 	}
 
 	upd.is_help = fp.bool('help', `h`, false, "Show this updater's help text. To show the help text for the language server, pass the `--ls` flag before it.")
 
-	if !upd.is_help && !upd.pass_to_ls {
+	if !upd.is_help && !upd.pass_to_ls && !upd.is_check {
 		// automatically set the cli launcher to language server mode
 		upd.pass_to_ls = true
+	}
+
+	if upd.is_check && upd.ls_path == '' {
+		if ls_path := upd.find_ls_path() {
+			if os.is_executable(ls_path) {
+				upd.ls_path = ls_path
+			}
+		}
 	}
 
 	if upd.pass_to_ls {
@@ -368,7 +372,7 @@ fn (mut upd VlsUpdater) parse(mut fp flag.FlagParser) ! {
 				}
 
 				upd.ls_path = ls_path
-			} else if upd.setup_kind == .none_ {
+			} else if upd.setup_kind == .none {
 				return server_not_found_err
 			}
 		}
@@ -436,11 +440,12 @@ fn (upd VlsUpdater) cli_error(err IError) {
 			print_backtrace()
 		}
 		.json {
-			print('{"error":{"message":${json.encode(err.msg())},"code":"${err.code()}","details":${json.encode(upd.error_details(err).trim_space())}}}')
+			print('{"error":{"message":${json2.encode(err.msg())},"code":"${err.code()}","details":${json2.encode(upd.error_details(err).trim_space())}}}')
 			flush_stdout()
 		}
 		.silent {}
 	}
+
 	exit(1)
 }
 
@@ -455,16 +460,16 @@ fn (upd VlsUpdater) check_installation() {
 fn (upd VlsUpdater) run(fp flag.FlagParser) ! {
 	if upd.is_check {
 		upd.check_installation()
-	} else if upd.setup_kind != .none_ {
+	} else if upd.setup_kind != .none {
 		upd.check_or_create_vls_folder()!
 
 		match upd.update_source {
 			.github_releases {
 				upd.download_prebuilt() or {
-					if err.code() == 100 {
-						upd.compile_from_source()!
+					if err.code() != 100 {
+						return err
 					}
-					return err
+					upd.compile_from_source()!
 				}
 			}
 			.git_repo {
@@ -476,7 +481,7 @@ fn (upd VlsUpdater) run(fp flag.FlagParser) ! {
 			}
 		}
 	} else if upd.pass_to_ls {
-		exit(os.system('${upd.ls_path} ${upd.args.join(' ')}'))
+		exit(os.system_args([upd.ls_path, ...upd.args]))
 	} else if upd.is_help {
 		println(fp.usage())
 		exit(0)

@@ -12,35 +12,43 @@ import v.util.version
 
 struct Repl {
 mut:
-	readline    readline.Readline
-	indent      int    // indentation level
-	in_func     bool   // are we inside a new custom user function
-	line        string // the current line entered by the user
-	is_pin      bool   // does the repl 'pin' entered source code
-	folder      string // the folder in which the repl will write its temporary source files
-	last_output string // the last repl output
-	//
-	modules         []string // all the import modules
-	alias           map[string]string // all the alias used in the import
-	includes        []string // all the #include statements
-	functions       []string // all the user function declarations
-	functions_name  []string // all the user function names
-	lines           []string // all the other lines/statements
-	temp_lines      []string // all the temporary expressions/printlns
-	vstartup_lines  []string // lines in the `VSTARTUP` file
-	eval_func_lines []string // same line of the `VSTARTUP` file, but used to test fn type
+	readline     readline.Readline
+	indent       int    // indentation level
+	in_func      bool   // inside function decl
+	in_struct    bool   // inside struct decl
+	in_enum      bool   // inside enum decl
+	in_interface bool   // inside interface decl
+	line         string // the current line entered by the user
+	is_pin       bool   // does the repl 'pin' entered source code
+	folder       string // the folder in which the repl will write its temporary source files
+	last_output  string // the last repl output
+
+	modules         map[string][]string // all the import modules
+	alias           map[string]string   // all the alias used in the import
+	includes        []string            // all the #include statements
+	functions       []string            // all the user function declarations
+	functions_name  []string            // all the user function names
+	structs         []string            // all the struct definitions
+	enums           []string            // all the enum definitions
+	consts          []string            // all the const definitions
+	types           []string            // all the type definitions
+	interfaces      []string            // all the interface definitions
+	lines           []string            // all the other lines/statements
+	exec_lines      []string            // executable statements with restored runtime values
+	temp_lines      []string            // all the temporary expressions/printlns
+	vstartup_lines  []string            // lines in the `VSTARTUP` file
+	eval_func_lines []string            // same line of the `VSTARTUP` file, but used to test fn type
 }
 
 const is_stdin_a_pipe = os.is_atty(0) == 0
 const vexe = os.getenv('VEXE')
+const vquiet = os.getenv('VQUIET') != ''
 const vstartup = os.getenv('VSTARTUP')
 const repl_folder = os.join_path(os.vtmp_dir(), 'repl')
 
 const possible_statement_patterns = [
 	'++',
 	'--',
-	'<<',
-	'//',
 	'/*',
 	'assert ',
 	'fn ',
@@ -53,32 +61,54 @@ const possible_statement_patterns = [
 	'import ',
 	'#include ',
 	'for ',
+	'if ',
 	'or ',
-	'insert(',
-	'delete(',
-	'prepend(',
-	'sort(',
-	'clear(',
-	'trim(',
 	' as ',
 ]
 
 enum FnType {
-	@none
+	none
 	void
 	fn_type
+}
+
+enum DeclType {
+	include   // #include ...
+	const     // const ...
+	type      // type ...
+	enum      // enum ...
+	fn        // fn ...
+	struct    // struct ...
+	interface // interface ...
+	stmt      // statement
+}
+
+struct SnapshotAssignment {
+	lhs  string
+	name string
+	op   string
+}
+
+struct TimeSnapshot {
+	unix       i64
+	nanosecond int
+	is_local   bool
 }
 
 fn new_repl(folder string) Repl {
 	vstartup_source := os.read_file(vstartup) or { '' }.trim_right('\n\r').split_into_lines()
 	os.mkdir_all(folder) or {}
 	return Repl{
-		readline: readline.Readline{
+		readline:        readline.Readline{
 			skip_empty: true
 		}
-		folder: folder
-		modules: ['os', 'time', 'math']
-		vstartup_lines: vstartup_source
+		folder:          folder
+		modules:         {
+			'os':   []
+			'time': []
+			'math': []
+		}
+		vstartup_lines:  vstartup_source
 		// Test file used to check if a function as a void return or a value return.
 		eval_func_lines: vstartup_source
 	}
@@ -89,6 +119,19 @@ fn endline_if_missed(line string) string {
 		return line
 	}
 	return line + '\n'
+}
+
+fn starts_with_type_decl(line string, type_name string) bool {
+	if line.starts_with(type_name + ' ') || line.starts_with(type_name + '\t') {
+		return true
+	}
+	if line.starts_with('pub ') || line.starts_with('pub\t') {
+		substring := line[3..].trim_space()
+		if substring.starts_with(type_name + ' ') || substring.starts_with(type_name + '\t') {
+			return true
+		}
+	}
+	return false
 }
 
 fn repl_help() {
@@ -112,7 +155,11 @@ fn run_shell(command string) {
 
 		os.chdir(dir) or { eprintln('`${command}` failed, err: ${err}') }
 	} else {
-		os.system(command)
+		os.system_args(if os.user_os() == 'windows' {
+			['cmd.exe', '/d', '/s', '/c', command]
+		} else {
+			['sh', '-c', command]
+		})
 	}
 }
 
@@ -134,13 +181,13 @@ fn (mut r Repl) checks() bool {
 			r.indent--
 			if r.indent == 0 {
 				r.in_func = false
+				r.in_struct = false
+				r.in_enum = false
+				r.in_interface = false
 			}
 		}
-		if i + 2 < r.line.len && r.indent == 0 && r.line[i + 1] == `f` && r.line[i + 2] == `n` {
-			r.in_func = true
-		}
 	}
-	return r.in_func || (was_indent && r.indent <= 0) || r.indent > 0
+	return (was_indent && r.indent <= 0) || r.indent > 0
 }
 
 fn (r &Repl) function_call(line string) (bool, FnType) {
@@ -156,7 +203,7 @@ fn (r &Repl) function_call(line string) (bool, FnType) {
 	if line.contains(':=') {
 		// an assignment to a variable:
 		// `z := abc()`
-		return false, FnType.@none
+		return false, FnType.none
 	}
 
 	// Check if it is a Vlib call
@@ -165,7 +212,7 @@ fn (r &Repl) function_call(line string) (bool, FnType) {
 		fntype := r.check_fn_type_kind(line)
 		return true, fntype
 	}
-	return false, FnType.@none
+	return false, FnType.none
 }
 
 // TODO(vincenzopalazzo) Remove this fancy check and add a regex
@@ -178,10 +225,17 @@ fn (r &Repl) is_function_call(line string) bool {
 // to a sequence of V source code lines
 fn (r &Repl) import_to_source_code() []string {
 	mut imports_line := []string{}
-	for mod in r.modules {
+	for mod, value in r.modules {
 		mut import_str := 'import ${mod}'
 		if mod in r.alias {
 			import_str += ' as ${r.alias[mod]}'
+		}
+		if value.len > 0 {
+			import_str += '{ '
+			for val in value {
+				import_str += '${val}, '
+			}
+			import_str += '}'
 		}
 		imports_line << endline_if_missed(import_str)
 	}
@@ -189,8 +243,7 @@ fn (r &Repl) import_to_source_code() []string {
 }
 
 fn (r &Repl) current_source_code(should_add_temp_lines bool, not_add_print bool) string {
-	mut all_lines := []string{}
-	all_lines.insert(0, r.import_to_source_code())
+	mut all_lines := r.import_to_source_code()
 
 	if vstartup != '' {
 		mut lines := []string{}
@@ -202,9 +255,80 @@ fn (r &Repl) current_source_code(should_add_temp_lines bool, not_add_print bool)
 		all_lines << lines
 	}
 	all_lines << r.includes
+	all_lines << r.types
+	all_lines << r.enums
+	all_lines << r.consts
+	all_lines << r.structs
+	all_lines << r.interfaces
+	all_lines << r.functions
+	all_lines << r.exec_lines
+
+	if should_add_temp_lines {
+		all_lines << r.temp_lines
+	}
+	return all_lines.join('\n')
+}
+
+fn (r &Repl) insert_source_code(typ DeclType, lines []string) string {
+	mut all_lines := r.import_to_source_code()
+
+	if vstartup != '' {
+		all_lines << r.vstartup_lines.filter(!it.starts_with('print'))
+	}
+	all_lines << r.includes
+	if typ == .include {
+		all_lines << lines
+	}
+	all_lines << r.types
+	if typ == .type {
+		all_lines << lines
+	}
+	all_lines << r.enums
+	if typ == .enum {
+		all_lines << lines
+	}
+	all_lines << r.consts
+	if typ == .const {
+		all_lines << lines
+	}
+	all_lines << r.structs
+	if typ == .struct {
+		all_lines << lines
+	}
+	all_lines << r.interfaces
+	if typ == .interface {
+		all_lines << lines
+	}
+	all_lines << r.functions
+	if typ == .fn {
+		all_lines << lines
+	}
+	all_lines << r.exec_lines
+	if typ == .stmt {
+		all_lines << lines
+	}
+	return all_lines.join('\n')
+}
+
+fn (r &Repl) current_display_source_code(should_add_temp_lines bool, not_add_print bool) string {
+	mut all_lines := r.import_to_source_code()
+	if vstartup != '' {
+		mut lines := []string{}
+		if !not_add_print {
+			lines = r.vstartup_lines.filter(!it.starts_with('print'))
+		} else {
+			lines = r.vstartup_lines.clone()
+		}
+		all_lines << lines
+	}
+	all_lines << r.includes
+	all_lines << r.types
+	all_lines << r.enums
+	all_lines << r.consts
+	all_lines << r.structs
+	all_lines << r.interfaces
 	all_lines << r.functions
 	all_lines << r.lines
-
 	if should_add_temp_lines {
 		all_lines << r.temp_lines
 	}
@@ -221,9 +345,12 @@ fn (r &Repl) check_fn_type_kind(new_line string) FnType {
 	defer {
 		os.rm(check_file) or {}
 	}
-	// -w suppresses the unused import warnings
-	// -check just does syntax and checker analysis without generating/running code
-	os_response := os.execute('${os.quoted_path(vexe)} -w -check ${os.quoted_path(check_file)}')
+	// Default module caching keeps repeated REPL checks responsive by reusing cached modules.
+	// -w suppresses warnings from this synthetic println probe.
+	// -check just does syntax and checker analysis without generating/running code.
+	os_response := execute_repl_v_command(vexe, ['-w', '-check', check_file]) or {
+		return FnType.none
+	}
 	str_response := convert_output(os_response.output)
 	if os_response.exit_code != 0 && str_response.contains('can not print void expressions') {
 		return FnType.void
@@ -240,15 +367,26 @@ fn (mut r Repl) parse_import(line string) {
 	tokens := r.line.fields()
 	// module name
 	mod := tokens[1]
-	if mod !in r.modules {
-		r.modules << mod
-	}
-	// Check if the import contains an alias
-	// import mod_name as alias_mod
+	// set alias
 	if line.contains('as ') && tokens.len >= 4 {
 		alias := tokens[3]
 		if mod !in r.alias {
 			r.alias[mod] = alias
+		}
+	}
+
+	// set value
+	if line.contains('{') && line.contains('}') {
+		if mod !in r.modules {
+			r.modules[mod] = []string{}
+		}
+		values := line.split('{')[1].split('}')[0]
+		for value in values.split(',') {
+			r.modules[mod] << value
+		}
+	} else {
+		if mod !in r.modules {
+			r.modules[mod] = []string{}
 		}
 	}
 }
@@ -261,7 +399,7 @@ fn (mut r Repl) pin() {
 
 // print source code
 fn (mut r Repl) list_source() {
-	source_code := r.current_source_code(true, true)
+	source_code := r.current_display_source_code(true, true)
 	println('\n${source_code.replace('\n\n', '\n')}')
 }
 
@@ -274,6 +412,9 @@ fn highlight_repl_command(command string) string {
 }
 
 fn print_welcome_screen() {
+	if vquiet {
+		return
+	}
 	cmd_exit := highlight_repl_command('exit')
 	cmd_list := highlight_repl_command('list')
 	cmd_help := highlight_repl_command('help')
@@ -316,7 +457,372 @@ fn print_welcome_screen() {
 	}
 }
 
+fn remove_comment(oline string) string {
+	mut inside_string := false
+	mut escaped := false
+	mut maybe_comment := false
+
+	mut string_delim := 0
+
+	mut i := 0
+	for i < oline.len {
+		match oline[i] {
+			`"`, `'` {
+				if !escaped {
+					if inside_string && string_delim == oline[i] {
+						inside_string = false
+					} else if !inside_string {
+						inside_string = true
+						maybe_comment = false
+						string_delim = oline[i]
+					}
+				} else {
+					escaped = false
+				}
+			}
+			`\\` {
+				if inside_string {
+					escaped = !escaped
+				}
+			}
+			`/` {
+				if maybe_comment {
+					i--
+					break
+				} else if !inside_string {
+					maybe_comment = true
+				}
+			}
+			else {
+				escaped = false
+				maybe_comment = false
+			}
+		}
+
+		i++
+	}
+
+	return oline[..i]
+}
+
+fn is_repl_ident_start(ch u8) bool {
+	return (`a` <= ch && ch <= `z`) || (`A` <= ch && ch <= `Z`) || ch == `_`
+}
+
+fn is_repl_ident_char(ch u8) bool {
+	return is_repl_ident_start(ch) || (`0` <= ch && ch <= `9`)
+}
+
+fn is_repl_ident(name string) bool {
+	if name.len == 0 || !is_repl_ident_start(name[0]) {
+		return false
+	}
+	for i := 1; i < name.len; i++ {
+		if !is_repl_ident_char(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+fn find_assignment_operator(line string) (int, string) {
+	mut inside_string := false
+	mut escaped := false
+	mut string_delim := u8(0)
+	for i := 0; i < line.len; i++ {
+		match line[i] {
+			`"`, `'` {
+				if !escaped {
+					if inside_string && string_delim == line[i] {
+						inside_string = false
+					} else if !inside_string {
+						inside_string = true
+						string_delim = line[i]
+					}
+				} else {
+					escaped = false
+				}
+			}
+			`\\` {
+				if inside_string {
+					escaped = !escaped
+				} else {
+					escaped = false
+				}
+			}
+			`:` {
+				if !inside_string && i + 1 < line.len && line[i + 1] == `=` {
+					return i, ':='
+				}
+				escaped = false
+			}
+			`=` {
+				prev_is_assignment_op := i > 0
+					&& line[i - 1] in [`!`, `<`, `>`, `=`, `:`, `+`, `-`, `*`, `/`, `%`, `&`, `|`,
+						`^`]
+				next_is_assignment_op := i + 1 < line.len && line[i + 1] == `=`
+				if !inside_string && !prev_is_assignment_op && !next_is_assignment_op {
+					return i, '='
+				}
+				escaped = false
+			}
+			else {
+				escaped = false
+			}
+		}
+	}
+	return -1, ''
+}
+
+fn parse_simple_assignment(line string) ?SnapshotAssignment {
+	idx, op := find_assignment_operator(line)
+	if idx < 1 {
+		return none
+	}
+	rhs_idx := idx + op.len
+	if rhs_idx >= line.len || line[rhs_idx..].trim_space().len == 0 {
+		return none
+	}
+	lhs := line[..idx].trim_space()
+	if lhs.len == 0 {
+		return none
+	}
+	mut name := lhs
+	if lhs.starts_with('mut ') {
+		name = lhs[4..].trim_space()
+	}
+	if name.len == 0 || name.contains_any(',.[({}: ') || !is_repl_ident(name) {
+		return none
+	}
+	return SnapshotAssignment{
+		lhs:  lhs
+		name: name
+		op:   op
+	}
+}
+
+fn repl_string_literal(s string) string {
+	escaped := s.replace_each(['\\', '\\\\', "'", "\\'", '\n', '\\n', '\r', '\\r', '\t', '\\t'])
+	return "'${escaped}'"
+}
+
+const vrepl_i64_max = '9223372036854775807'
+const vrepl_u64_max = '18446744073709551615'
+const vrepl_u128_max = '340282366920938463463374607431768211455'
+
+// decimal_within reports whether a positive decimal number fits under `max`. The lengths are
+// compared first, so a 39-digit literal never has to be parsed.
+fn decimal_within(value string, max string) bool {
+	if value.len != max.len {
+		return value.len < max.len
+	}
+	return value <= max
+}
+
+// repl_digit_of_base reports whether a character can appear in a literal of that base.
+fn repl_digit_of_base(c u8, base int) bool {
+	return match base {
+		2 { c == `0` || c == `1` }
+		8 { c >= `0` && c <= `7` }
+		16 { (c >= `0` && c <= `9`) || (c >= `a` && c <= `f`) || (c >= `A` && c <= `F`) }
+		else { c >= `0` && c <= `9` }
+	}
+}
+
+// repl_literal_is_negated reports whether the literal at `start` has a minus in front of it.
+fn repl_literal_is_negated(line string, start int) bool {
+	mut k := start - 1
+	for k >= 0 && line[k] == ` ` {
+		k--
+	}
+	return k >= 0 && line[k] == `-`
+}
+
+// repl_literal_carries_its_type reports whether the literal is already the argument of a
+// conversion, since the type that conversion names is the one that governs.
+fn repl_literal_carries_its_type(line string, start int) bool {
+	names := ['u8', 'u16', 'u32', 'u64', 'u128', 'i8', 'i16', 'i32', 'i64', 'i128', 'int', 'uint',
+		'usize', 'isize', 'rune', 'char', 'f32', 'f64']
+	mut k := start - 1
+	for k >= 0 && line[k] == ` ` {
+		k--
+	}
+	if k < 0 || line[k] != `(` {
+		return false
+	}
+	mut b := k
+	for b > 0 && is_repl_ident_char(line[b - 1]) {
+		b--
+	}
+	return b < k && line[b..k] in names
+}
+
+// widen_oversized_literals gives an integer literal beyond `int`'s range the narrowest type
+// that holds it. A bare integer literal is typed `int`, so the REPL either refuses a value a
+// user typed only to look at, or, under `-repl run`, keeps its low bits and prints a
+// different number. The REPL compiles a program it wrote itself, so it can name the type.
+fn widen_oversized_literals(line string) string {
+	mut out := []u8{}
+	mut i := 0
+	for i < line.len {
+		ch := line[i]
+		if ch == `'` || ch == `"` {
+			out << ch
+			i++
+			for i < line.len {
+				out << line[i]
+				if line[i] == `\\` && i + 1 < line.len {
+					out << line[i + 1]
+					i += 2
+					continue
+				}
+				if line[i] == ch {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if ch == `/` && i + 1 < line.len && line[i + 1] == `/` {
+			out << line[i..].bytes()
+			break
+		}
+		if !(ch >= `0` && ch <= `9`) || (i > 0 && is_repl_ident_char(line[i - 1])) {
+			out << ch
+			i++
+			continue
+		}
+		mut base := 10
+		mut j := i
+		if ch == `0` && i + 1 < line.len
+			&& (line[i + 1] == `x` || line[i + 1] == `X` || line[i + 1] == `b` || line[i + 1] == `B`
+				|| line[i + 1] == `o` || line[i + 1] == `O`) {
+			base = if line[i + 1] == `x` || line[i + 1] == `X` {
+				16
+			} else if line[i + 1] == `b` || line[i + 1] == `B` {
+				2
+			} else {
+				8
+			}
+			j = i + 2
+		}
+		for j < line.len && (line[j] == `_` || repl_digit_of_base(line[j], base)) {
+			j++
+		}
+		digits := line[i..j].replace('_', '').trim_left('0')
+		mut typ := ''
+		part_of_a_bigger_token := j < line.len && (is_repl_ident_char(line[j])
+			|| (line[j] == `.` && j + 1 < line.len && line[j + 1] >= `0` && line[j + 1] <= `9`))
+		if !part_of_a_bigger_token && !repl_literal_carries_its_type(line, i) {
+			n := digits.len
+			negated := repl_literal_is_negated(line, i)
+			if base == 10 {
+				if !decimal_within(digits, vrepl_i64_max) {
+					if decimal_within(digits, vrepl_u64_max) {
+						typ = if negated { 'i128' } else { 'u64' }
+					} else if decimal_within(digits, vrepl_u128_max) {
+						typ = if negated { 'i128' } else { 'u128' }
+					}
+				}
+			} else if base == 16 {
+				if n == 16 && digits[0] > `7` {
+					typ = if negated { 'i128' } else { 'u64' }
+				} else if n > 16 && n <= 32 {
+					typ = if negated { 'i128' } else { 'u128' }
+				}
+			} else if base == 2 {
+				if n == 64 && digits[0] == `1` {
+					typ = if negated { 'i128' } else { 'u64' }
+				} else if n > 64 && n <= 128 {
+					typ = if negated { 'i128' } else { 'u128' }
+				}
+			} else {
+				if n > 21 && n <= 42 {
+					typ = if negated { 'i128' } else { 'u128' }
+				}
+			}
+		}
+		if typ.len == 0 {
+			out << line[i..j].bytes()
+		} else {
+			out << typ.bytes()
+			out << `(`
+			out << line[i..j].bytes()
+			out << `)`
+		}
+		i = j
+	}
+	return out.bytestr()
+}
+
+fn (mut r Repl) add_statement_line(display_line string, exec_line string) {
+	r.lines << display_line
+	r.exec_lines << exec_line
+}
+
+fn (mut r Repl) add_statement_lines(lines []string) {
+	r.lines << lines
+	r.exec_lines << lines
+}
+
+// Snapshot time.Time assignments so rerunning the accumulated source
+// keeps the original timestamp instead of calling time.now() again.
+fn (r &Repl) capture_time_snapshot(source_code string, assignment SnapshotAssignment) ?TimeSnapshot {
+	marker := '__vrepl_time_snapshot__${rand.ulid()}'
+	mut probe_source := source_code
+	probe_source += "\nprintln(${repl_string_literal(marker)} + '\\t' + typeof(${assignment.name}).name + '\\t' + ${assignment.name}.unix().str() + '\\t' + ${assignment.name}.nanosecond.str() + '\\t' + ${assignment.name}.is_local.str())\n"
+	probe_file := os.join_path(r.folder, '${rand.ulid()}.vrepl.time_snapshot.v')
+	os.write_file(probe_file, probe_source) or { return none }
+	defer {
+		os.rm(probe_file) or {}
+	}
+	result := repl_run_vfile(probe_file) or { return none }
+	if result.exit_code != 0 {
+		return none
+	}
+	lines := convert_output(result.output).trim_right('\n\r').split_into_lines()
+	prefix := '${marker}\t'
+	for i := lines.len - 1; i >= 0; i-- {
+		if !lines[i].starts_with(prefix) {
+			continue
+		}
+		parts := lines[i][prefix.len..].split('\t')
+		if parts.len != 4 || parts[0] != 'time.Time' {
+			return none
+		}
+		return TimeSnapshot{
+			unix:       parts[1].i64()
+			nanosecond: parts[2].int()
+			is_local:   parts[3] == 'true'
+		}
+	}
+	return none
+}
+
+fn snapshot_time_expr(snapshot TimeSnapshot) string {
+	base := 'time.unix_nanosecond(${snapshot.unix}, ${snapshot.nanosecond})'
+	if snapshot.is_local {
+		return base + '.as_local()'
+	}
+	return base + '.as_utc()'
+}
+
+fn (r &Repl) snapshot_assignment_line(source_code string, line string) string {
+	assignment := parse_simple_assignment(line) or { return line }
+	snapshot := r.capture_time_snapshot(source_code, assignment) or { return line }
+	return '${assignment.lhs} ${assignment.op} ${snapshot_time_expr(snapshot)}'
+}
+
 fn run_repl(workdir string, vrepl_prefix string) int {
+	os.mkdir_all(workdir) or {
+		rerror('Could not create the REPL working folder `${workdir}`: ${err}')
+		return 1
+	}
+	os.chdir(workdir) or {
+		rerror('Could not change the REPL working folder to `${workdir}`: ${err}')
+		return 1
+	}
 	if !is_stdin_a_pipe {
 		print_welcome_screen()
 	}
@@ -339,33 +845,26 @@ fn run_repl(workdir string, vrepl_prefix string) int {
 		cleanup_files(temp_file)
 	}
 	mut r := new_repl(workdir)
+
 	for {
 		if r.indent == 0 {
 			prompt = '>>> '
 		} else {
 			prompt = '... '
 		}
+
 		oline := r.get_one_line(prompt) or { break }
-		line := oline.trim_space()
-		if line == '' && oline.ends_with('\n') {
+		// `oline` stays as typed, for the two-space escape and the echo; the widened line is
+		// what the REPL writes into the program it compiles.
+		line := widen_oversized_literals(remove_comment(oline).trim_space())
+
+		if line == '' {
 			continue
 		}
 		if line.len <= -1 || line == 'exit' {
 			break
 		}
-		if exit_pos := line.index('exit') {
-			oparen := line[(exit_pos + 4)..].trim_space()
-			if oparen.starts_with('(') {
-				if closing := oparen.index(')') {
-					rc := oparen[1..closing].parse_int(0, 8) or { panic(err) }
-					return int(rc)
-				}
-			}
-		}
 		r.line = line
-		if r.line == '\n' {
-			continue
-		}
 		if r.line == 'clear' {
 			term.erase_clear()
 			continue
@@ -384,18 +883,35 @@ fn run_repl(workdir string, vrepl_prefix string) int {
 			r.in_func = true
 			r.functions_name << r.line.all_before(':= fn(').trim_space()
 		}
-		if r.line.starts_with('fn') {
+
+		starts_with_fn := starts_with_type_decl(r.line, 'fn')
+		if starts_with_fn {
 			r.in_func = true
 			r.functions_name << r.line.all_after('fn').all_before('(').trim_space()
 		}
 		was_func := r.in_func
+
+		starts_with_struct := starts_with_type_decl(r.line, 'struct')
+		if starts_with_struct {
+			r.in_struct = true
+		}
+		was_struct := r.in_struct
+
+		starts_with_enum := starts_with_type_decl(r.line, 'enum')
+		if starts_with_enum {
+			r.in_enum = true
+		}
+		was_enum := r.in_enum
+
+		starts_with_interface := starts_with_type_decl(r.line, 'interface')
+		if starts_with_interface {
+			r.in_interface = true
+		}
+		was_interface := r.in_interface
+
 		if r.checks() {
 			for rline in r.line.split('\n') {
-				if r.in_func || was_func {
-					r.functions << rline
-				} else {
-					r.temp_lines << rline
-				}
+				r.temp_lines << rline
 			}
 			if r.indent > 0 {
 				continue
@@ -422,25 +938,37 @@ fn run_repl(workdir string, vrepl_prefix string) int {
 			}
 			continue
 		}
-		// Save the source only if the user is printing something,
-		// but don't add this print call to the `lines` array,
-		// so that it doesn't get called during the next print.
 		if r.line.starts_with('=') {
 			r.line = 'println(' + r.line[1..] + ')'
 		}
-		if r.line.starts_with('print') {
+		if r.line.starts_with('print(') || r.line.starts_with('println(') {
+			// >>> println('hello')
 			source_code := r.current_source_code(false, false) + '\n${r.line}\n'
 			os.write_file(temp_file, source_code) or { panic(err) }
 			s := repl_run_vfile(temp_file) or { return 1 }
 			if s.output.len > r.last_output.len {
 				cur_line_output := s.output[r.last_output.len..]
 				print_output(cur_line_output)
+				if s.exit_code == 0 && !cur_line_output.contains('warning:') {
+					r.last_output = s.output.clone()
+					r.add_statement_line(r.line, r.line)
+				}
+			}
+		} else if r.line.contains('os.input(') {
+			// >>> s := os.input('name: ')
+			prompt_str := r.line.all_after('os.input(').all_before(')').trim('\'"')
+			line_t := r.get_one_line(prompt_str) or { break }.trim_right('\n')
+			trans_line := r.line.all_before('os.input(') + "'${line_t}'"
+			source_code := r.current_source_code(false, false) + '\n${trans_line}\n'
+			os.write_file(temp_file, source_code) or { panic(err) }
+			s := repl_run_vfile(temp_file) or { return 1 }
+			if s.exit_code == 0 {
+				r.add_statement_line(trans_line, trans_line)
 			}
 		} else {
-			mut temp_line := r.line
 			func_call, fntype := r.function_call(r.line)
-			filter_line := r.line.replace(r.line.find_between("'", "'"), '').replace(r.line.find_between('"',
-				'"'), '')
+			filter_line :=
+				r.line.replace(r.line.find_between("'", "'"), '').replace(r.line.find_between('"', '"'), '')
 			mut is_statement := false
 			if filter_line.count('=') % 2 == 1
 				&& (filter_line.count('!=') + filter_line.count('>=') + filter_line.count('<=')) == 0 {
@@ -457,45 +985,124 @@ fn run_repl(workdir string, vrepl_prefix string) int {
 			if oline.starts_with('  ') {
 				is_statement = true
 			}
+			// The parentheses do not match
+			if r.line.count('(') != r.line.count(')') {
+				is_statement = true
+			}
+
 			if !is_statement && (!func_call || fntype == FnType.fn_type) && r.line != '' {
-				temp_line = 'println(${r.line})'
-				source_code := r.current_source_code(false, false) + '\n${temp_line}\n'
+				print_line := 'println(${r.line})'
+				source_code := r.current_source_code(false, false) + '\n${print_line}\n'
 				os.write_file(temp_file, source_code) or { panic(err) }
 				s := repl_run_vfile(temp_file) or { return 1 }
-				if s.output.len > r.last_output.len {
-					cur_line_output := s.output[r.last_output.len..]
-					print_output(cur_line_output)
+				if s.exit_code == 0 {
+					if s.output.len > r.last_output.len {
+						cur_line_output := s.output[r.last_output.len..]
+						print_output(cur_line_output)
+						if !cur_line_output.contains('warning:') {
+							r.last_output = s.output.clone()
+							r.add_statement_line(print_line, print_line)
+						}
+					}
+					continue
+				} else {
+					if s.output.len > r.last_output.len {
+						cur_line_output := s.output[r.last_output.len..]
+						if cur_line_output.contains('undefined ident:') {
+							print_output(cur_line_output)
+							continue
+						}
+					}
 				}
-				continue
 			}
+
+			starts_with_const := starts_with_type_decl(r.line, 'const')
+			starts_with_type := starts_with_type_decl(r.line, 'type')
+			starts_with_import := r.line.starts_with('import ') || r.line.starts_with('import\t')
+			starts_with_include := r.line.starts_with('#include ')
+				|| r.line.starts_with('#include\t')
 			mut temp_source_code := ''
-			if temp_line.starts_with('import ') {
+
+			if starts_with_import {
 				mod := r.line.fields()[1]
 				if mod !in r.modules {
-					temp_source_code = '${temp_line}\n' + r.current_source_code(false, true)
+					temp_source_code = '${r.line}\n' + r.current_source_code(false, true)
 				}
-			} else if temp_line.starts_with('#include ') {
-				temp_source_code = '${temp_line}\n' + r.current_source_code(false, false)
+			} else if r.line.len == 0 {
+				if was_func {
+					temp_source_code = r.insert_source_code(DeclType.fn, r.temp_lines)
+				} else if was_struct {
+					temp_source_code = r.insert_source_code(DeclType.struct, r.temp_lines)
+				} else if was_enum {
+					temp_source_code = r.insert_source_code(DeclType.enum, r.temp_lines)
+				} else if was_interface {
+					temp_source_code = r.insert_source_code(DeclType.interface, r.temp_lines)
+				} else {
+					temp_source_code = r.insert_source_code(DeclType.stmt, r.temp_lines)
+				}
+			} else if starts_with_include {
+				temp_source_code = r.insert_source_code(DeclType.include, [r.line])
+			} else if starts_with_fn {
+				temp_source_code = r.insert_source_code(DeclType.fn, [r.line])
+			} else if starts_with_const {
+				temp_source_code = r.insert_source_code(DeclType.const, [r.line])
+			} else if starts_with_enum {
+				temp_source_code = r.insert_source_code(DeclType.enum, [r.line])
+			} else if starts_with_struct {
+				temp_source_code = r.insert_source_code(DeclType.struct, [r.line])
+			} else if starts_with_interface {
+				temp_source_code = r.insert_source_code(DeclType.interface, [r.line])
+			} else if starts_with_type {
+				temp_source_code = r.insert_source_code(DeclType.type, [r.line])
 			} else {
-				temp_source_code = r.current_source_code(true, false) + '\n${temp_line}\n'
+				temp_source_code = r.current_source_code(true, false) + '\n${r.line}\n'
 			}
 			os.write_file(temp_file, temp_source_code) or { panic(err) }
-			s := repl_run_vfile(temp_file) or { return 1 }
-			if s.exit_code == 0 {
-				r.lines << r.temp_lines
-				r.temp_lines.clear()
-				if r.line.starts_with('import ') {
-					r.parse_import(r.line)
-				} else if r.line.starts_with('#include ') {
-					r.includes << r.line
-				} else {
-					r.lines << r.line
-				}
+			check_only := starts_with_import || starts_with_include || starts_with_fn
+				|| starts_with_const || starts_with_enum || starts_with_struct
+				|| starts_with_interface || starts_with_type
+				|| (r.line.len == 0 && (was_func || was_struct || was_enum || was_interface))
+			mut s := os.Result{}
+			if check_only {
+				s = repl_check_vfile(temp_file) or { return 1 }
 			} else {
-				for r.temp_lines.len > 0 {
-					r.temp_lines.delete(0)
+				s = repl_run_vfile(temp_file) or { return 1 }
+			}
+			if s.exit_code == 0 {
+				if starts_with_import {
+					r.parse_import(r.line)
+				} else if r.line.len == 0 {
+					if was_func {
+						r.functions << r.temp_lines
+					} else if was_struct {
+						r.structs << r.temp_lines
+					} else if was_enum {
+						r.enums << r.temp_lines
+					} else if was_interface {
+						r.interfaces << r.temp_lines
+					} else {
+						r.add_statement_lines(r.temp_lines)
+					}
+				} else if starts_with_include {
+					r.includes << r.line
+				} else if starts_with_fn {
+					r.functions << r.line
+				} else if starts_with_const {
+					r.consts << r.line
+				} else if starts_with_enum {
+					r.enums << r.line
+				} else if starts_with_type {
+					r.types << r.line
+				} else if starts_with_struct {
+					r.structs << r.line
+				} else if starts_with_interface {
+					r.interfaces << r.line
+				} else {
+					exec_line := r.snapshot_assignment_line(temp_source_code, r.line)
+					r.add_statement_line(r.line, exec_line)
 				}
 			}
+			r.temp_lines.clear()
 			if r.is_pin {
 				r.pin()
 				println('')
@@ -586,11 +1193,46 @@ fn cleanup_files(file string) {
 	}
 }
 
+fn execute_repl_v_command(v_path string, args []string) !os.Result {
+	$if windows {
+		mut process := os.new_process(v_path)
+		process.set_args(args)
+		process.set_redirect_stdio()
+		process.create_no_window = true
+		process.wait()
+		stdout_output := process.stdout_slurp()
+		stderr_output := process.stderr_slurp()
+		exit_code := process.code
+		process.close()
+		return os.Result{
+			exit_code: exit_code
+			output:    stdout_output + stderr_output
+		}
+	} $else {
+		return os.exec([v_path, ...args])
+	}
+}
+
 fn repl_run_vfile(file string) !os.Result {
 	$if trace_repl_temp_files ? {
 		eprintln('>> repl_run_vfile file: ${file}')
 	}
-	s := os.execute('${os.quoted_path(vexe)} -message-limit 1 -repl run ${os.quoted_path(file)}')
+	s := execute_repl_v_command(vexe, ['-message-limit', '1', '-repl', 'run', file])!
+	if s.exit_code < 0 {
+		rerror(s.output)
+		return error(s.output)
+	}
+	return s
+}
+
+fn repl_check_vfile(file string) !os.Result {
+	$if trace_repl_temp_files ? {
+		eprintln('>> repl_check_vfile file: ${file}')
+	}
+	// Declaration-only REPL lines do not need code generation or execution.
+	// Cached checks keep repeated imports and definitions responsive.
+	s :=
+		execute_repl_v_command(vexe, ['-message-limit', '1', '-repl', '-check', file])!
 	if s.exit_code < 0 {
 		rerror(s.output)
 		return error(s.output)

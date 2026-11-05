@@ -1,3 +1,4 @@
+// vtest build: !solaris
 import sokol.sapp
 import sokol.gfx
 import sokol.sgl
@@ -12,18 +13,17 @@ fn main() {
 	}
 	title := 'Sokol Drawing Template'
 	desc := sapp.Desc{
-		width: 640
-		height: 480
-		user_data: state
-		init_userdata_cb: init
+		width:             640
+		height:            480
+		user_data:         state
+		init_userdata_cb:  init
 		frame_userdata_cb: frame
-		window_title: title.str
-		html5_canvas_name: title.str
+		window_title:      &char(title.str)
 	}
 	sapp.run(&desc)
 }
 
-fn init(user_data voidptr) {
+fn init(_user_data voidptr) {
 	desc := sapp.create_desc() // gfx.Desc{
 	gfx.setup(&desc)
 	sgl_desc := sgl.Desc{}

@@ -5,6 +5,11 @@ module os
 
 import strings
 
+// Eof error means that we reach the end of the file.
+pub struct Eof {
+	Error
+}
+
 pub const max_path_len = 4096
 
 pub const wd_at_startup = getwd()
@@ -17,22 +22,13 @@ const w_ok = 2
 
 const r_ok = 4
 
+const read_lines_chunk_size = 128 * 1024
+
 pub struct Result {
 pub:
 	exit_code int
 	output    string
 	// stderr string // TODO
-}
-
-pub struct Command {
-mut:
-	f voidptr
-pub mut:
-	eof       bool
-	exit_code int
-pub:
-	path            string
-	redirect_stdout bool
 }
 
 @[unsafe]
@@ -55,10 +51,10 @@ fn executable_fallback() string {
 		}
 	}
 	if !is_abs_path(exepath) {
-		other_separator := if path_separator == '/' { '\\' } else { '/' }
+		other_separator := $if windows { '/' } $else { '\\' }
 		rexepath := exepath.replace(other_separator, path_separator)
 		if rexepath.contains(path_separator) {
-			exepath = join_path_single(os.wd_at_startup, exepath)
+			exepath = join_path_single(wd_at_startup, exepath)
 		} else {
 			// no choice but to try to walk the PATH folders :-| ...
 			foundpath := find_abs_path_of_executable(exepath) or { '' }
@@ -71,8 +67,7 @@ fn executable_fallback() string {
 	return exepath
 }
 
-// cp_all will recursively copy `src` to `dst`,
-// optionally overwriting files or dirs in `dst`.
+// cp_all will recursively copy `src` to `dst`, optionally overwriting files or dirs in `dst`.
 pub fn cp_all(src string, dst string, overwrite bool) ! {
 	source_path := real_path(src)
 	dest_path := real_path(dst)
@@ -148,10 +143,61 @@ pub fn mv(source string, target string, opts MvParams) ! {
 // read_lines reads the file in `path` into an array of lines.
 @[manualfree]
 pub fn read_lines(path string) ![]string {
-	buf := read_file(path)!
-	res := buf.split_into_lines()
-	unsafe { buf.free() }
-	return res
+	mut file := open(path)!
+	defer {
+		file.close()
+	}
+	return read_lines_from_open_file(mut file)
+}
+
+@[manualfree]
+fn read_lines_from_open_file(mut file File) ![]string {
+	mut buf := []u8{len: read_lines_chunk_size}
+	mut lines := []string{}
+	mut line := strings.new_builder(read_lines_chunk_size)
+	mut pending_cr := false
+	for {
+		nread := file.read(mut buf) or {
+			if err is Eof {
+				break
+			}
+			unsafe {
+				line.free()
+				lines.free()
+			}
+			return err
+		}
+		if nread <= 0 {
+			break
+		}
+		mut segment_start := 0
+		for i := 0; i < nread; i++ {
+			c := buf[i]
+			if pending_cr {
+				pending_cr = false
+				if c == `\n` {
+					segment_start = i + 1
+					continue
+				}
+			}
+			if c == `\n` || c == `\r` {
+				if i > segment_start {
+					line << buf[segment_start..i]
+				}
+				lines << line.str()
+				segment_start = i + 1
+				pending_cr = c == `\r`
+			}
+		}
+		if segment_start < nread {
+			line << buf[segment_start..nread]
+		}
+	}
+	if line.len > 0 {
+		lines << line.str()
+	}
+	unsafe { line.free() }
+	return lines
 }
 
 // write_lines writes the given array of `lines` to `path`.
@@ -183,6 +229,7 @@ pub fn sigint_to_signal_name(si int) string {
 		15 { return 'SIGTERM' }
 		else {}
 	}
+
 	$if linux {
 		// From `man 7 signal` on linux:
 		match si {
@@ -226,20 +273,45 @@ pub fn sigint_to_signal_name(si int) string {
 }
 
 // rmdir_all recursively removes the specified directory.
+// It continues after deletion errors and returns the first error's message and code.
 pub fn rmdir_all(path string) ! {
-	mut ret_err := ''
 	items := ls(path)!
+	// Report the first failure, not the last. The last is almost always the
+	// closing `rmdir(path)` on Windows, which fails with ERROR_DIR_NOT_EMPTY
+	// once any deletion above it was refused, and that message names neither
+	// the file that failed nor the reason.
+	mut failed := false
+	mut first_msg := ''
+	mut first_code := -1
 	for item in items {
 		fullpath := join_path_single(path, item)
 		if is_dir(fullpath) && !is_link(fullpath) {
-			rmdir_all(fullpath) or { ret_err = err.msg() }
+			rmdir_all(fullpath) or {
+				if !failed {
+					failed = true
+					first_msg = err.msg()
+					first_code = err.code()
+				}
+			}
 		} else {
-			rm(fullpath) or { ret_err = err.msg() }
+			rm(fullpath) or {
+				if !failed {
+					failed = true
+					first_msg = err.msg()
+					first_code = err.code()
+				}
+			}
 		}
 	}
-	rmdir(path) or { ret_err = err.msg() }
-	if ret_err.len > 0 {
-		return error(ret_err)
+	rmdir(path) or {
+		if !failed {
+			failed = true
+			first_msg = err.msg()
+			first_code = err.code()
+		}
+	}
+	if failed {
+		return error_with_code(first_msg, first_code)
 	}
 }
 
@@ -276,20 +348,48 @@ pub fn file_ext(opath string) string {
 	return path[pos..]
 }
 
+// backslash_separates returns true when `\` separates the elements of `path`, as `/` always does.
+// On Windows it does, so a path may mix both separators. On other systems `\` is a valid file
+// name character, and it separates only in a path that has no `/` at all, so that a Windows
+// style path like `v\vlib\os` is split in the same way on every system.
+fn backslash_separates(path string) bool {
+	$if windows {
+		return true
+	}
+	return !path.contains_u8(fslash)
+}
+
+// last_separator_index returns the index of the last path separator in `path[..end]`, or -1
+// when it has none. The last element of the path starts right after it. `/` is always a
+// separator, `\` is one when `bslash_separates` is true (see backslash_separates).
+@[direct_array_access]
+fn last_separator_index(path string, end int, bslash_separates bool) int {
+	for i := end - 1; i >= 0; i-- {
+		c := path[i]
+		if c == fslash || (bslash_separates && c == bslash) {
+			return i
+		}
+	}
+	return -1
+}
+
 // dir returns all but the last element of path, typically the path's directory.
 // After dropping the final element, trailing slashes are removed.
 // If the path is empty, dir returns ".". If the path consists entirely of separators,
 // dir returns a single separator.
 // The returned path does not end in a separator unless it is the root directory.
-pub fn dir(opath string) string {
-	if opath == '' {
+// On Windows both `/` and `\` separate path elements. On other systems `\` does so only in
+// a path that has no `/`.
+pub fn dir(path string) string {
+	if path == '' {
 		return '.'
 	}
-	other_separator := if path_separator == '/' { '\\' } else { '/' }
-	path := opath.replace(other_separator, path_separator)
-	pos := path.last_index(path_separator) or { return '.' }
-	if pos == 0 && path_separator == '/' {
-		return '/'
+	pos := last_separator_index(path, path.len, backslash_separates(path))
+	if pos == -1 {
+		return '.'
+	}
+	if pos == 0 {
+		return path[..1]
 	}
 	return path[..pos]
 }
@@ -298,30 +398,64 @@ pub fn dir(opath string) string {
 // Trailing path separators are removed before extracting the last element.
 // If the path is empty, base returns ".". If the path consists entirely of separators, base returns a
 // single separator.
-pub fn base(opath string) string {
-	if opath == '' {
+// On Windows both `/` and `\` separate path elements. On other systems `\` does so only in
+// a path that has no `/`.
+pub fn base(path string) string {
+	if path == '' {
 		return '.'
 	}
-	other_separator := if path_separator == '/' { '\\' } else { '/' }
-	path := opath.replace(other_separator, path_separator)
-	if path == path_separator {
-		return path_separator
+	bslash_separates := backslash_separates(path)
+	mut end := path.len
+	for end > 0 && (path[end - 1] == fslash || (bslash_separates && path[end - 1] == bslash)) {
+		end--
 	}
-	if path.ends_with(path_separator) {
-		path2 := path[..path.len - 1]
-		pos := path2.last_index(path_separator) or { return path2.clone() }
-		return path2[pos + 1..]
+	if end == 0 {
+		return path[..1]
 	}
-	pos := path.last_index(path_separator) or { return path.clone() }
+	pos := last_separator_index(path, end, bslash_separates)
+	return path[pos + 1..end]
+}
+
+// file_name will return all characters found after the last path separator.
+// file extension is included.
+// On Windows both `/` and `\` separate path elements. On other systems `\` does so only in
+// a path that has no `/`.
+pub fn file_name(path string) string {
+	pos := last_separator_index(path, path.len, backslash_separates(path))
 	return path[pos + 1..]
 }
 
-// file_name will return all characters found after the last occurrence of `path_separator`.
-// file extension is included.
-pub fn file_name(opath string) string {
-	other_separator := if path_separator == '/' { '\\' } else { '/' }
-	path := opath.replace(other_separator, path_separator)
-	return path.all_after_last(path_separator)
+// split_path will split `path` into (`dir`,`filename`,`ext`).
+// On Windows both `/` and `\` separate path elements. On other systems `\` does so only in
+// a path that has no `/`.
+// Examples:
+// ```v
+// dir,filename,ext := os.split_path('/usr/lib/test.so')
+// assert [dir,filename,ext] == ['/usr/lib','test','.so']
+// ```
+pub fn split_path(path string) (string, string, string) {
+	if path == '' {
+		return '.', '', ''
+	} else if path == '.' {
+		return '.', '', ''
+	} else if path == '..' {
+		return '..', '', ''
+	}
+
+	pos := last_separator_index(path, path.len, backslash_separates(path))
+	mut dir_path := '.'
+	if pos == 0 {
+		dir_path = path[..1]
+	} else if pos > 0 {
+		dir_path = path[..pos]
+	}
+	// A path that ends with a separator has an empty file name.
+	fname := path[pos + 1..]
+	pos_ext := fname.last_index_u8(`.`)
+	if pos_ext == -1 || pos_ext == 0 || pos_ext + 1 >= fname.len {
+		return dir_path, fname, ''
+	}
+	return dir_path, fname[..pos_ext], fname[pos_ext..]
 }
 
 // input_opt returns a one-line string from stdin, after printing a prompt.
@@ -337,19 +471,16 @@ pub fn input_opt(prompt string) ?string {
 }
 
 // input returns a one-line string from stdin, after printing a prompt.
-// Returns `EOF` in case of an error (end of input).
+// Returns `<EOF>` in case of an error (end of input).
 pub fn input(prompt string) string {
 	res := input_opt(prompt) or { return '<EOF>' }
 	return res
 }
 
-// get_line returns a one-line string from stdin
+// get_line returns a one-line string from stdin, removing its CRLF or LF line ending.
 pub fn get_line() string {
 	str := get_raw_line()
-	$if windows {
-		return str.trim_right('\r\n')
-	}
-	return str.trim_right('\n')
+	return str.trim_right('\r\n')
 }
 
 // get_lines returns an array of strings read from stdin.
@@ -371,25 +502,14 @@ pub fn get_lines() []string {
 // get_lines_joined returns a string of the values read from stdin.
 // reading is stopped when an empty line is read.
 pub fn get_lines_joined() string {
-	mut line := ''
-	mut inputstr := ''
-	for {
-		line = get_line()
-		if line.len <= 0 {
-			break
-		}
-		line = line.trim_space()
-		inputstr += line
-	}
-	return inputstr
+	return get_lines().join('')
 }
 
-// get_raw_lines_joined reads *all* input lines from stdin.
-// It returns them as one large string. Note: unlike os.get_lines_joined,
-// empty lines (that contain only `\r\n` or `\n`), will be present in
-// the output.
+// get_raw_lines reads *all* input lines from stdin, as an array of strings.
+// Note: unlike os.get_lines, empty lines (that contain only `\r\n` or `\n`),
+// will be present in the output.
 // Reading is stopped, only on EOF of stdin.
-pub fn get_raw_lines_joined() string {
+pub fn get_raw_lines() []string {
 	mut line := ''
 	mut lines := []string{}
 	for {
@@ -399,14 +519,48 @@ pub fn get_raw_lines_joined() string {
 		}
 		lines << line
 	}
-	res := lines.join('')
-	return res
+	return lines
+}
+
+// get_raw_lines_joined reads *all* input lines from stdin.
+// It returns them as one large string. Note: unlike os.get_lines_joined,
+// empty lines (that contain only `\r\n` or `\n`), will be present in
+// the output.
+// Reading is stopped, only on EOF of stdin.
+pub fn get_raw_lines_joined() string {
+	return get_raw_lines().join('')
+}
+
+// get_trimmed_lines reads *all* input lines from stdin, as an array of strings.
+// The ending new line characters `\r` and `\n`, are removed from each line.
+// Note: unlike os.get_lines, empty lines will be present in the output as empty strings ''.
+// Reading is stopped, only on EOF of stdin.
+pub fn get_trimmed_lines() []string {
+	mut lines := []string{}
+	for {
+		mut line := get_raw_line()
+		if line.len <= 0 {
+			break
+		}
+		mut end := line.len
+		if end > 0 && line[end - 1] == `\n` {
+			end--
+		}
+		if end > 0 && line[end - 1] == `\r` {
+			end--
+		}
+		lines << line#[..end]
+	}
+	return lines
 }
 
 // user_os returns the current user's operating system name.
 pub fn user_os() string {
 	$if linux {
 		return 'linux'
+	}
+	$if ios {
+		return 'ios'
 	}
 	$if macos {
 		return 'macos'
@@ -450,6 +604,9 @@ pub fn user_os() string {
 	$if vinix {
 		return 'vinix'
 	}
+	$if wasm32_emscripten {
+		return 'wasm32_emscripten'
+	}
 	if getenv('TERMUX_VERSION') != '' {
 		return 'termux'
 	}
@@ -459,7 +616,7 @@ pub fn user_os() string {
 // user_names returns an array containing the names of all users on the system.
 pub fn user_names() ![]string {
 	$if windows {
-		result := execute('wmic useraccount get name')
+		result := exec(['wmic', 'useraccount', 'get', 'name'])
 		if result.exit_code != 0 {
 			return error('Failed to get user names. Exited with code ${result.exit_code}: ${result.output}')
 		}
@@ -483,9 +640,6 @@ pub fn home_dir() string {
 	$if windows {
 		return getenv('USERPROFILE')
 	} $else {
-		// println('home_dir() call')
-		// res:= os.getenv('HOME')
-		// println('res="$res"')
 		return getenv('HOME')
 	}
 }
@@ -494,11 +648,16 @@ pub fn home_dir() string {
 // See also `home_dir()`.
 pub fn expand_tilde_to_home(path string) string {
 	if path == '~' {
-		return home_dir().trim_right(path_separator)
+		hdir := home_dir()
+		return hdir.trim_right(path_separator)
 	}
-	if path.starts_with('~' + path_separator) {
-		return path.replace_once('~' + path_separator, home_dir().trim_right(path_separator) +
-			path_separator)
+	source := '~' + path_separator
+	if path.starts_with(source) {
+		hdir := home_dir()
+		trimmed := hdir.trim_right(path_separator)
+		final := trimmed + path_separator
+		result := path.replace_once(source, final)
+		return result
 	}
 	return path
 }
@@ -506,9 +665,20 @@ pub fn expand_tilde_to_home(path string) string {
 // write_file writes `text` data to a file with the given `path`.
 // If `path` already exists, it will be overwritten.
 pub fn write_file(path string, text string) ! {
-	mut f := create(path)!
-	unsafe { f.write_full_buffer(text.str, usize(text.len))! }
-	f.close()
+	$if vlibc ? {
+		// The synchronous write borrows the immutable string buffer.
+		e := vlibc_write_file(path, unsafe { text.str.vbytes(text.len) })
+		if e != .enoerror {
+			return error_with_code('write_file failed: ${e}', int(e))
+		}
+		return
+	} $else {
+		mut f := create(path)!
+		defer {
+			f.close()
+		}
+		unsafe { f.write_full_buffer(text.str, uint(text.len))! }
+	}
 }
 
 pub struct ExecutableNotFoundError {
@@ -523,39 +693,61 @@ fn error_failed_to_find_executable() IError {
 	return &ExecutableNotFoundError{}
 }
 
-// find_abs_path_of_executable searches the environment PATH for the
-// absolute path of the given executable name.
-pub fn find_abs_path_of_executable(exe_name string) !string {
-	if exe_name == '' {
-		return error('expected non empty `exe_name`')
+// executable_suffixes_for returns the suffixes to try for `exe_name`, in order.
+// A name that already carries an executable extension (`cmd.exe`, `tool.bat`,
+// `prog.com`) is tried exactly and nothing else, so that a `cmd.exe.exe` in a
+// directory searched earlier cannot shadow the spelling that was asked for -
+// `CreateProcessW` never appends an extension to such a name. Any other name,
+// including one with a dot that is not an extension (`python3.12`), gets the
+// usual suffixes.
+fn executable_suffixes_for(exe_name string) []string {
+	ext := file_ext(exe_name).to_lower_ascii()
+	if ext != '' && ext in executable_suffixes {
+		return ['']
 	}
+	return executable_suffixes
+}
 
-	for suffix in executable_suffixes {
+fn find_abs_path_of_executable_in_path_env(exe_name string, env_path string) !string {
+	for suffix in executable_suffixes_for(exe_name) {
 		fexepath := exe_name + suffix
 		if is_abs_path(fexepath) {
-			return real_path(fexepath)
+			return fexepath
+		}
+		if fexepath.contains(path_separator) {
+			if is_file(fexepath) && is_executable(fexepath) {
+				return abs_path(fexepath)
+			}
+			continue
 		}
 		mut res := ''
-		path := getenv('PATH')
-		paths := path.split(path_delimiter)
+		paths := env_path.split(path_delimiter)
 		for p in paths {
 			found_abs_path := join_path_single(p, fexepath)
 			$if trace_find_abs_path_of_executable ? {
 				dump(found_abs_path)
 			}
-			if exists(found_abs_path) && is_executable(found_abs_path) {
+			if is_file(found_abs_path) && is_executable(found_abs_path) {
 				res = found_abs_path
 				break
 			}
 		}
 		if res.len > 0 {
-			return real_path(res)
+			return abs_path(res)
 		}
 	}
 	return error_failed_to_find_executable()
 }
 
-// exists_in_system_path returns `true` if `prog` exists in the system's PATH
+// find_abs_path_of_executable searches the environment PATH for the absolute path of the given executable name.
+pub fn find_abs_path_of_executable(exe_name string) !string {
+	if exe_name == '' {
+		return error('expected non empty `exe_name`')
+	}
+	return find_abs_path_of_executable_in_path_env(exe_name, getenv('PATH'))
+}
+
+// exists_in_system_path returns `true` if `prog` exists in the system's PATH.
 pub fn exists_in_system_path(prog string) bool {
 	find_abs_path_of_executable(prog) or { return false }
 	return true
@@ -569,6 +761,8 @@ pub fn is_file(path string) bool {
 // join_path joins any number of path elements into a single path, separating
 // them with a platform-specific path_separator. Empty elements are ignored.
 // Windows platform output will rewrite forward slashes to backslash.
+// An absolute first nonempty element retains its root when base is empty.
+// A component naming only the current directory remains `.`.
 // Consider looking at the unit tests in os_test.v for semi-formal API.
 @[manualfree]
 pub fn join_path(base string, dirs ...string) string {
@@ -578,27 +772,22 @@ pub fn join_path(base string, dirs ...string) string {
 	defer {
 		unsafe { sb.free() }
 	}
-	sbase := base.trim_right('\\/')
-	defer {
-		unsafe { sbase.free() }
-	}
-	sb.write_string(sbase)
+	write_path_base(mut sb, base)
 	for d in dirs {
-		if d != '' {
-			sb.write_string(path_separator)
-			sb.write_string(d)
-		}
+		append_path_component(mut sb, d)
 	}
 	normalize_path_in_builder(mut sb)
 	mut res := sb.str()
-	if base == '' {
-		res = res.trim_left(path_separator)
+	if base == '' && res.starts_with('.${path_separator}') {
+		res = if res.len == 2 { '.' } else { res[2..] }
 	}
 	return res
 }
 
 // join_path_single appends the `elem` after `base`, separated with a
 // platform-specific path_separator. Empty elements are ignored.
+// An absolute elem retains its root when base is empty.
+// An elem naming only the current directory remains `.`.
 @[manualfree]
 pub fn join_path_single(base string, elem string) string {
 	// TODO: deprecate this and make it `return os.join_path(base, elem)`,
@@ -607,21 +796,56 @@ pub fn join_path_single(base string, elem string) string {
 	defer {
 		unsafe { sb.free() }
 	}
+	write_path_base(mut sb, base)
+	append_path_component(mut sb, elem)
+	normalize_path_in_builder(mut sb)
+	mut res := sb.str()
+	if base == '' && res.starts_with('.${path_separator}') {
+		res = if res.len == 2 { '.' } else { res[2..] }
+	}
+	return res
+}
+
+@[manualfree]
+fn write_path_base(mut sb strings.Builder, base string) {
 	sbase := base.trim_right('\\/')
 	defer {
 		unsafe { sbase.free() }
 	}
 	sb.write_string(sbase)
-	if elem != '' {
+	if sbase == '' && base != '' {
 		sb.write_string(path_separator)
-		sb.write_string(elem)
+		$if windows {
+			if base.len == 2 {
+				sb.write_string(path_separator)
+			}
+		}
 	}
-	normalize_path_in_builder(mut sb)
-	mut res := sb.str()
-	if base == '' {
-		res = res.trim_left(path_separator)
+	$if windows {
+		// A drive root, including a device-prefixed drive, needs its separator.
+		if sbase.ends_with(':') && sbase.len < base.len {
+			sb.write_string(path_separator)
+		}
 	}
-	return res
+}
+
+@[manualfree]
+fn append_path_component(mut sb strings.Builder, component string) {
+	if component == '' {
+		return
+	}
+	if sb.len > 0 {
+		if sb[sb.len - 1] !in [`/`, `\\`] {
+			sb.write_string(path_separator)
+		}
+		trimmed := component.trim_left('\\/')
+		defer {
+			unsafe { trimmed.free() }
+		}
+		sb.write_string(trimmed)
+		return
+	}
+	sb.write_string(component)
 }
 
 @[direct_array_access]
@@ -639,8 +863,15 @@ fn normalize_path_in_builder(mut sb strings.Builder) {
 			}
 		}
 	}
-	for idx in 0 .. sb.len - 3 {
-		if sb[idx] == rs && sb[idx + 1] == `.` && sb[idx + 2] == rs {
+	mut idx := 0
+	$if windows {
+		// Preserve the two separators introducing a UNC or device path.
+		if sb.len >= 2 && sb[0] == rs && sb[1] == rs && (sb.len == 2 || sb[2] != rs) {
+			idx = 2
+		}
+	}
+	for idx < sb.len {
+		if idx + 2 < sb.len && sb[idx] == rs && sb[idx + 1] == `.` && sb[idx + 2] == rs {
 			unsafe {
 				// let `/foo/./bar.txt` become `/foo/bar.txt` in place
 				for j := idx + 1; j < sb.len - 2; j++ {
@@ -648,8 +879,9 @@ fn normalize_path_in_builder(mut sb strings.Builder) {
 				}
 				sb.len -= 2
 			}
+			continue
 		}
-		if sb[idx] == rs && sb[idx + 1] == rs {
+		if idx + 1 < sb.len && sb[idx] == rs && sb[idx + 1] == rs {
 			unsafe {
 				// let `/foo//bar.txt` become `/foo/bar.txt` in place
 				for j := idx + 1; j < sb.len - 1; j++ {
@@ -657,31 +889,41 @@ fn normalize_path_in_builder(mut sb strings.Builder) {
 				}
 				sb.len -= 1
 			}
+			continue
 		}
+		idx++
 	}
 }
 
+@[params]
+pub struct WalkParams {
+pub:
+	hidden bool
+}
+
 // walk_ext returns a recursive list of all files in `path` ending with `ext`.
+// The files of each directory come in the order of `os.ls`, which is not sorted and differs
+// between platforms and filesystems. Call `.sort()` on the result when a stable order is needed.
 // For listing only one level deep, see: `os.ls`
-pub fn walk_ext(path string, ext string) []string {
+pub fn walk_ext(path string, ext string, opts WalkParams) []string {
 	mut res := []string{}
-	impl_walk_ext(path, ext, mut res)
+	impl_walk_ext(path, ext, mut res, opts)
 	return res
 }
 
-fn impl_walk_ext(path string, ext string, mut out []string) {
+fn impl_walk_ext(path string, ext string, mut out []string, opts WalkParams) {
 	if !is_dir(path) {
 		return
 	}
 	mut files := ls(path) or { return }
 	separator := if path.ends_with(path_separator) { '' } else { path_separator }
 	for file in files {
-		if file.starts_with('.') {
+		if !opts.hidden && file.starts_with('.') {
 			continue
 		}
 		p := path + separator + file
 		if is_dir(p) && !is_link(p) {
-			impl_walk_ext(p, ext, mut out)
+			impl_walk_ext(p, ext, mut out, opts)
 		} else if file.ends_with(ext) {
 			out << p
 		}
@@ -690,6 +932,8 @@ fn impl_walk_ext(path string, ext string, mut out []string) {
 
 // walk traverses the given directory `path`.
 // When a file is encountered, it will call the callback `f` with current file as argument.
+// The entries of each directory are visited in the order of `os.ls`, which is not sorted and
+// differs between platforms and filesystems. For a walk in lexical order, see: `os.walk_dir`
 // Note: walk can be called even for deeply nested folders,
 // since it does not recurse, but processes them iteratively.
 // For listing only one level deep, see: `os.ls`
@@ -701,11 +945,11 @@ pub fn walk(path string, f fn (string)) {
 		return
 	}
 	mut remaining := []string{cap: 1000}
-	clean_path := path.trim_right(path_separator)
+	cleaned := path.trim_right(path_separator)
 	$if windows {
-		remaining << clean_path.replace('/', '\\')
+		remaining << cleaned.replace('/', '\\')
 	} $else {
-		remaining << clean_path
+		remaining << cleaned
 	}
 	for remaining.len > 0 {
 		cpath := remaining.pop()
@@ -721,13 +965,138 @@ pub fn walk(path string, f fn (string)) {
 	}
 }
 
-// FnWalkContextCB is used to define the callback functions, passed to os.walk_context
+// WalkDirAction tells walk_dir what to do after its callback returns.
+pub enum WalkDirAction {
+	proceed  // carry on with the next entry
+	skip_dir // do not descend into the directory that was just reported
+	stop     // end the walk
+}
+
+// WalkDirEntry describes one entry visited by walk_dir.
+pub struct WalkDirEntry {
+pub:
+	name   string // the entry's base name, without any directory part
+	is_dir bool   // true for a directory; symlinks are reported, never followed
+	typ    FileType
+	err    ?IError // why the entry could not be read or listed; none when it could
+}
+
+// WalkDirFn is the callback type for walk_dir.
+// `entry.err` is set in two cases, so a callback should look at it before relying
+// on the other fields:
+// - an entry that cannot be stat'ed is reported once, with `is_dir` and `typ` left
+//   at their zero values, so it is never descended into;
+// - a directory that was reported normally but then cannot be listed is reported
+//   a second time, with `err` set and `is_dir` and `typ` still describing the
+//   directory. Returning `.stop` from that second report ends the walk; anything
+//   else carries on with the directory's next sibling.
+pub type WalkDirFn = fn (path string, entry WalkDirEntry) WalkDirAction
+
+// walk_dir traverses the directory tree rooted at `root` and calls `cb` for
+// every entry, directories included, in lexical order. It is the counterpart of
+// Go's filepath.WalkDir.
+//
+// Returning `.skip_dir` leaves the directory that was just reported unread,
+// which is what makes pruning a large tree possible; on a non-directory it has no
+// effect. Returning `.stop` ends the walk immediately, and walk_dir then returns
+// no error. An entry that cannot be read, or a directory that cannot be listed,
+// is reported through `entry.err` (see WalkDirFn) rather than aborting the walk,
+// and walk_dir itself only fails when `root` is empty; a missing `root` is
+// reported to the callback.
+//
+// Symlinks are reported but never followed, and that includes a symlinked `root`;
+// pass `os.real_path(root)` to walk the directory it points to.
+//
+// Like walk, walk_dir iterates rather than recurses, so tree depth costs no stack.
+//
+// Example:
+// ```v
+// os.walk_dir('/srv/app', fn (path string, entry os.WalkDirEntry) os.WalkDirAction {
+//     if err := entry.err {
+//         eprintln('skipping ${path}: ${err}')
+//         return .proceed
+//     }
+//     if entry.is_dir && entry.name == '.git' {
+//         return .skip_dir
+//     }
+//     println(path)
+//     return .proceed
+// }) or { panic(err) }
+// ```
+pub fn walk_dir(root string, cb WalkDirFn) ! {
+	if root == '' {
+		return error('os: walk_dir needs a non-empty root path')
+	}
+	mut pending := []string{cap: 64}
+	pending << norm_path(root)
+	for pending.len > 0 {
+		cpath := pending.pop()
+		// Filled through locals and handed over in a single struct literal, so
+		// that the public fields can stay read-only for callers.
+		mut typ := FileType.unknown
+		mut is_directory := false
+		mut entry_err := ?IError(none)
+		if attr := lstat(cpath) {
+			typ = attr.get_filetype()
+			$if windows {
+				// lstat follows reparse points there and never reports a link, so a
+				// directory symlink or junction would otherwise be descended into.
+				if kind_of_existing_path(cpath).is_link {
+					typ = .symbolic_link
+				}
+			}
+			is_directory = typ == .directory
+		} else {
+			// The entry could not be read, so is_dir stays false and a directory
+			// is not descended into.
+			entry_err = err
+		}
+		entry := WalkDirEntry{
+			name:   file_name(cpath)
+			typ:    typ
+			is_dir: is_directory
+			err:    entry_err
+		}
+		// Whether to descend into cpath, which a .skip_dir reply can veto.
+		mut descend := true
+		match cb(cpath, entry) {
+			.stop {
+				return
+			}
+			.skip_dir {
+				descend = false
+			}
+			.proceed {}
+		}
+		if !descend || !entry.is_dir {
+			continue
+		}
+		mut children := ls(cpath) or {
+			// The directory could not be listed. Like Go's WalkDir, it is reported a
+			// second time, as the directory it is, with the listing failure attached.
+			if cb(cpath, WalkDirEntry{ ...entry, err: err }) == .stop {
+				return
+			}
+			continue
+		}
+		// Sorted so the visit order is lexical rather than whatever order the
+		// filesystem happened to hand back.
+		children.sort()
+		for i := children.len - 1; i >= 0; i-- {
+			pending << join_path_single(cpath, children[i])
+		}
+	}
+}
+
+// FnWalkContextCB is used to define the callback functions, passed to os.walk_context.
 pub type FnWalkContextCB = fn (voidptr, string)
 
 // walk_with_context traverses the given directory `path`.
 // For each encountered file *and* directory, it will call your `fcb` callback,
 // passing it the arbitrary `context` in its first parameter,
 // and the path to the file in its second parameter.
+// The entries of each directory are visited in the order of `os.ls`, which is not sorted and
+// differs between platforms and filesystems. For a walk in lexical order, see: `os.walk_dir`
 // Note: walk_with_context can be called even for deeply nested folders,
 // since it does not recurse, but processes them iteratively.
 // For listing only one level deep, see: `os.ls`
@@ -739,11 +1108,11 @@ pub fn walk_with_context(path string, context voidptr, fcb FnWalkContextCB) {
 		return
 	}
 	mut remaining := []string{cap: 1000}
-	clean_path := path.trim_right(path_separator)
+	cleaned := path.trim_right(path_separator)
 	$if windows {
-		remaining << clean_path.replace('/', '\\')
+		remaining << cleaned.replace('/', '\\')
 	} $else {
-		remaining << clean_path
+		remaining << cleaned
 	}
 	mut loops := 0
 	for remaining.len > 0 {
@@ -783,7 +1152,7 @@ pub fn mkdir_all(opath string, params MkdirParams) ! {
 		}
 		return error('path `${opath}` already exists, and is not a folder')
 	}
-	other_separator := if path_separator == '/' { '\\' } else { '/' }
+	other_separator := $if windows { '/' } $else { '\\' }
 	path := opath.replace(other_separator, path_separator)
 	mut p := if path.starts_with(path_separator) { path_separator } else { '' }
 	path_parts := path.trim_left(path_separator).split(path_separator)
@@ -792,7 +1161,9 @@ pub fn mkdir_all(opath string, params MkdirParams) ! {
 		if exists(p) && is_dir(p) {
 			continue
 		}
-		mkdir(p, params) or { return error('folder: ${p}, error: ${err}') }
+		mkdir(p, params) or {
+			return error_with_code('folder: ${p}, error: ${err.msg()}', err.code())
+		}
 	}
 }
 
@@ -800,34 +1171,98 @@ fn create_folder_when_it_does_not_exist(path string) {
 	if is_dir(path) || is_link(path) {
 		return
 	}
-	mkdir_all(path, mode: 0o700) or {
-		if is_dir(path) || is_link(path) {
-			// A race had been won, and the `path` folder had been created,
-			// by another concurrent V executable, since the folder now exists,
-			// but it did not right before ... we will just use it too.
-			return
+	mut error_msg := ''
+	for _ in 0 .. 10 {
+		mkdir_all(path, mode: 0o700) or {
+			if is_dir(path) || is_link(path) {
+				// A race had been won, and the `path` folder had been created, by another concurrent V program.
+				// We are fine with that, since the folder now exists, even though this process did not create it.
+				// We can just use it too  ¯\_(ツ)_/¯ .
+				return
+			}
+			error_msg = err.msg()
+			sleep_ms(1) // wait a bit, before a retry, to let the other process finish its folder creation
+			continue
 		}
-		panic(err)
+		break
 	}
+	if is_dir(path) || is_link(path) {
+		return
+	}
+	// There was something wrong, that could not be solved, by just retrying
+	// There is no choice, but to report it back :-\
+	panic(error_msg)
 }
 
-// cache_dir returns the path to a *writable* user specific folder, suitable for writing non-essential data.
-pub fn cache_dir() string {
-	// See: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-	// There is a single base directory relative to which user-specific non-essential
-	// (cached) data should be written. This directory is defined by the environment
-	// variable $XDG_CACHE_HOME.
-	// $XDG_CACHE_HOME defines the base directory relative to which user specific
-	// non-essential data files should be stored. If $XDG_CACHE_HOME is either not set
-	// or empty, a default equal to $HOME/.cache should be used.
-	xdg_cache_home := getenv('XDG_CACHE_HOME')
-	cdir := if xdg_cache_home.len > 0 {
-		xdg_cache_home
+fn xdg_home_folder(ename string, lpath string) string {
+	xdg_folder := getenv(ename)
+	xdg_dir := if xdg_folder != '' {
+		xdg_folder
 	} else {
-		join_path_single(home_dir(), '.cache')
+		join_path_single(home_dir(), lpath)
 	}
-	create_folder_when_it_does_not_exist(cdir)
-	return cdir
+	create_folder_when_it_does_not_exist(xdg_dir)
+	return xdg_dir
+}
+
+// cache_dir returns the path to a *writable* user-specific folder, suitable for writing non-essential data.
+// See: https://specifications.freedesktop.org/basedir-spec/latest/ .
+// There is a single base directory relative to which user-specific non-essential
+// (cached) data should be written. This directory is defined by the environment
+// variable `$XDG_CACHE_HOME`.
+// `$XDG_CACHE_HOME` defines the base directory relative to which user specific
+// non-essential data files should be stored. If `$XDG_CACHE_HOME` is either not set
+// or empty, a default equal to `$HOME/.cache` should be used.
+// Note: This function ensures that the returned directory exists and panics if directory creation fails.
+pub fn cache_dir() string {
+	return xdg_home_folder('XDG_CACHE_HOME', '.cache')
+}
+
+// data_dir returns the path to a *writable* user-specific folder, suitable for writing application data.
+// On Windows, that is `%LocalAppData%`, or if that is not available,
+// `%USERPROFILE%/AppData/Local`.
+// On the rest, that is `$XDG_DATA_HOME`, or if that is not available,
+// `$HOME/.local/share`.
+// Note: This function ensures that the returned directory exists and panics if directory creation fails.
+pub fn data_dir() string {
+	$if windows {
+		local_app_data := getenv('LocalAppData')
+		if local_app_data != '' {
+			create_folder_when_it_does_not_exist(local_app_data)
+			return local_app_data
+		}
+		home := home_dir()
+		if home != '' {
+			path := join_path(home, 'AppData', 'Local')
+			create_folder_when_it_does_not_exist(path)
+			return path
+		}
+	}
+	return xdg_home_folder('XDG_DATA_HOME', '.local/share')
+}
+
+// state_dir returns a *writable* folder user-specific folder.
+// It is suitable for storing state data, that should persist between (application) restarts,
+// but that is not important or portable enough to the user that it should be stored in os.data_dir().
+// See: https://specifications.freedesktop.org/basedir-spec/latest/ .
+// `$XDG_STATE_HOME` defines the base directory relative to which user-specific state files should be stored.
+// If `$XDG_STATE_HOME` is either not set or empty, a default equal to
+// `$HOME/.local/state should be used`.
+// It may contain:
+// * actions history (logs, history, recently used files, …)
+// * current state of the application that can be reused on a restart (view, layout, open files, undo history, …)
+// Note: This function ensures that the returned directory exists and panics if directory creation fails.
+pub fn state_dir() string {
+	return xdg_home_folder('XDG_STATE_HOME', '.local/state')
+}
+
+// local_bin_dir returns `$HOME/.local/bin`, which is *guaranteed* to be in the PATH of the current user.
+// It is compatible with stributions, following the XDG spec from https://specifications.freedesktop.org/basedir-spec/latest/ :
+// > User-specific executable files may be stored in `$HOME/.local/bin`.
+// > Distributions should ensure this directory shows up in the UNIX $PATH environment variable, at an appropriate place.
+// Note: This function ensures that the returned directory exists and panics if directory creation fails.
+pub fn local_bin_dir() string {
+	return xdg_home_folder('LOCAL_BIN_DIR', '.local/bin') // provides a way to test by setting an env variable
 }
 
 // temp_dir returns the path to a folder, that is suitable for storing temporary files.
@@ -867,8 +1302,9 @@ pub fn temp_dir() string {
 	return path
 }
 
-// vtmp_dir returns the path to a folder, that is writable to V programs, *and* specific
-// to the OS user. It can be overridden by setting the env variable `VTMP`.
+// vtmp_dir returns the path to a folder, that is writable to V programs, *and* specific to the OS user.
+// It can be overridden by setting the env variable `VTMP`.
+// Note: This function ensures that the returned directory exists and panics if directory creation fails.
 pub fn vtmp_dir() string {
 	mut vtmp := getenv('VTMP')
 	if vtmp.len > 0 {
@@ -884,8 +1320,12 @@ pub fn vtmp_dir() string {
 
 fn default_vmodules_path() string {
 	hdir := home_dir()
-	res := join_path_single(hdir, '.vmodules')
-	return res
+	if hdir != '' {
+		return join_path_single(hdir, '.vmodules')
+	}
+	// In some hermetic CI/sandbox environments HOME/USERPROFILE is intentionally
+	// missing. Fall back to a writable user-specific temp path.
+	return join_path_single(vtmp_dir(), '.vmodules')
 }
 
 // vmodules_dir returns the path to a folder, where v stores its global modules.
@@ -898,8 +1338,7 @@ pub fn vmodules_dir() string {
 }
 
 // vmodules_paths returns a list of paths, where v looks up for modules.
-// You can customize it through setting the environment variable VMODULES
-// [manualfree]
+// You can customize it through setting the environment variable `VMODULES`.
 pub fn vmodules_paths() []string {
 	mut path := getenv('VMODULES')
 	if path == '' {
@@ -960,8 +1399,10 @@ pub mut:
 	machine  string
 }
 
+// execute_or_panic returns the os.Result of executing `cmd`, or panic with its output on failure.
+@[deprecated: 'use os.exec_or_panic with an argument array; command strings can allow shell injection']
 pub fn execute_or_panic(cmd string) Result {
-	res := execute(cmd)
+	res := execute_shell(cmd)
 	if res.exit_code != 0 {
 		eprintln('failed    cmd: ${cmd}')
 		eprintln('failed   code: ${res.exit_code}')
@@ -970,8 +1411,10 @@ pub fn execute_or_panic(cmd string) Result {
 	return res
 }
 
+// execute_or_exit returns the os.Result of executing `cmd`, or exit with its output on failure.
+@[deprecated: 'use os.exec_or_exit with an argument array; command strings can allow shell injection']
 pub fn execute_or_exit(cmd string) Result {
-	res := execute(cmd)
+	res := execute_shell(cmd)
 	if res.exit_code != 0 {
 		eprintln('failed    cmd: ${cmd}')
 		eprintln('failed   code: ${res.exit_code}')
@@ -982,8 +1425,41 @@ pub fn execute_or_exit(cmd string) Result {
 }
 
 // execute_opt returns the os.Result of executing `cmd`, or an error with its output on failure.
+@[deprecated: 'use os.exec_opt with an argument array; command strings can allow shell injection']
 pub fn execute_opt(cmd string) !Result {
-	res := execute(cmd)
+	res := execute_shell(cmd)
+	if res.exit_code != 0 {
+		return error(res.output)
+	}
+	return res
+}
+
+// exec_or_panic returns the os.Result of executing `args`, or panic with its output on failure.
+pub fn exec_or_panic(args []string) Result {
+	res := exec(args)
+	if res.exit_code != 0 {
+		eprintln('failed    cmd: ${args}')
+		eprintln('failed   code: ${res.exit_code}')
+		panic(res.output)
+	}
+	return res
+}
+
+// exec_or_exit returns the os.Result of executing `args`, or exit with its output on failure.
+pub fn exec_or_exit(args []string) Result {
+	res := exec(args)
+	if res.exit_code != 0 {
+		eprintln('failed    cmd: ${args}')
+		eprintln('failed   code: ${res.exit_code}')
+		eprintln(res.output)
+		exit(1)
+	}
+	return res
+}
+
+// exec_opt returns the os.Result of executing `args`, or an error with its output on failure.
+pub fn exec_opt(args []string) !Result {
+	res := exec(args)
 	if res.exit_code != 0 {
 		return error(res.output)
 	}
@@ -999,16 +1475,16 @@ pub fn quoted_path(path string) string {
 			'"${path}"'
 		}
 	} $else {
-		return "'${path}'"
+		return "'" + path.replace("'", "'\\''") + "'"
 	}
 }
 
 // config_dir returns the path to the user configuration directory (depending on the platform).
-// On windows, that is `%AppData%`.
-// On macos, that is `~/Library/Application Support`.
+// On Windows, that is `%AppData%`.
+// On macOS, that is `~/Library/Application Support`.
 // On the rest, that is `$XDG_CONFIG_HOME`, or if that is not available, `~/.config`.
 // If the path cannot be determined, it returns an error.
-// (for example, when $HOME on linux, or %AppData% on windows is not defined)
+// (for example, when `$HOME` on Linux, or `%AppData%` on Windows is not defined)
 pub fn config_dir() !string {
 	$if windows {
 		app_data := getenv('AppData')
@@ -1033,7 +1509,7 @@ pub fn config_dir() !string {
 	return error('Cannot find config directory')
 }
 
-// Stat struct modeled on POSIX
+// Stat struct modeled on POSIX.
 pub struct Stat {
 pub:
 	dev   u64 // ID of device containing file

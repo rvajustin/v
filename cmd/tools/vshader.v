@@ -5,7 +5,7 @@
 // vshader aids in generating special shader code C headers via sokol-shdc's 'annotated GLSL' format to any
 // supported target formats that sokol_gfx supports internally.
 //
-// vshader bootstraps itself by downloading it's own dependencies to a system cache directory on first run.
+// vshader bootstraps itself by downloading its own dependencies to a system cache directory on first run.
 //
 // Please see https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md#feature-overview
 // for a more in-depth overview of the specific tool in use.
@@ -18,17 +18,16 @@ import io.util
 import flag
 import net.http
 
-const shdc_full_hash = '6b84ea387a323db9e8e17f5abed2b254a6e409fe'
-const tool_version = '0.0.3'
+const shdc_full_hash = '0d91b038780614a867f2c8eecd7d935d76bcaae3'
+const tool_version = '0.0.4'
 const tool_description = "Compile shaders in sokol's annotated GLSL format to C headers for use with sokol based apps"
 const tool_name = os.file_name(os.executable())
 const cache_dir = os.join_path(os.cache_dir(), 'v', tool_name)
 const runtime_os = os.user_os()
-
 const supported_hosts = ['linux', 'macos', 'windows']
 const supported_slangs = [
-	'glsl330', // desktop OpenGL backend (SOKOL_GLCORE33)
-	'glsl100', // OpenGLES2 and WebGL (SOKOL_GLES3)
+	'glsl430', // default desktop OpenGL backend (SOKOL_GLCORE)
+	'glsl410', // default macOS desktop OpenGL
 	'glsl300es', // OpenGLES3 and WebGL2 (SOKOL_GLES3)
 	'hlsl4', // Direct3D11 with HLSL4 (SOKOL_D3D11)
 	'hlsl5', // Direct3D11 with HLSL5 (SOKOL_D3D11)
@@ -36,10 +35,10 @@ const supported_slangs = [
 	'metal_ios', // Metal on iOS devices (SOKOL_METAL)
 	'metal_sim', // Metal on iOS simulator (SOKOL_METAL)
 	'wgsl', // WebGPU (SOKOL_WGPU)
+	'reflection',
 ]
 const default_slangs = [
-	'glsl330',
-	'glsl100',
+	'glsl410',
 	'glsl300es',
 	// 'hlsl4', and hlsl5 can't be used at the same time
 	'hlsl5',
@@ -50,6 +49,8 @@ const default_slangs = [
 ]
 
 const shdc_version = shdc_full_hash[0..8]
+const shdc_download_attempts = 4
+const shdc_download_retry_delay_ms = 2000
 const shdc_urls = {
 	'windows': 'https://github.com/floooh/sokol-tools-bin/raw/${shdc_full_hash}/bin/win32/sokol-shdc.exe'
 	'macos':   'https://github.com/floooh/sokol-tools-bin/raw/${shdc_full_hash}/bin/osx/sokol-shdc'
@@ -85,10 +86,11 @@ fn main() {
 	fp.skip_executable()
 	// Collect tool options
 	opt := Options{
-		show_help: fp.bool('help', `h`, false, 'Show this help text.')
+		show_help:    fp.bool('help', `h`, false, 'Show this help text.')
 		force_update: fp.bool('force-update', `u`, false, 'Force update of the sokol-shdc tool.')
-		verbose: fp.bool('verbose', `v`, false, 'Be verbose about the tools progress.')
-		slangs: fp.string_multi('slang', `l`, 'Shader dialects to generate code for. Default is all.\n                            Available dialects: ${supported_slangs}')
+		verbose:      fp.bool('verbose', `v`, false, 'Be verbose about the tools progress.')
+		slangs:       fp.string_multi('slang', `l`,
+			'Shader dialects to generate code for. Default is all.\n                            Available dialects: ${supported_slangs}')
 	}
 	if opt.show_help {
 		println(fp.usage())
@@ -162,8 +164,8 @@ fn compile_shaders(opt Options, input_path string) ! {
 			continue
 		}
 		co := CompileOptions{
-			verbose: opt.verbose
-			slangs: opt.slangs
+			verbose:     opt.verbose
+			slangs:      opt.slangs
 			invoke_path: path
 		}
 		// Currently sokol-shdc allows for multiple --input flags
@@ -192,11 +194,12 @@ fn compile_shader(opt CompileOptions, shader_file string) ! {
 
 	cmd :=
 		'${os.quoted_path(shdc_exe)} --input ${os.quoted_path(shader_file)} --output ${os.quoted_path(out_file)} --slang ' +
-		os.quoted_path(slangs.join(':'))
+			os.quoted_path(slangs.join(':'))
 	if opt.verbose {
 		eprintln('${tool_name} executing:\n${cmd}')
 	}
-	res := os.execute(cmd)
+	res := os.exec([shdc_exe, '--input', shader_file, '--output', out_file, '--slang',
+		slangs.join(':')])
 	if res.exit_code != 0 {
 		eprintln('${tool_name} failed generating shader includes:\n        ${res.output}\n        ${cmd}')
 		exit(1)
@@ -248,8 +251,7 @@ fn ensure_external_tools(opt Options) ! {
 		if is_shdc_available {
 			eprintln(' file path: ${shdc_exe}')
 			eprintln(' file size: ${os.file_size(shdc_exe)}')
-			eprintln(' file time: ${time.unix_microsecond(os.file_last_mod_unix(shdc_exe),
-				0)}')
+			eprintln(' file time: ${time.unix_microsecond(os.file_last_mod_unix(shdc_exe), 0)}')
 		}
 	}
 	if is_shdc_available && is_shdc_executable {
@@ -292,8 +294,10 @@ fn download_shdc(opt Options) ! {
 	if opt.verbose {
 		eprintln('${tool_name} downloading sokol-shdc from ${download_url}')
 	}
-	http.download_file(download_url, dtmp_path) or {
-		os.rm(dtmp_path)!
+	download_shdc_file(download_url, dtmp_path, opt) or {
+		if os.exists(dtmp_path) {
+			os.rm(dtmp_path)!
+		}
 		return error('${tool_name} failed to download sokol-shdc needed for shader compiling: ${err}')
 	}
 	// Make it executable
@@ -302,4 +306,24 @@ fn download_shdc(opt Options) ! {
 	os.mv(dtmp_path, shdc_exe)!
 	// Update internal version file
 	os.write_file(shdc_version_file, shdc_version)!
+}
+
+fn download_shdc_file(download_url string, dtmp_path string, opt Options) ! {
+	for attempt in 0 .. shdc_download_attempts {
+		http.download_file(download_url, dtmp_path) or {
+			if os.exists(dtmp_path) {
+				os.rm(dtmp_path) or {}
+			}
+			if attempt + 1 < shdc_download_attempts {
+				if opt.verbose {
+					eprintln('${tool_name} download attempt ${attempt + 1}/${shdc_download_attempts} failed: ${err}')
+				}
+				time.sleep(shdc_download_retry_delay_ms * time.millisecond)
+				continue
+			}
+			return err
+		}
+		return
+	}
+	return error('download was not attempted')
 }

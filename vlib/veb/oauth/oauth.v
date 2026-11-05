@@ -1,7 +1,7 @@
 module oauth
 
-import json
 import net.http
+import json2 as json
 
 pub enum TokenPostType {
 	form
@@ -27,9 +27,9 @@ pub:
 
 pub fn (ctx &Context) get_token(code string) string {
 	oauth_request := Request{
-		client_id: ctx.client_id
+		client_id:     ctx.client_id
 		client_secret: ctx.client_secret
-		code: code
+		code:          code
 		//        state: csrf
 	}
 

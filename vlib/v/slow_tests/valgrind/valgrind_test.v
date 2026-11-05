@@ -1,8 +1,11 @@
+// vtest build: !musl? && !sanitized_job?
+// vtest ownership
 import os
 import term
 import benchmark
 import v.util.vtest
 
+@[markused]
 const turn_off_vcolors = os.setenv('VCOLORS', 'never', true)
 
 fn bold(s string) string {
@@ -24,6 +27,8 @@ const skip_compile_files = [
 ]
 
 const skip_valgrind_files = [
+	'vlib/v/slow_tests/valgrind/1.strings_and_arrays.v',
+	'vlib/v/slow_tests/valgrind/autofree_or_block_string_interp.v',
 	'vlib/v/slow_tests/valgrind/struct_field.v',
 	'vlib/v/slow_tests/valgrind/fn_returning_string_param.v',
 	'vlib/v/slow_tests/valgrind/fn_with_return_should_free_local_vars.v',
@@ -31,6 +36,12 @@ const skip_valgrind_files = [
 	'vlib/v/slow_tests/valgrind/option_simple.v',
 	'vlib/v/slow_tests/valgrind/string_plus_string_plus.v',
 	'vlib/v/slow_tests/valgrind/import_x_json2.v',
+	'vlib/v/slow_tests/valgrind/comptime_selector.v',
+	'vlib/v/slow_tests/valgrind/2.heap_objects.v',
+	'vlib/v/slow_tests/valgrind/logging.v',
+	'vlib/v/slow_tests/valgrind/rand_module.v',
+	'vlib/v/slow_tests/valgrind/struct_of_array_of_same_struct.v',
+	'vlib/v/slow_tests/valgrind/sync.v',
 ]
 
 fn vprintln(s string) {
@@ -51,7 +62,7 @@ fn test_all() {
 		exit(0)
 	}
 
-	res_valgrind := os.execute('valgrind --version')
+	res_valgrind := os.exec(['valgrind', '--version'])
 	if res_valgrind.exit_code != 0 {
 		eprintln('This test needs `valgrind` to be installed.')
 		exit(0)
@@ -66,11 +77,11 @@ fn test_all() {
 	dir := os.join_path(vroot, valgrind_test_path)
 	mut files := os.ls(dir) or { panic(err) }
 	files.sort()
-	//
+
 	wrkdir := os.join_path(os.vtmp_dir(), 'valgrind_tests')
 	os.mkdir_all(wrkdir) or { panic(err) }
 	os.chdir(wrkdir) or {}
-	//
+
 	only_ordinary_v_files := files.filter(it.ends_with('.v') && !it.ends_with('_test.v'))
 	tests := vtest.filter_vtest_only(only_ordinary_v_files, basepath: valgrind_test_path)
 	bench.set_total_expected_steps(tests.len)
@@ -92,10 +103,9 @@ fn test_all() {
 		}
 		exe_filename := '${wrkdir}/${base_filename}'
 		full_path_to_source_file := os.join_path(vroot, test)
-		compile_cmd := '${os.quoted_path(vexe)} -o ${os.quoted_path(exe_filename)} -cg -cflags ' +
-			' "-w" -experimental -autofree ${os.quoted_path(full_path_to_source_file)}'
+		compile_cmd := '${os.quoted_path(vexe)} -o ${os.quoted_path(exe_filename)} -cg -cflags ' + ' "-w" -experimental -autofree ${os.quoted_path(full_path_to_source_file)}'
 		vprintln('compile cmd: ${bold(compile_cmd)}')
-		res := os.execute(compile_cmd)
+		res := os.exec(os.split_args(compile_cmd) or { panic(err) })
 		if res.exit_code != 0 {
 			bench.fail()
 			eprintln(bench.step_message_fail('file: ${test} could not be compiled.'))
@@ -112,7 +122,7 @@ fn test_all() {
 		}
 		valgrind_cmd := 'valgrind --error-exitcode=1 --leak-check=full ${os.quoted_path(exe_filename)}'
 		vprintln('valgrind cmd: ${bold(valgrind_cmd)}')
-		valgrind_res := os.execute(valgrind_cmd)
+		valgrind_res := os.exec(['valgrind', '--error-exitcode=1', '--leak-check=full', exe_filename])
 		if valgrind_res.exit_code != 0 {
 			bench.fail()
 			eprintln(bench.step_message_fail('failed valgrind check for ${bold(test)}'))

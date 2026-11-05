@@ -4,6 +4,8 @@ module main
 // and that it exits with code 1, when at least 1 FAIL happen.
 import os
 import rand
+import strings
+import time
 
 const vexe = os.quoted_path(get_vexe_path())
 const vroot = os.dir(vexe)
@@ -67,7 +69,8 @@ fn create_test(tname string, tcontent string) !string {
 
 fn check_assert_continues_works() ! {
 	os.chdir(tdir)!
-	create_test('assert_continues_option_works_test.v', 'fn test_fail1() { assert 2==4\nassert 2==1\nassert 2==0 }\nfn test_ok(){ assert true }\nfn test_fail2() { assert false }')!
+	create_test('assert_continues_option_works_test.v',
+		'fn test_fail1() { assert 2==4\nassert 2==1\nassert 2==0 }\nfn test_ok(){ assert true }\nfn test_fail2() { assert false }')!
 	result := check_fail('${vexe} -assert continues assert_continues_option_works_test.v')
 	result.has('assert_continues_option_works_test.v:1: fn test_fail1')
 	result.has('assert_continues_option_works_test.v:2: fn test_fail1')
@@ -75,7 +78,8 @@ fn check_assert_continues_works() ! {
 	result.has('assert_continues_option_works_test.v:5: fn test_fail2')
 	result.has('> assert 2 == 4').has('> assert 2 == 1').has('> assert 2 == 0')
 	// Check if a test function, tagged with [assert_continues], has the same behaviour, without needing additional options
-	create_test('assert_continues_tag_works_test.v', '[assert_continues]fn test_fail1() { assert 2==4\nassert 2==1\nassert 2==0 }\nfn test_ok(){ assert true }\nfn test_fail2() { assert false\n assert false }')!
+	create_test('assert_continues_tag_works_test.v',
+		'@[assert_continues]fn test_fail1() { assert 2==4\nassert 2==1\nassert 2==0 }\nfn test_ok(){ assert true }\nfn test_fail2() { assert false\n assert false }')!
 	tag_res := check_fail('${vexe} assert_continues_tag_works_test.v')
 	tag_res.has('assert_continues_tag_works_test.v:1: fn test_fail1')
 	tag_res.has('assert_continues_tag_works_test.v:2: fn test_fail1')
@@ -88,7 +92,7 @@ fn check_assert_continues_works() ! {
 
 fn check_ok(cmd string) MyResult {
 	println('>   check_ok cmd: ${cmd}')
-	res := os.execute(cmd)
+	res := run_check(cmd)
 	if res.exit_code != 0 {
 		eprintln('>   check_ok failed.\n${res.output}')
 		exit(1)
@@ -98,7 +102,7 @@ fn check_ok(cmd string) MyResult {
 
 fn check_fail(cmd string) MyResult {
 	println('> check_fail cmd: ${cmd}')
-	res := os.execute(cmd)
+	res := run_check(cmd)
 	if res.exit_code == 0 {
 		eprintln('> check_fail succeeded, but it should have failed.\n${res.output}')
 		exit(1)
@@ -106,19 +110,70 @@ fn check_fail(cmd string) MyResult {
 	return res.output
 }
 
+fn run_check(cmd string) os.Result {
+	args := os.split_args(cmd) or { panic(err) }
+	mut child := os.start_new_command_args(args) or {
+		return os.Result{ exit_code: -1, output: err.msg() }
+	}
+	mut output := strings.new_builder(1024)
+	for !child.eof {
+		line := child.read_line()
+		output.write_string(line)
+		eprint(line)
+		if !child.eof {
+			output.write_u8(`\n`)
+			eprint('\n')
+		}
+		// Keep progress visible even when a nested compiler never exits.
+		flush_stderr()
+	}
+	child.close() or { panic(err) }
+	return os.Result{ exit_code: child.exit_code, output: output.str() }
+}
+
+fn is_expected_compile_output(output string) bool {
+	trimmed := output.trim_space()
+	if trimmed == '' {
+		return true
+	}
+	if trimmed.contains('\n') {
+		return false
+	}
+	prefix := 'Hint: cached '
+	suffix := ' modules. They will not be recompiled on the next run unless they change.'
+	if !trimmed.starts_with(prefix) || !trimmed.ends_with(suffix) {
+		return false
+	}
+	count_text := trimmed[prefix.len..trimmed.len - suffix.len]
+	count := count_text.int()
+	return count > 0 && count_text == count.str()
+}
+
 fn main() {
 	defer {
 		os.chdir(os.wd_at_startup) or {}
 	}
+	// This smoke test deliberately runs the same file through several `v test`
+	// entry points and needs to observe each invocation, not a resumed success.
+	os.unsetenv('VTEST_RESUME_DIR')
+	os.unsetenv('VTEST_RESUME_OWNER')
+	unbuffer_stdout()
+	spawn fn () {
+		// V3's cold module cache and clang builds can make this matrix take several minutes.
+		time.sleep(10 * time.minute)
+		eprintln('>>> exiting due to an expired watchdog timer <<<')
+		exit(1)
+	}()
 	println('> vroot: ${vroot} | vexe: ${vexe} | tdir: ${tdir}')
+	os.setenv('VTEST_HIDE_OK', '0', true)
 	ok_fpath := create_test('a_single_ok_test.v', 'fn test_ok(){ assert true }')!
-	if check_ok('${vexe} ${ok_fpath}') != '' {
+	if !is_expected_compile_output(check_ok('${vexe} ${ok_fpath}')) {
 		exit(1)
 	}
 	check_ok('${vexe} test ${ok_fpath}').matches('*OK*a_single_ok_test.v*')
 	check_ok('${vexe} test "${tdir}"').matches('*OK*a_single_ok_test.v*')
 	check_ok('${vexe} -stats test "${tdir}"').matches('*OK*a_single_ok_test.v*')
-	//
+
 	fail_fpath := create_test('a_single_failing_test.v', 'fn test_fail(){ assert 1 == 2 }')!
 	check_fail('${vexe} ${fail_fpath}').has('> assert 1 == 2').has('a_single_failing_test.v:1: fn test_fail')
 	check_fail('${vexe} test ${fail_fpath}').has('> assert 1 == 2').has('a_single_failing_test.v:1: fn test_fail')
@@ -129,7 +184,7 @@ fn main() {
 	os.chdir(rel_dir)!
 	relative_path := '..' + os.path_separator + 'a_single_ok_test.v'
 	check_ok('${vexe} test ${os.quoted_path(relative_path)}').has('OK').has('a_single_ok_test.v')
-	//
+
 	check_assert_continues_works()!
 	println('> all done')
 }

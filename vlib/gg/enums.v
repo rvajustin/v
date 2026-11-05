@@ -23,8 +23,8 @@ pub enum MouseButtons {
 @[flag]
 pub enum Modifier {
 	shift // (1<<0)
-	ctrl // (1<<1)
-	alt // (1<<2)
+	ctrl  // (1<<1)
+	alt   // (1<<2)
 	super // (1<<3)
 }
 

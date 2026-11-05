@@ -1,6 +1,6 @@
 module main
 
-import v.doc
+import document as doc
 
 @[inline]
 fn slug(title string) string {
@@ -12,12 +12,15 @@ fn escape(str string) string {
 }
 
 fn get_sym_name(dn doc.DocNode) string {
-	sym_name := if dn.parent_name.len > 0 && dn.parent_name != 'void' {
-		'(${dn.parent_name}) ${dn.name}'
-	} else {
-		dn.name
+	if dn.is_readme {
+		if title := dn.frontmatter['title'] {
+			return title
+		}
 	}
-	return sym_name
+	if dn.parent_name.len > 0 && dn.parent_name != 'void' {
+		return '(${dn.parent_name}) ${dn.name}'
+	}
+	return dn.name
 }
 
 fn get_node_id(dn doc.DocNode) string {
@@ -29,8 +32,64 @@ fn get_node_id(dn doc.DocNode) string {
 	return slug(tag)
 }
 
+// attribute_line_count returns how many lines at the start of a declaration
+// are attributes, like `@[inline]`.
+fn attribute_line_count(lines []string) int {
+	mut count := 0
+	for count < lines.len && lines[count].starts_with('@[') {
+		count++
+	}
+	return count
+}
+
+// without_pub_keyword removes `pub ` from the declaration line of `content`.
+// The attribute lines before the declaration are kept.
+fn without_pub_keyword(content string) string {
+	mut lines := content.split('\n')
+	decl := attribute_line_count(lines)
+	if decl < lines.len && lines[decl].starts_with('pub ') {
+		lines[decl] = lines[decl]['pub '.len..]
+	}
+	return lines.join('\n')
+}
+
+// without_pub_keywords removes `pub ` from each declaration in a group of constants, like
+// `pub const a = 1\npub const b = 2`.
+fn without_pub_keywords(content string) string {
+	return content.split('\n').map(if it.starts_with('pub const ') { it['pub '.len..] } else { it }).join('\n')
+}
+
+// has_own_comments reports whether the variant `variant` of the symbol `symbol` has a doc comment
+// that is not the one of `symbol`, so that it is shown with the variant.
+fn has_own_comments(variant doc.DocNode, symbol doc.DocNode) bool {
+	return variant.comments.len > 0
+		&& variant.merge_comments_without_examples() != symbol.merge_comments_without_examples()
+}
+
+// has_variant_comments reports whether a variant of the symbol `symbol` has its own doc comment.
+// Then each declaration of the symbol is shown with its comment, instead of one comment after
+// all of them.
+fn has_variant_comments(symbol doc.DocNode) bool {
+	return symbol.variants.any(has_own_comments(it, symbol))
+}
+
+// without_attribute_lines removes the attribute lines from the start of `content`.
+fn without_attribute_lines(content string) string {
+	if !content.starts_with('@[') {
+		return content
+	}
+	lines := content.split('\n')
+	return lines[attribute_line_count(lines)..].join('\n')
+}
+
+// is_deprecated_attribute reports whether `tag` is a `@[deprecated]` or a
+// `@[deprecated_after]` attribute.
+fn is_deprecated_attribute(tag string) bool {
+	return tag.trim_string_left('@[').starts_with('deprecated')
+}
+
 fn is_module_readme(dn doc.DocNode) bool {
-	return dn.comments.len > 0 && (dn.content == 'module ${dn.name}' || dn.name == 'README')
+	return dn.is_readme || (dn.comments.len > 0 && dn.content == 'module ${dn.name}')
 }
 
 // trim_doc_node_description returns the nodes trimmed description.
@@ -70,7 +129,7 @@ fn set_output_type_from_str(format string) OutputType {
 		'md', 'markdown' { .markdown }
 		'json' { .json }
 		'text' { .plaintext }
-		'ansi' { .ansi }
+		'none' { .none }
 		else { .ansi }
 	}
 }

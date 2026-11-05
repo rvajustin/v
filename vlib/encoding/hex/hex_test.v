@@ -44,11 +44,40 @@ fn test_encode() {
 	assert encode(decode('ABCDEF')!) == 'abcdef'
 }
 
+fn test_encode_params() {
+	assert encode([u8(0xab), 0xcd], uppercase: true) == 'ABCD'
+	assert encode([u8(0xab), 0xcd], with_prefix: '0x') == '0xabcd'
+	assert encode([u8(0xab), 0xcd], uppercase: true, with_prefix: '0X') == '0XABCD'
+	assert encode([u8(0xab), 0xcd], with_prefix: 'hex:') == 'hex:abcd'
+}
+
+fn test_encode_empty_with_prefix() {
+	assert encode([]u8{}) == ''
+	assert encode([]u8{}, with_prefix: '0x') == '0x'
+	assert encode([]u8{}, uppercase: true, with_prefix: '0X') == '0X'
+	assert encode([]u8{}, with_prefix: 'hex:') == 'hex:'
+	assert encode([]u8{}, with_prefix: '字:') == '字:'
+	assert decode(encode([]u8{}, with_prefix: '0x'))! == []u8{}
+}
+
 fn test_decode_0x() {
-	assert decode('0x')! == []
+	assert decode('0x') or { []u8{} } == []u8{}
 	assert decode('0x0')! == [u8(0x0)]
 	assert decode('0X1234')! == [u8(0x12), 0x34]
 	assert decode('0x12345')! == [u8(0x1), 0x23, 0x45]
 	assert decode('0x0123456789abcdef')! == [u8(0x01), 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
 	assert decode('0X123456789ABCDEF')! == [u8(0x01), 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
+}
+
+fn test_decode_error_indexes() {
+	assert_decode_error('g', 'invalid hex char g at index 0')
+	assert_decode_error('0xg', 'invalid hex char g at index 2')
+}
+
+fn assert_decode_error(input string, expected string) {
+	decode(input) or {
+		assert err.msg() == expected
+		return
+	}
+	assert false
 }

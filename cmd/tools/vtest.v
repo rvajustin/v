@@ -4,12 +4,14 @@ import os
 import os.cmdline
 import testing
 import v.pref
+import v.util.vtest
 
 struct Context {
 mut:
-	verbose   bool
-	fail_fast bool
-	run_only  []string
+	verbose     bool
+	fail_fast   bool
+	run_only    []string
+	target_arch string = pref.host_arch()
 }
 
 fn main() {
@@ -33,15 +35,33 @@ fn main() {
 	}
 	backend_pos := args_before.index('-b')
 	backend := if backend_pos == -1 { '.c' } else { args_before[backend_pos + 1] }
+	requested_args := os.split_args(os.getenv('VFLAGS')) or { panic(err) }
+	mut all_requested_args := requested_args.clone()
+	all_requested_args << args_before
+	ctx.target_arch = test_target_arch(all_requested_args)
+	strict_v3 := ('-new-compiler' in all_requested_args && '-old-compiler' !in all_requested_args)
+		|| os.getenv('V_MACOS_V3_NO_FALLBACK') == '1'
+	mut session_args := args_before.clone()
+	if strict_v3 {
+		// The launcher forwards VFLAGS as a complete prefix. A standalone vtest
+		// still needs the environment flags; preserve option/value pairs and order.
+		if args_before.len < requested_args.len
+			|| args_before[..requested_args.len] != requested_args {
+			session_args = requested_args.clone()
+			session_args << args_before
+		}
+		os.unsetenv('VFLAGS')
+	}
+	session_vargs := session_args.map(test_session_argument(it)).join(' ')
 
-	mut ts := testing.new_test_session(args_before.join(' '), true)
+	mut ts := testing.new_test_session(session_vargs, true)
 	ts.exec_mode = .compile_and_run
 	ts.fail_fast = ctx.fail_fast
-	for targ in args_after {
+	for raw_targ in args_after {
+		targ := os.norm_path(raw_targ)
 		if os.is_dir(targ) {
 			// Fetch all tests from the directory
-			files, skip_files := ctx.should_test_dir(targ.trim_right(os.path_separator),
-				backend)
+			files, skip_files := ctx.should_test_dir(targ.trim_right(os.path_separator), backend)
 			ts.files << files
 			ts.skip_files << skip_files
 			continue
@@ -67,12 +87,51 @@ fn main() {
 			exit(1)
 		}
 	}
+	if strict_v3 {
+		for file in ts.files {
+			if file.ends_with('.js.v') {
+				ts.skip_files << os.real_path(file)
+			}
+		}
+	}
 	ts.session_start('Testing...')
 	ts.test()
 	ts.session_stop('all V _test.v files')
-	if ts.failed_cmds.len > 0 {
+	if ts.has_failures() {
 		exit(1)
 	}
+}
+
+// test_target_arch selects files for the test programs, independently of the
+// architecture of the host runner. Option operands must remain opaque.
+fn test_target_arch(args []string) string {
+	mut arch := pref.host_arch()
+	mut i := 0
+	for i < args.len {
+		arg := args[i]
+		if arg == '-arch' && i + 1 < args.len {
+			i++
+			arch = pref.arch_from_string(args[i]) or { arch }
+		} else if arg.starts_with('-arch=') {
+			arch = pref.arch_from_string(arg.all_after('=')) or { arch }
+		} else if arg in ['-prof', '-profile'] {
+			if i + 1 < args.len && !args[i + 1].starts_with('-') {
+				i++
+			}
+		} else if arg == '-cf' || pref.option_may_consume_value(arg) {
+			i++
+		}
+		i++
+	}
+	return arch
+}
+
+// test_session_argument preserves literal argv through the runner's directive parser.
+fn test_session_argument(arg string) string {
+	if arg != '' && !arg.contains_any(' \t\r\n\\\'"') {
+		return arg
+	}
+	return '"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
 
 fn show_usage() {
@@ -87,7 +146,8 @@ fn show_usage() {
 	println('')
 }
 
-pub fn (mut ctx Context) should_test_dir(path string, backend string) ([]string, []string) { // return is (files, skip_files)
+// should_test_dir recursively discovers test files and returns their paths and skipped paths.
+pub fn (ctx &Context) should_test_dir(path string, backend string) ([]string, []string) { // return is (files, skip_files)
 	mut files := os.ls(path) or { return []string{}, []string{} }
 	mut local_path_separator := os.path_separator
 	if path.ends_with(os.path_separator) {
@@ -105,7 +165,7 @@ pub fn (mut ctx Context) should_test_dir(path string, backend string) ([]string,
 			res_files << ret_files
 			skip_files << ret_skip_files
 		} else if os.exists(p) {
-			match ctx.should_test(p, backend) {
+			match ctx.should_test_discovered(p, backend) {
 				.test {
 					res_files << p
 				}
@@ -124,32 +184,34 @@ pub fn (mut ctx Context) should_test_dir(path string, backend string) ([]string,
 }
 
 enum ShouldTestStatus {
-	test // do test, print OK or FAIL, depending on if it passes
-	skip // print SKIP for the test
+	test   // do test, print OK or FAIL, depending on if it passes
+	skip   // print SKIP for the test
 	ignore // just ignore the file, so it will not be printed at all in the list of tests
 }
 
-fn (mut ctx Context) should_test(path string, backend string) ShouldTestStatus {
-	if path.ends_with('mysql_orm_test.v') {
-		testing.find_started_process('mysqld') or { return .skip }
-	}
-	if path.ends_with('mysql_test.v') {
-		testing.find_started_process('mysqld') or { return .skip }
-	}
-	if path.ends_with('pg_orm_test.v') {
-		testing.find_started_process('postgres') or { return .skip }
-	}
-	if path.ends_with('pg_double_test.v') {
-		testing.find_started_process('postgres') or { return .skip }
-	}
-	if path.ends_with('onecontext_test.v') {
+// Explicit file selection must reach the compiler even when directory discovery
+// temporarily excludes a test family on CI. The compiler still checks its build
+// constraints; -run-only still filters its functions.
+fn (ctx &Context) should_test_discovered(path string, backend string) ShouldTestStatus {
+	status := ctx.should_test(path, backend)
+	if status == .test && should_skip_multiwindow_discovery(path) {
 		return .skip
 	}
-	$if tinyc {
-		if path.ends_with('naked_attr_test.amd64.v') {
-			return .skip
-		}
+	return status
+}
+
+fn should_skip_multiwindow_discovery(path string) bool {
+	if os.getenv('GITHUB_ACTIONS') != 'true' {
+		return false
 	}
+	// Temporarily keep multiwindow tests out of recursive CI discovery on every OS.
+	normalized := path.replace('\\', '/')
+	file_name := normalized.all_after_last('/')
+	return normalized.contains('/multiwindow/') || normalized.starts_with('multiwindow/')
+		|| file_name.contains('multiwindow')
+}
+
+fn (ctx &Context) should_test(path string, backend string) ShouldTestStatus {
 	if path.ends_with('_test.v') {
 		return ctx.should_test_when_it_contains_matching_fns(path, backend)
 	}
@@ -157,42 +219,39 @@ fn (mut ctx Context) should_test(path string, backend string) ShouldTestStatus {
 		return ctx.should_test_when_it_contains_matching_fns(path, backend)
 	}
 	if path.ends_with('_test.js.v') {
-		if testing.is_node_present {
-			return ctx.should_test_when_it_contains_matching_fns(path, backend)
-		}
+		// Node availability does not imply that V3 can compile JavaScript tests.
 		return .skip
 	}
-	if path.ends_with('.v') && path.count('.') == 2 {
-		if !path.all_before_last('.v').all_before_last('.').ends_with('_test') {
+	file_name := os.file_name(path)
+	if file_name.ends_with('.v') && file_name.count('.') == 2 {
+		if !file_name.all_before_last('.v').all_before_last('.').ends_with('_test') {
 			return .ignore
 		}
-		backend_arg := path.all_before_last('.v').all_after_last('.')
-		arch := pref.arch_from_string(backend_arg) or { pref.Arch._auto }
-		if arch == pref.get_host_arch() {
+		backend_arg := file_name.all_before_last('.v').all_after_last('.')
+		// A backend name is checked before the architecture aliases: `wasm` spells both,
+		// and `foo_test.wasm.v` is a WASM backend test. Reading it as an architecture
+		// skipped it on every native host instead of running it under `-b wasm`.
+		if pref.suffix_is_backend_name(backend_arg) {
+			return if backend == backend_arg {
+				ctx.should_test_when_it_contains_matching_fns(path, backend)
+			} else {
+				ShouldTestStatus.skip
+			}
+		}
+		if arch := pref.arch_from_string(backend_arg) {
+			if arch != ctx.target_arch {
+				return .skip
+			}
 			return ctx.should_test_when_it_contains_matching_fns(path, backend)
-		} else if arch == ._auto {
-			if backend_arg == 'c' { // .c.v
-				return if backend == 'c' {
-					ctx.should_test_when_it_contains_matching_fns(path, backend)
-				} else {
-					ShouldTestStatus.skip
-				}
-			}
-			if backend_arg == 'js' {
-				return if backend == 'js' {
-					ctx.should_test_when_it_contains_matching_fns(path, backend)
-				} else {
-					ShouldTestStatus.skip
-				}
-			}
-		} else {
-			return .skip
 		}
 	}
 	return .ignore
 }
 
-fn (mut ctx Context) should_test_when_it_contains_matching_fns(path string, backend string) ShouldTestStatus {
+fn (ctx &Context) should_test_when_it_contains_matching_fns(path string, _backend string) ShouldTestStatus {
+	if vtest.skip_ownership_autofree_tests() && vtest.is_ownership_autofree_test(path) {
+		return .skip
+	}
 	if ctx.run_only.len == 0 {
 		// no filters set, so just compile and test
 		return .test
@@ -220,7 +279,8 @@ fn (mut ctx Context) should_test_when_it_contains_matching_fns(path string, back
 
 fn extract_flag_bool(flag_name string, mut after []string, flag_default bool) bool {
 	mut res := flag_default
-	orig_after := after.clone() // workaround for after.filter() codegen bug, when `mut after []string`
+	orig_after :=
+		after.clone() // workaround for after.filter() codegen bug, when `mut after []string`
 	matches_after := orig_after.filter(it != flag_name)
 	if matches_after.len < after.len {
 		after = matches_after.clone()

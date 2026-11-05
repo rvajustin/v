@@ -6,23 +6,29 @@ module builtin
 
 fn (a any) toString()
 
+// panic prints an error message, then exits the process with exit code of 1.
 @[noreturn]
 pub fn panic(s string) {
-	eprintln('V panic: ${s}\n${js_stacktrace()}')
+	eprintln('V panic: ' + s)
+	eprintln(js_stacktrace())
 	exit(1)
 }
 
-// IError holds information about an error instance
+// panic_n prints an error message, followed by the given number, then exits the process with exit code of 1.
+@[noreturn]
+pub fn panic_n(s string, n i64) {
+	eprintln('V panic: ' + s)
+	eprintln(js_stacktrace())
+	exit(1)
+}
+
+// IError holds information about an error instance.
 pub interface IError {
-	// >> Hack to allow old style custom error implementations
-	// TODO: remove once deprecation period for `IError` methods has ended
-	msg  string
-	code int // <<
 	msg() string
 	code() int
 }
 
-// str returns the message of IError
+// str returns the message of IError.
 pub fn (err IError) str() string {
 	return match err {
 		None__ {
@@ -35,15 +41,7 @@ pub fn (err IError) str() string {
 			err.str()
 		}
 		else {
-			// >> Hack to allow old style custom error implementations
-			// TODO: remove once deprecation period for `IError` methods has ended
-			old_error_style := unsafe { voidptr(&err.msg.str) != voidptr(&err.code.str) } // if fields are not defined (new style) they don't have an offset between them
-			if old_error_style {
-				'${err.type_name()}: ${err.msg}'
-			} else {
-				// <<
-				'${err.type_name()}: ${err.msg()}'
-			}
+			'${err.type_name()}: ${err.msg()}'
 		}
 	}
 }
@@ -51,34 +49,34 @@ pub fn (err IError) str() string {
 // Error is the empty default implementation of `IError`.
 pub struct Error {}
 
-// msg returns the message of Error
+// msg returns the message of Error.
 pub fn (err Error) msg() string {
 	return ''
 }
 
-// code returns the code of Error
+// code returns the code of Error.
 pub fn (err Error) code() int {
 	return 0
 }
 
-// MessageError is the default implementation of the `IError` interface that is returned by the `error()` function
+// MessageError is the default implementation of the `IError` interface that is returned by the `error()` function.
 struct MessageError {
 pub:
 	msg  string
 	code int
 }
 
-// str returns the message and code of the MessageError
+// str returns the message and code of the MessageError.
 pub fn (err MessageError) str() string {
 	return err.msg
 }
 
-// msg returns the message of the MessageError
+// msg returns the message of the MessageError.
 pub fn (err MessageError) msg() string {
 	return err.msg
 }
 
-// code returns the code of MessageError
+// code returns the code of MessageError.
 pub fn (err MessageError) code() int {
 	return err.code
 }
@@ -95,37 +93,27 @@ fn (_ None__) str() string {
 
 pub struct Option {
 	state u8
-	err   IError = none__
 }
 
-// str returns the Option type: ok, none, or error
 pub fn (o Option) str() string {
 	if o.state == 0 {
 		return 'Option{ ok }'
 	}
-	if o.state == 1 {
-		return 'Option{ none }'
-	}
-	return 'Option{ error: "${o.err}" }'
+	return 'Option{ none }'
 }
 
 pub struct _option {
 	state u8
-	err   IError = none__
 }
 
-// str returns the Option type: ok, none, or error
 pub fn (o _option) str() string {
 	if o.state == 0 {
 		return 'Option{ ok }'
 	}
-	if o.state == 1 {
-		return 'Option{ none }'
-	}
-	return 'Option{ error: "${o.err}" }'
+	return 'Option{ none }'
 }
 
-// trace_error prints to stderr a string and a backtrace of the error
+// trace_error prints to stderr a string and a backtrace of the error.
 fn trace_error(x string) {
 	eprintln('> ${@FN} | ${x}')
 }
@@ -144,12 +132,23 @@ pub fn error(message string) IError {
 // Example: if ouch { return error_with_code('an error occurred', 1) }
 @[inline]
 pub fn error_with_code(message string, code int) IError {
-	// trace_error('$message | code: $code')
+	// trace_error('${message} | code: ${code}')
 	return &MessageError{
-		msg: message
+		msg:  message
 		code: code
 	}
 }
+
+// error_sentinel is a reusable, allocation-free `IError` for hot "not found"/stateless
+// error paths. Unlike `error('...')`, which allocates a fresh `MessageError` on every
+// call, `error_sentinel` is a single cached const (mirroring how `none` works for `?T`),
+// so `return error_sentinel` from a `!T` function avoids the per-call allocation.
+// Use it when the caller discards the error (e.g. `x() or { ... }`) and the specific
+// message is not needed; its `.msg()` is just `'error'`.
+// Example: fn find(x int) !int { if x < 0 { return error_sentinel } return x }
+pub const error_sentinel = IError(&MessageError{
+	msg: 'error'
+})
 
 // free allows for manually freeing memory allocated at the address `ptr`.
 // However, this is a no-op on JS backend

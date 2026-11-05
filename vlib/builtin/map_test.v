@@ -1,6 +1,6 @@
 import rand
 
-const strings = unique_strings(7000, 10)
+const test_strings = unique_strings(7000, 10)
 
 fn unique_strings(arr_len int, str_len int) []string {
 	mut arr := []string{cap: arr_len}
@@ -15,20 +15,20 @@ fn unique_strings(arr_len int, str_len int) []string {
 
 fn test_get_and_set_many() {
 	mut m := map[string]int{}
-	for i, s in strings {
+	for i, s in test_strings {
 		m[s] = i
 		assert m[s] == i
 		assert m.len == i + 1
 	}
-	for i, s in strings {
+	for i, s in test_strings {
 		assert m[s] == i
 	}
-	assert m.len == strings.len
+	assert m.len == test_strings.len
 }
 
 fn test_for_in_many() {
 	mut m := map[string]int{}
-	for i, s in strings {
+	for i, s in test_strings {
 		m[s] = i
 	}
 	for k, v in m {
@@ -38,34 +38,34 @@ fn test_for_in_many() {
 
 fn test_keys_many() {
 	mut m := map[string]int{}
-	for i, s in strings {
+	for i, s in test_strings {
 		m[s] = i
 	}
 	keys := m.keys()
-	assert keys.len == strings.len
+	assert keys.len == test_strings.len
 	assert keys.len == m.len
-	assert keys == strings
+	assert keys == test_strings
 }
 
 fn test_values_many() {
 	mut m := map[string]int{}
-	for i, s in strings {
+	for i, s in test_strings {
 		m[s] = i
 	}
 	values := m.values()
-	assert values.len == strings.len
+	assert values.len == test_strings.len
 	assert values.len == m.len
 }
 
 fn test_deletes_many() {
 	mut m := map[string]int{}
-	for i, s in strings {
+	for i, s in test_strings {
 		m[s] = i
 	}
-	for i, s in strings {
+	for i, s in test_strings {
 		m.delete(s)
 		assert m[s] == 0
-		assert m.len == strings.len - (i + 1)
+		assert m.len == test_strings.len - (i + 1)
 	}
 	assert m.len == 0
 	assert m.keys().len == 0
@@ -127,7 +127,7 @@ fn test_map() {
 	peter := users['1']
 	assert peter.name == 'Peter'
 	mut a := Aaa{
-		m: map[string]int{}
+		m:     map[string]int{}
 		users: map[string]User{}
 	}
 	a.users['Bob'] = User{'Bob'}
@@ -159,6 +159,18 @@ fn test_map_init() {
 
 fn test_string_map() {
 	// m := map[string]Fn
+}
+
+fn test_free_clears_map_header() {
+	m := {
+		'name': 'Joe'
+	}
+	assert m.str() == "{'name': 'Joe'}"
+	unsafe { m.free() }
+	assert m.len == 0
+	assert m.str() == '{}'
+	unsafe { m.free() }
+	assert m.str() == '{}'
 }
 
 fn test_large_map() {
@@ -211,10 +223,10 @@ fn test_various_map_value() {
 	// assert m13['test'] == rune(0)
 	mut m14 := map[string]voidptr{}
 	m14['test'] = unsafe { nil }
-	assert m14['test'] == unsafe { nil }
+	assert unsafe { m14['test'] } == unsafe { nil }
 	mut m15 := map[string]&u8{}
-	m15['test'] = &u8(0)
-	assert m15['test'] == &u8(0)
+	m15['test'] = &u8(unsafe { nil })
+	assert unsafe { m15['test'] } == &u8(unsafe { nil })
 	mut m16 := map[string]i64{}
 	m16['test'] = i64(0)
 	assert m16['test'] == i64(0)
@@ -222,8 +234,8 @@ fn test_various_map_value() {
 	m17['test'] = u64(0)
 	assert m17['test'] == u64(0)
 	mut m18 := map[string]&int{}
-	m18['test'] = &int(0)
-	assert m18['test'] == &int(0)
+	m18['test'] = &int(unsafe { nil })
+	assert unsafe { m18['test'] } == &int(unsafe { nil })
 }
 
 fn test_string_arr() {
@@ -382,6 +394,18 @@ fn test_map_assign() {
 		's': u16(5)
 		't': 3
 	}
+	assert a == {
+		'x': 12.4
+		'y': 3.0
+	}
+	assert b == {
+		'u': -13
+		'v': 12
+	}
+	assert c == {
+		's': u16(5)
+		't': u16(3)
+	}
 	_ := Mstruct1{{
 		'p': 12
 	}}
@@ -408,9 +432,18 @@ fn test_postfix_op_directly() {
 
 fn test_map_push_directly() {
 	mut a := map[string][]string{}
+	a['aaa'] = []string{}
 	a['aaa'] << ['a', 'b', 'c']
 	assert a['aaa'].len == 3
 	assert a['aaa'] == ['a', 'b', 'c']
+}
+
+fn test_map_push_inserts_for_missing_key() {
+	mut a := map[string][]string{}
+	a['aaa'] << 'a'
+	assert a == {
+		'aaa': ['a']
+	}
 }
 
 fn test_assign_directly() {
@@ -552,6 +585,40 @@ fn test_map_clone() {
 	assert nums2['bar'] == 8
 }
 
+fn test_map_reserve_keeps_empty_map_valid() {
+	mut m := {
+		'abc': 42
+	}
+	mut moved := m.move()
+	moved.clear()
+	moved.reserve(6)
+	moved.delete('def')
+	assert moved.keys().len == 0
+	assert moved.values().len == 0
+	assert moved.clone().len == 0
+	unsafe { moved.free() }
+}
+
+fn test_map_move_leaves_source_empty() {
+	mut original := {
+		'abc': 42
+	}
+	moved := original.move()
+	assert moved.len == 1
+	assert original.len == 0
+	assert 'abc' !in original
+	original.clear()
+	assert original.len == 0
+	original.reserve(32)
+	original['def'] = 24
+	assert original == {
+		'def': 24
+	}
+	assert moved == {
+		'abc': 42
+	}
+}
+
 struct MValue {
 	name string
 	misc map[string]string
@@ -668,8 +735,8 @@ fn test_voidptr_values() {
 	v := 5
 	m['var'] = &v
 	m['map'] = &m
-	assert m['var'] == &v
-	assert m['map'] == &m
+	assert unsafe { m['var'] } == &v
+	assert unsafe { m['map'] } == &m
 	assert m.values().len == 2
 }
 
@@ -1034,4 +1101,70 @@ fn test_map_clear() {
 	s.reset()
 	s.add2(item1)
 	assert s.state.len == 2
+}
+
+fn test_small_map_reads_after_tombstones_and_growth() {
+	mut m := {
+		'first':  11
+		'second': 22
+	}
+	assert m['first'] == 11
+	assert m['second'] or { -1 } == 22
+	assert 'first' in m
+	assert 'missing' !in m
+	assert m['missing'] == 0
+	assert m['missing'] or { -1 } == -1
+	m.delete('first')
+	assert 'first' !in m
+	assert m['first'] or { -1 } == -1
+	assert m['second'] == 22
+	m['third'] = 33
+	assert m['second'] == 22
+	assert m['third'] or { -1 } == 33
+	m.delete('third')
+	assert m['second'] == 22
+	mut copy := m.clone()
+	copy['second'] = 44
+	assert m['second'] == 22
+	assert copy['second'] == 44
+	m.clear()
+	assert 'second' !in m
+	m['new'] = 55
+	assert m['new'] == 55
+	assert m.keys() == ['new']
+
+	mut ints := {
+		7: 'seven'
+		9: 'nine'
+	}
+	assert ints[7] == 'seven'
+	assert ints[9] or { 'absent' } == 'nine'
+	ints.delete(7)
+	assert 7 !in ints
+	assert ints[9] == 'nine'
+	assert ints[7] == ''
+}
+
+fn test_small_map_lookup_thresholds_and_deleted_slots() {
+	for size in 1 .. 10 {
+		mut values := map[string]int{}
+		keys := ['a', 'bb', 'ccc', 'dddd', 'eeeee', 'ffffff', 'ggggggg', 'hhhhhhhh', 'iiiiiiiii']
+		for i in 0 .. size {
+			values[keys[i]] = i + 1
+		}
+		for i in 0 .. size {
+			assert values[keys[i]] == i + 1
+			assert values[keys[i]] or { -1 } == i + 1
+			assert keys[i] in values
+		}
+		for i in 0 .. size {
+			values.delete(keys[i])
+			assert keys[i] !in values
+			assert values[keys[i]] == 0
+			assert values[keys[i]] or { -1 } == -1
+			for j in i + 1 .. size {
+				assert values[keys[j]] == j + 1
+			}
+		}
+	}
 }

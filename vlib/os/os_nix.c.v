@@ -1,20 +1,18 @@
 module os
 
-import strings
+#flag @VEXEROOT/vlib/os/execute_capture_nix.o
 
-#include <dirent.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/utsname.h>
-#include <sys/types.h>
-#include <utime.h>
+// short_path is a Windows-only helper that returns the DOS 8.3 short path.
+// On non-Windows platforms it simply returns the given path unchanged,
+// so that callers guarded by `$if windows { ... }` type-check on other targets.
+pub fn short_path(path string) string {
+	return path
+}
 
-// path_separator is the platform specific separator string, used between the folders
-// and filenames in a path. It is '/' on POSIX, and '\\' on Windows.
+// path_separator is the platform specific separator string, used between the folders and filenames in a path. It is '/' on POSIX, and '\\' on Windows.
 pub const path_separator = '/'
 
-// path_delimiter is the platform specific delimiter string, used between the paths
-// in environment variables like PATH. It is ':' on POSIX, and ';' on Windows.
+// path_delimiter is the platform specific delimiter string, used between the paths in environment variables like PATH. It is ':' on POSIX, and ';' on Windows.
 pub const path_delimiter = ':'
 
 // path_devnull is a platform-specific file path of the null device.
@@ -29,56 +27,47 @@ const stderr_value = 2
 
 // (Must be realized in Syscall) (Must be specified)
 // ref: http://www.ccfit.nsu.ru/~deviv/courses/unix/unix/ng7c229.html
-pub const s_ifmt = 0xF000 // type of file
+pub const s_ifmt = u32(0xF000) // type of file
+pub const s_ifdir = u32(0x4000) // directory
+pub const s_ifreg = u32(0x8000) // regular file
+pub const s_iflnk = u32(0xa000) // link
+pub const s_isuid = u32(0o4000) // SUID
+pub const s_isgid = u32(0o2000) // SGID
+pub const s_isvtx = u32(0o1000) // Sticky
+pub const s_irusr = u32(0o0400) // Read by owner
+pub const s_iwusr = u32(0o0200) // Write by owner
+pub const s_ixusr = u32(0o0100) // Execute by owner
+pub const s_irgrp = u32(0o0040) // Read by group
+pub const s_iwgrp = u32(0o0020) // Write by group
+pub const s_ixgrp = u32(0o0010) // Execute by group
+pub const s_iroth = u32(0o0004) // Read by others
+pub const s_iwoth = u32(0o0002) // Write by others
+pub const s_ixoth = u32(0o0001)
 
-pub const s_ifdir = 0x4000 // directory
+fn C.utime(&char, &C.utimbuf) i32
 
-pub const s_ifreg = 0x8000 // regular file
+fn C.uname(name &C.utsname) i32
 
-pub const s_iflnk = 0xa000 // link
+fn C.symlink(&char, &char) i32
 
-pub const s_isuid = 0o4000 // SUID
+fn C.readlink(&char, &char, uint) i32
 
-pub const s_isgid = 0o2000 // SGID
+fn C.link(&char, &char) i32
 
-pub const s_isvtx = 0o1000 // Sticky
-
-pub const s_irusr = 0o0400 // Read by owner
-
-pub const s_iwusr = 0o0200 // Write by owner
-
-pub const s_ixusr = 0o0100 // Execute by owner
-
-pub const s_irgrp = 0o0040 // Read by group
-
-pub const s_iwgrp = 0o0020 // Write by group
-
-pub const s_ixgrp = 0o0010 // Execute by group
-
-pub const s_iroth = 0o0004 // Read by others
-
-pub const s_iwoth = 0o0002 // Write by others
-
-pub const s_ixoth = 0o0001
-
-fn C.utime(&char, &C.utimbuf) int
-
-fn C.uname(name &C.utsname) int
-
-fn C.symlink(&char, &char) int
-
-fn C.link(&char, &char) int
-
-fn C.gethostname(&char, int) int
+fn C.gethostname(&char, uint) i32
 
 // Note: not available on Android fn C.getlogin_r(&char, int) int
 fn C.getlogin() &char
 
-fn C.getppid() int
+fn C.getppid() i32
 
-fn C.getgid() int
+fn C.getgid() i32
 
-fn C.getegid() int
+fn C.getegid() i32
+
+fn C.v_os_execute_capture_start(cmd &char, child_pid &int, read_fd &int) int
+
+fn C.v_os_exec_capture_start(argv &&char, child_pid &int, read_fd &int) int
 
 enum GlobMatch {
 	exact
@@ -87,6 +76,26 @@ enum GlobMatch {
 	start_and_ends_with
 	contains
 	any
+}
+
+fn glob_match_wildcard(name string, pattern string) bool {
+	parts := pattern.split('*')
+	if !name.starts_with(parts[0]) {
+		return false
+	}
+	mut pos := parts[0].len
+	for i in 1 .. parts.len {
+		part := parts[i]
+		if part == '' {
+			continue
+		}
+		if i == parts.len - 1 {
+			return name.ends_with(part) && name.len - part.len >= pos
+		}
+		offset := name[pos..].index(part) or { return false }
+		pos += offset + part.len
+	}
+	return true
 }
 
 fn glob_match(dir string, pattern string, next_pattern string, mut matches []string) []string {
@@ -125,8 +134,8 @@ fn glob_match(dir string, pattern string, next_pattern string, mut matches []str
 	}
 	for file in files {
 		mut fpath := file
-		f := if file.contains(os.path_separator) {
-			pathwalk := file.split(os.path_separator)
+		f := if file.contains(path_separator) {
+			pathwalk := file.split(path_separator)
 			pathwalk[pathwalk.len - 1]
 		} else {
 			fpath = if dir == '.' { file } else { '${dir}/${file}' }
@@ -149,18 +158,19 @@ fn glob_match(dir string, pattern string, next_pattern string, mut matches []str
 				f.ends_with(pat)
 			}
 			.start_and_ends_with {
-				p := pat.split('*')
-				f.starts_with(p[0]) && f.ends_with(p[1])
+				// Keep the original edge wildcards and match every interior piece in order.
+				glob_match_wildcard(f, if pattern == '**' { next_pattern } else { pattern })
 			}
 			.contains {
 				f.contains(pat)
 			}
 		}
+
 		if hit {
 			if is_dir(fpath) {
 				subdirs << fpath
 				if next_pattern == pattern && next_pattern != '' {
-					matches << '${fpath}${os.path_separator}'
+					matches << '${fpath}${path_separator}'
 				}
 			} else {
 				matches << fpath
@@ -171,16 +181,28 @@ fn glob_match(dir string, pattern string, next_pattern string, mut matches []str
 }
 
 fn native_glob_pattern(pattern string, mut matches []string) ! {
-	steps := pattern.split(os.path_separator)
-	cwd := if pattern.starts_with(os.path_separator) { os.path_separator } else { '.' }
+	steps := pattern.split(path_separator)
+	mut cwd := if pattern.starts_with(path_separator) { path_separator } else { '.' }
+	// A leading `.` or `..` says where the search starts; it is not a pattern to
+	// match the entries of a folder against. It is folded into the start folder,
+	// and put back in front of the results verbatim, the way `glob(3)` reports
+	// them: `./a/*.v` yields `./a/x.v`, not `a/x.v`.
+	mut first := 0
+	mut prefix := ''
+	for first + 1 < steps.len && (steps[first] == '.' || steps[first] == '..') {
+		prefix += '${steps[first]}${path_separator}'
+		cwd = if cwd == '.' { steps[first] } else { '${cwd}/${steps[first]}' }
+		first++
+	}
+	from := matches.len
 	mut subdirs := [cwd]
-	for i := 0; i < steps.len; i++ {
+	for i := first; i < steps.len; i++ {
 		step := steps[i]
 		step2 := if i + 1 == steps.len { step } else { steps[i + 1] }
 		if step == '' {
 			continue
 		}
-		if is_dir('${cwd}${os.path_separator}${step}') {
+		if is_dir('${cwd}${path_separator}${step}') {
 			dd := if cwd == '/' {
 				step
 			} else {
@@ -198,29 +220,37 @@ fn native_glob_pattern(pattern string, mut matches []string) ! {
 		}
 		mut subs := []string{}
 		for sd in subdirs {
-			d := if cwd == '/' {
-				sd
-			} else {
-				if cwd == '.' || cwd == '' {
-					sd
-				} else {
-					if sd == '.' || sd == '/' { cwd } else { '${cwd}/${sd}' }
-				}
-			}
-			subs << glob_match(d.replace('//', '/'), step, step2, mut matches)
+			// The folders walked already carry the start folder in front.
+			subs << glob_match(sd.replace('//', '/'), step, step2, mut matches)
 		}
 		subdirs = subs.clone()
 	}
+	if prefix != '' {
+		// The walk reports paths rooted at the folded start folder; swap that
+		// root for the prefix as it was written in the pattern. From `.`, only the
+		// folders matched by a wildcard or walked by `**` start with `./`.
+		walked := '${cwd}${path_separator}'
+		for i := from; i < matches.len; i++ {
+			found := matches[i]
+			matches[i] = if found.starts_with(walked) {
+				'${prefix}${found[walked.len..]}'
+			} else {
+				'${prefix}${found}'
+			}
+		}
+	}
 }
 
-pub fn utime(path string, actime int, modtime int) ! {
+// utime changes the access and modification times of the inode specified by path.
+// It returns POSIX error message, if it can not do so.
+pub fn utime(path string, actime i64, modtime i64) ! {
 	u := C.utimbuf{actime, modtime}
 	if C.utime(&char(path.str), &u) != 0 {
 		return error_with_code(posix_get_error_msg(C.errno), C.errno)
 	}
 }
 
-// uname returns information about the platform on which the program is running
+// uname returns information about the platform on which the program is running.
 // For example:
 // os.Uname{
 //    sysname: 'Linux'
@@ -240,7 +270,10 @@ pub fn uname() Uname {
 	mut u := Uname{}
 	unsafe {
 		d := &C.utsname(malloc_noscan(int(sizeof(C.utsname))))
-		if C.uname(d) == 0 {
+		// illumos returns 1 on success (SysV heritage), Linux and the BSDs
+		// return 0, and both return -1 on error, so anything non-negative
+		// means the struct is filled.
+		if C.uname(d) >= 0 {
 			u.sysname = cstring_to_vstring(d.sysname)
 			u.nodename = cstring_to_vstring(d.nodename)
 			u.release = cstring_to_vstring(d.release)
@@ -252,6 +285,7 @@ pub fn uname() Uname {
 	return u
 }
 
+// hostname returns the hostname (system's DNS name) or POSIX error message if the hostname call fails.
 pub fn hostname() !string {
 	mut hstnme := ''
 	size := 256
@@ -264,6 +298,8 @@ pub fn hostname() !string {
 	return error(posix_get_error_msg(C.errno))
 }
 
+// loginname returns the name of the user logged in on the controlling terminal of the process.
+// It returns a POSIX error message, if the getlogin call fails.
 pub fn loginname() !string {
 	x := C.getlogin()
 	if !isnil(x) {
@@ -272,53 +308,49 @@ pub fn loginname() !string {
 	return error(posix_get_error_msg(C.errno))
 }
 
-fn init_os_args(argc int, argv &&u8) []string {
-	mut args_ := []string{len: argc}
-	for i in 0 .. argc {
-		args_[i] = unsafe { tos_clone(argv[i]) }
-	}
-	return args_
-}
-
 // ls returns ![]string of the files and dirs in the given `path` ( os.ls uses C.readdir ). Symbolic links are returned to be files. For recursive list see os.walk functions.
+// The entries come in the order the operating system reports them, which os.ls does not sort.
+// That order differs between platforms and filesystems, so call `.sort()` on the result when
+// a stable order is needed.
 // See also: `os.walk`, `os.walk_ext`, `os.is_dir`, `os.is_file`
-// Example: https://github.com/vlang/v/blob/master/examples/readdir.v
+// Example:
 // ```
 //   entries := os.ls(os.home_dir()) or { [] }
 //   for entry in entries {
 //     if os.is_dir(os.join_path(os.home_dir(), entry)) {
-//       println('dir: $entry')
+//       println('dir: ${entry}')
 //     } else {
-//       println('file: $entry')
+//       println('file: ${entry}')
 //     }
 //   }
 // ```
+@[manualfree]
 pub fn ls(path string) ![]string {
 	if path == '' {
 		return error('ls() expects a folder, not an empty string')
 	}
 	mut res := []string{cap: 50}
-	dir := unsafe { C.opendir(&char(path.str)) }
-	if isnil(dir) {
-		return error('ls() couldnt open dir "${path}"')
+	dir_ptr := unsafe { C.opendir(&char(path.str)) }
+	if isnil(dir_ptr) {
+		return error_posix(msg: 'ls() couldnt open dir "${path}"')
 	}
 	mut ent := &C.dirent(unsafe { nil })
-	// mut ent := &C.dirent{!}
 	for {
-		ent = C.readdir(dir)
+		ent = C.readdir(dir_ptr)
 		if isnil(ent) {
 			break
 		}
 		unsafe {
 			bptr := &u8(&ent.d_name[0])
-			if bptr[0] == 0 || (bptr[0] == `.` && bptr[1] == 0)
-				|| (bptr[0] == `.` && bptr[1] == `.` && bptr[2] == 0) {
+			// vfmt off
+			if bptr[0] == 0 || (bptr[0] == `.` && bptr[1] == 0) || (bptr[0] == `.` && bptr[1] == `.` && bptr[2] == 0) {
 				continue
 			}
 			res << tos_clone(bptr)
+			// vfmt on
 		}
 	}
-	C.closedir(dir)
+	C.closedir(dir_ptr)
 	return res
 }
 
@@ -330,45 +362,95 @@ pub fn mkdir(path string, params MkdirParams) ! {
 	apath := real_path(path)
 	r := unsafe { C.mkdir(&char(apath.str), params.mode) }
 	if r == -1 {
-		return error(posix_get_error_msg(C.errno))
+		return error_posix()
 	}
 }
 
 // execute starts the specified command, waits for it to complete, and returns its output.
-@[manualfree]
+@[deprecated: 'use os.exec with an argument array; command strings can allow shell injection']
 pub fn execute(cmd string) Result {
-	pcmd := 'exec 2>&1;${cmd}'
-	defer {
-		unsafe { pcmd.free() }
-	}
-	f := vpopen(pcmd)
-	if isnil(f) {
+	return execute_shell(cmd)
+}
+
+fn execute_shell(cmd string) Result {
+	mut pid := 0
+	mut read_fd := -1
+	v_os_execute_lock()
+	rc := C.v_os_execute_capture_start(&char(cmd.str), &pid, &read_fd)
+	v_os_execute_unlock()
+	if rc != 0 {
 		return Result{
 			exit_code: -1
-			output: 'exec("${cmd}") failed'
+			output:    'exec("${cmd}") failed'
 		}
 	}
-	fd := fileno(f)
-	mut res := strings.new_builder(1024)
-	defer {
-		unsafe { res.free() }
-	}
-	buf := [4096]u8{}
-	unsafe {
-		pbuf := &buf[0]
-		for {
-			len := C.read(fd, pbuf, 4096)
-			if len == 0 {
-				break
-			}
-			res.write_ptr(pbuf, len)
+	soutput := fd_slurp(read_fd).join('')
+	fd_close(read_fd)
+	mut status := 0
+	for {
+		C.errno = 0
+		if C.waitpid(pid, &status, 0) != -1 {
+			break
+		}
+		if C.errno == C.EINTR {
+			continue
+		}
+		return Result{
+			exit_code: -1
+			output:    soutput
 		}
 	}
-	soutput := res.str()
-	exit_code := vpclose(f)
+	exit_code, _ := posix_wait4_to_exit_status(status)
 	return Result{
 		exit_code: exit_code
-		output: soutput
+		output:    soutput
+	}
+}
+
+// exec starts the specified command with arguments, waits for it to complete, and returns its output.
+pub fn exec(args []string) Result {
+	if args.len == 0 {
+		return Result{
+			exit_code: -1
+			output:    'exec requires at least one argument'
+		}
+	}
+	mut cargs := []&char{cap: args.len + 1}
+	for arg in args {
+		cargs << &char(arg.str)
+	}
+	cargs << &char(unsafe { nil })
+	mut pid := 0
+	mut read_fd := -1
+	v_os_execute_lock()
+	rc := C.v_os_exec_capture_start(cargs.data, &pid, &read_fd)
+	v_os_execute_unlock()
+	if rc != 0 {
+		return Result{
+			exit_code: -1
+			output:    'exec("${args[0]}") failed'
+		}
+	}
+	soutput := fd_slurp(read_fd).join('')
+	fd_close(read_fd)
+	mut status := 0
+	for {
+		C.errno = 0
+		if C.waitpid(pid, &status, 0) != -1 {
+			break
+		}
+		if C.errno == C.EINTR {
+			continue
+		}
+		return Result{
+			exit_code: -1
+			output:    soutput
+		}
+	}
+	exit_code, _ := posix_wait4_to_exit_status(status)
+	return Result{
+		exit_code: exit_code
+		output:    soutput
 	}
 }
 
@@ -376,64 +458,69 @@ pub fn execute(cmd string) Result {
 // On Windows raw_execute starts the specified command, waits for it to complete, and returns its output.
 // It's marked as `unsafe` to help emphasize the problems that may arise by allowing, for example,
 // user provided escape sequences.
+@[deprecated: 'use os.exec with an argument array; command strings can allow shell injection']
 @[unsafe]
 pub fn raw_execute(cmd string) Result {
-	return execute(cmd)
+	return execute_shell(cmd)
 }
 
-@[manualfree]
-pub fn (mut c Command) start() ! {
-	pcmd := c.path + ' 2>&1'
-	defer {
-		unsafe { pcmd.free() }
-	}
-	c.f = vpopen(pcmd)
-	if isnil(c.f) {
-		return error('exec("${c.path}") failed')
-	}
-}
-
-@[manualfree]
-pub fn (mut c Command) read_line() string {
-	buf := [4096]u8{}
-	mut res := strings.new_builder(1024)
-	defer {
-		unsafe { res.free() }
-	}
-	unsafe {
-		bufbp := &buf[0]
-		for C.fgets(&char(bufbp), 4096, c.f) != 0 {
-			len := vstrlen(bufbp)
-			for i in 0 .. len {
-				if bufbp[i] == `\n` {
-					res.write_ptr(bufbp, i)
-					final := res.str()
-					return final
-				}
-			}
-			res.write_ptr(bufbp, len)
-		}
-	}
-	c.eof = true
-	final := res.str()
-	return final
-}
-
-pub fn (mut c Command) close() ! {
-	c.exit_code = vpclose(c.f)
-	if c.exit_code == 127 {
-		return error_with_code('error', 127)
-	}
-}
-
-pub fn symlink(origin string, target string) ! {
-	res := C.symlink(&char(origin.str), &char(target.str))
+// symlink creates a symbolic link named link_name, which points to target.
+// It returns a POSIX error message, if it can not do so.
+pub fn symlink(target string, link_name string) ! {
+	res := C.symlink(&char(target.str), &char(link_name.str))
 	if res == 0 {
 		return
 	}
 	return error(posix_get_error_msg(C.errno))
 }
 
+// readlink reads the target of a symbolic link.
+// It returns a POSIX error message if it can not do so.
+//
+// Note that the target of a symbolic link can be any string:
+// it is often used to point to another path, but the target is not guaranteed
+// to resolve as a path, nor to point to a path that exists.
+@[manualfree]
+pub fn readlink(path string) !string {
+	// Use a region of stack to get information into; we'll return new memory of more precise size later.
+	mut buf := [max_path_buffer_size]u8{}
+	// readlink returns the number of bytes written into buf, or -1 for errors.
+	res := C.readlink(&char(path.str), &char(&buf[0]), max_path_buffer_size)
+	if res < 0 {
+		return last_error()
+	}
+	// Common case: we got a complete read into our buffer on the stack.
+	// In this case, copy the data into a new heap-allocated string that's right-sized
+	// (we can't return memory from our stack).
+	if res < max_path_buffer_size {
+		return unsafe { (&buf[0]).vstring_with_len(res).clone() }
+	}
+	// If the number of bytes read wasn't less than as many as we said we'd accept: that means we might not have gotten a complete read.
+	// In this case, we have to start doing heap allocations, increasingly large, and simply check until we get a complete one.
+	// Whenever we do succeed: we'll return a string that refers to a subset of that possibly excessively sized buffer,
+	// because we're already on the heap and returning it is valid; and because allocating a new buffer just
+	// to save some resident memory is usually a poor trade of spending of time just to reclaim a very minor amount of space.
+	mut size := max_path_buffer_size
+	for {
+		size *= 2
+		mut buf2 := unsafe { &char(malloc_noscan(size)) }
+		res2 := C.readlink(&char(path.str), buf2, size)
+		if res2 < 0 {
+			return last_error()
+		}
+		if res2 < size {
+			unsafe {
+				buf2[res2] = 0
+				return cstring_to_vstring(buf2)
+			}
+		}
+		unsafe { free(buf2) } // and then loop around to try again with a larger one.
+	}
+	return error('${@METHOD} unreachable code')
+}
+
+// link creates a new link (also known as a hard link) to an existing file.
+// It returns a POSIX error message, if it can not do so.
 pub fn link(origin string, target string) ! {
 	res := C.link(&char(origin.str), &char(target.str))
 	if res == 0 {
@@ -452,11 +539,13 @@ pub fn (mut f File) close() {
 		return
 	}
 	f.is_opened = false
-	C.fflush(f.cfile)
-	C.fclose(f.cfile)
+	cfile := f.cfile
+	f.cfile = unsafe { nil }
+	C.fflush(cfile)
+	C.fclose(cfile)
 }
 
-fn C.mkstemp(stemplate &u8) int
+fn C.mkstemp(stemplate &u8) i32
 
 // ensure_folder_is_writable checks that `folder` exists, and is writable to the process
 // by creating an empty file in it, then deleting it.
@@ -482,37 +571,43 @@ pub fn ensure_folder_is_writable(folder string) ! {
 	rm(tmp_perm_check)!
 }
 
+// getpid returns the process ID (PID) of the calling process.
 @[inline]
 pub fn getpid() int {
 	return C.getpid()
 }
 
+// getppid returns the process ID of the parent of the calling process.
 @[inline]
 pub fn getppid() int {
 	return C.getppid()
 }
 
+// getuid returns the real user ID of the calling process.
 @[inline]
 pub fn getuid() int {
 	return C.getuid()
 }
 
+// geteuid returns the effective user ID of the calling process.
 @[inline]
 pub fn geteuid() int {
 	return C.geteuid()
 }
 
+// getgid returns the real group ID of the calling process.
 @[inline]
 pub fn getgid() int {
 	return C.getgid()
 }
 
+// getegid returns the effective group ID of the calling process.
 @[inline]
 pub fn getegid() int {
 	return C.getegid()
 }
 
-// Turns the given bit on or off, depending on the `enable` parameter
+// Turns the given bit on or off, depending on the `enable` parameter.
 pub fn posix_set_permission_bit(path_s string, mode u32, enable bool) {
 	mut new_mode := u32(0)
 	if s := stat(path_s) {
@@ -522,6 +617,7 @@ pub fn posix_set_permission_bit(path_s string, mode u32, enable bool) {
 		true { new_mode |= mode }
 		false { new_mode &= (0o7777 - mode) }
 	}
+
 	C.chmod(&char(path_s.str), int(new_mode))
 }
 
@@ -531,9 +627,44 @@ fn get_long_path(path string) !string {
 	return path
 }
 
-fn C.sysconf(name int) i64
+fn C.sysconf(name i32) i64
 
 // page_size returns the page size in bytes.
 pub fn page_size() int {
 	return int(C.sysconf(C._SC_PAGESIZE))
+}
+
+struct C.statvfs {
+	f_bsize  uint
+	f_frsize uint
+	f_blocks uint
+	f_bfree  uint
+	f_bavail uint
+}
+
+// disk_usage returns disk usage of `path`.
+@[manualfree]
+pub fn disk_usage(path string) !DiskUsage {
+	mpath := if path == '' { '.' } else { path }
+	defer { unsafe { mpath.free() } }
+	mut vfs := C.statvfs{}
+	ret := unsafe { C.statvfs(&char(mpath.str), &vfs) }
+	if ret == -1 {
+		return error('cannot get disk usage of path')
+	}
+	// f_blocks counts f_frsize units (POSIX). f_bsize is the preferred I/O size,
+	// which Solaris and FreeBSD report far above the fragment size, so using it
+	// overstated the disk size.
+	mut unit := u64(vfs.f_frsize)
+	if unit == 0 {
+		unit = u64(vfs.f_bsize)
+	}
+	f_blocks := u64(vfs.f_blocks)
+	f_bavail := u64(vfs.f_bavail)
+	f_bfree := u64(vfs.f_bfree)
+	return DiskUsage{
+		total:     unit * f_blocks
+		available: unit * f_bavail
+		used:      unit * (f_blocks - f_bfree)
+	}
 }

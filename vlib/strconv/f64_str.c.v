@@ -20,9 +20,9 @@ https://github.com/cespare/ryu/tree/ba56a33f39e3bbbfa409095d0f9ae168a595feea
 
 =============================================================================*/
 
-@[direct_array_access]
+@[direct_array_access; manualfree]
 fn (d Dec64) get_string_64(neg bool, i_n_digit int, i_pad_digit int) string {
-	mut n_digit := i_n_digit + 1
+	n_digit := if i_n_digit < 1 { 1 } else { i_n_digit + 1 }
 	pad_digit := i_pad_digit + 1
 	mut out := d.m
 	mut d_exp := d.e
@@ -36,6 +36,8 @@ fn (d Dec64) get_string_64(neg bool, i_n_digit int, i_pad_digit int) string {
 	}
 
 	mut buf := []u8{len: (out_len + 6 + 1 + 1 + fw_zeros)} // sign + mant_len + . +  e + e_sign + exp_len(2) + \0}
+	unsafe { buf.flags |= .noslices }
+	defer { unsafe { buf.free() } }
 	mut i := 0
 
 	if neg {
@@ -50,19 +52,22 @@ fn (d Dec64) get_string_64(neg bool, i_n_digit int, i_pad_digit int) string {
 
 	// rounding last used digit
 	if n_digit < out_len {
-		// println("out:[$out]")
+		// println("out:[${out}]")
 		out += ten_pow_table_64[out_len - n_digit - 1] * 5 // round to up
 		out /= ten_pow_table_64[out_len - n_digit]
-		// println("out1:[$out] ${d.m / ten_pow_table_64[out_len - n_digit ]}")
-		if d.m / ten_pow_table_64[out_len - n_digit] < out {
+		// println("out1:[${out}] ${d.m / ten_pow_table_64[out_len - n_digit ]}")
+		// fix issue #22424
+		out_div := d.m / ten_pow_table_64[out_len - n_digit]
+		if out_div < out && dec_digits(out_div) < dec_digits(out) {
+			// from `99` to `100`, will need d_exp+1, and the new last digit is dropped
 			d_exp++
-			n_digit++
+			out /= 10
 		}
 
 		// println("cmp: ${d.m/ten_pow_table_64[out_len - n_digit ]} ${out/ten_pow_table_64[out_len - n_digit ]}")
 
 		out_len = n_digit
-		// println("orig: ${out_len_original} new len: ${out_len} out:[$out]")
+		// println("orig: ${out_len_original} new len: ${out_len} out:[${out}]")
 	}
 
 	y := i + out_len
@@ -74,19 +79,20 @@ fn (d Dec64) get_string_64(neg bool, i_n_digit int, i_pad_digit int) string {
 		x++
 	}
 
+	// fix issue #22424
 	// no decimal digits needed, end here
-	if i_n_digit == 0 {
-		unsafe {
-			buf[i] = 0
-			return tos(&u8(&buf[0]), i)
-		}
-	}
+	// if i_n_digit == 0 {
+	//	unsafe {
+	//		buf[i] = 0
+	//		return tos(&u8(&buf[0]), i)
+	//	}
+	//}
 
-	if out_len >= 1 {
+	if out_len > 1 || fw_zeros > 0 {
 		buf[y - x] = `.`
-		x++
 		i++
 	}
+	x++
 
 	if y - x >= 0 {
 		buf[y - x] = `0` + u8(out % 10)
@@ -128,10 +134,11 @@ fn (d Dec64) get_string_64(neg bool, i_n_digit int, i_pad_digit int) string {
 	buf[i] = 0
 
 	return unsafe {
-		tos(&u8(&buf[0]), i)
+		tos(memdup_noscan(&buf[0], i + 1), i)
 	}
 }
 
+@[ignore_overflow]
 fn f64_to_decimal_exact_int(i_mant u64, exp u64) (Dec64, bool) {
 	mut d := Dec64{}
 	e := exp - bias64
@@ -187,7 +194,7 @@ fn f64_to_decimal(mant u64, exp u64) Dec64 {
 		k := pow5_inv_num_bits_64 + pow5_bits(int(q)) - 1
 		i := -e2 + int(q) + k
 
-		mul := *(&Uint128(&pow5_inv_split_64_x[q * 2]))
+		mul := unsafe { *(&Uint128(&pow5_inv_split_64_x[q * 2])) }
 		vr = mul_shift_64(u64(4) * m2, mul, i)
 		vp = mul_shift_64(u64(4) * m2 + u64(2), mul, i)
 		vm = mul_shift_64(u64(4) * m2 - u64(1) - mm_shift, mul, i)
@@ -202,8 +209,7 @@ fn f64_to_decimal(mant u64, exp u64) Dec64 {
 				// Same as min(e2 + (^mm & 1), pow5Factor64(mm)) >= q
 				// <=> e2 + (^mm & 1) >= q && pow5Factor64(mm) >= q
 				// <=> true && pow5Factor64(mm) >= q, since e2 >= q.
-				vm_is_trailing_zeros = multiple_of_power_of_five_64(mv - 1 - mm_shift,
-					q)
+				vm_is_trailing_zeros = multiple_of_power_of_five_64(mv - 1 - mm_shift, q)
 			} else if multiple_of_power_of_five_64(mv + 2, q) {
 				vp--
 			}
@@ -215,7 +221,7 @@ fn f64_to_decimal(mant u64, exp u64) Dec64 {
 		i := -e2 - int(q)
 		k := pow5_bits(i) - pow5_num_bits_64
 		j := int(q) - k
-		mul := *(&Uint128(&pow5_split_64_x[i * 2]))
+		mul := unsafe { *(&Uint128(&pow5_split_64_x[i * 2])) }
 		vr = mul_shift_64(u64(4) * m2, mul, j)
 		vp = mul_shift_64(u64(4) * m2 + u64(2), mul, j)
 		vm = mul_shift_64(u64(4) * m2 - u64(1) - mm_shift, mul, j)
@@ -332,6 +338,9 @@ fn f64_to_decimal(mant u64, exp u64) Dec64 {
 //=============================================================================
 
 // f64_to_str returns `f` as a `string` in scientific notation with max `n_digit` digits after the dot.
+// The digits are the ones of the shortest decimal number that converts back to `f`, rounded half
+// up when there are more than `n_digit` of them after the dot. A subnormal `f` is rounded from its
+// exact value instead, because its shortest digits are too few to be rounded again.
 pub fn f64_to_str(f f64, n_digit int) string {
 	mut u1 := Uf64{}
 	u1.f = f
@@ -352,11 +361,26 @@ pub fn f64_to_str(f f64, n_digit int) string {
 		// println("to_decimal")
 		d = f64_to_decimal(mant, exp)
 	}
+	if exp == 0 && dec_digits(d.m) > (if n_digit > 0 { n_digit + 1 } else { 1 }) {
+		// A subnormal has fewer significant bits than a normal f64, so rounding its shortest
+		// digits again can give the wrong last digit; round its exact value instead.
+		return exact_float_scientific(f, n_digit)
+	}
 	// println("${d.m} ${d.e}")
 	return d.get_string_64(neg, n_digit, 0)
 }
 
-// f64_to_str returns `f` as a `string` in scientific notation with max `n_digit` digits after the dot.
+// f64_to_str_pad returns `f` as a `string` in scientific notation with `n_digit` digits after the dot.
+// The digits are the ones of the shortest decimal number that converts back to `f`: they are
+// rounded half up when there are more than `n_digit` of them after the dot, and zeros are appended
+// when there are fewer. The result is thus not always the correctly rounded exact value of `f`,
+// that C's `printf("%.*e")` prints: `f64_to_str_pad(0.1, 20)` is `1.00000000000000000000e-01`
+// (and not `1.00000000000000005551e-01`), and `f64_to_str_pad(9.95, 1)` is `1.0e+01`
+// (and not `9.9e+00`).
+// A subnormal `f` is the exception: its shortest digits are too few even for a small `n_digit`
+// (`5e-324` for the smallest one, `4.940656458...e-324`), so its exact value is rounded instead.
+// Example: assert strconv.f64_to_str_pad(1234.5678, 2) == '1.23e+03'
+// Example: assert strconv.f64_to_str_pad(1.5, 4) == '1.5000e+00'
 pub fn f64_to_str_pad(f f64, n_digit int) string {
 	mut u1 := Uf64{}
 	u1.f = f
@@ -365,11 +389,20 @@ pub fn f64_to_str_pad(f f64, n_digit int) string {
 	neg := (u >> (mantbits64 + expbits64)) != 0
 	mant := u & ((u64(1) << mantbits64) - u64(1))
 	exp := (u >> mantbits64) & ((u64(1) << expbits64) - u64(1))
-	// println("s:${neg} mant:${mant} exp:${exp} float:${f} byte:${u1.u:016lx}")
+	// unsafe { println("s:${neg} mant:${mant} exp:${exp} float:${f} byte:${u1.u:016x}") }
 
 	// Exit early for easy cases.
-	if exp == maxexp64 || (exp == 0 && mant == 0) {
-		return get_string_special(neg, exp == 0, mant == 0)
+	if exp == maxexp64 {
+		return get_string_special(neg, false, mant == 0)
+	}
+	if exp == 0 && mant == 0 {
+		// zero gets its digits after the dot too
+		zero := Dec64{}
+		return zero.get_string_64(neg, n_digit, n_digit)
+	}
+	if exp == 0 {
+		// subnormal: its shortest digits can not be padded, see above
+		return exact_float_scientific(f, n_digit)
 	}
 
 	mut d, ok := f64_to_decimal_exact_int(mant, exp)

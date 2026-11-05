@@ -1,3 +1,4 @@
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 /**********************************************************************
 *
 * .obj viewer
@@ -21,7 +22,6 @@
 **********************************************************************/
 import gg
 import gg.m4
-import gx
 import math
 import sokol.sapp
 import sokol.gfx
@@ -38,7 +38,7 @@ fn C.gouraud_shader_desc(gfx.Backend) &gfx.ShaderDesc
 
 const win_width = 600
 const win_height = 600
-const bg_color = gx.white
+const bg_color = gg.white
 
 struct App {
 mut:
@@ -73,8 +73,7 @@ fn vec4(x f32, y f32, z f32, w f32) m4.Vec4 {
 
 fn calc_matrices(w f32, h f32, rx f32, ry f32, in_scale f32, pos m4.Vec4) obj.Mats {
 	proj := m4.perspective(60, w / h, 0.01, 100.0) // set far plane to 100 fro the zoom function
-	view := m4.look_at(vec4(f32(0.0), 0, 6, 0), vec4(f32(0), 0, 0, 0), vec4(f32(0), 1,
-		0, 0))
+	view := m4.look_at(vec4(f32(0.0), 0, 6, 0), vec4(f32(0), 0, 0, 0), vec4(f32(0), 1, 0, 0))
 	view_proj := view * proj
 
 	rxm := m4.rotate(m4.rad(rx), vec4(f32(1), 0, 0, 0))
@@ -90,9 +89,9 @@ fn calc_matrices(w f32, h f32, rx f32, ry f32, in_scale f32, pos m4.Vec4) obj.Ma
 	mvp := mv * view_proj // model view projection
 
 	return obj.Mats{
-		mv: mv
+		mv:  mv
 		mvp: mvp
-		nm: nm
+		nm:  nm
 	}
 }
 
@@ -119,9 +118,9 @@ fn draw_model(app App, model_pos m4.Vec4) u32 {
 	mats := calc_matrices(dw, dh, rot[0], rot[1], zoom_scale, model_pos)
 
 	mut tmp_vs_param := obj.Tmp_vs_param{
-		mv: mats.mv
+		mv:  mats.mv
 		mvp: mats.mvp
-		nm: mats.nm
+		nm:  mats.nm
 	}
 
 	// *** fragment shader uniforms ***
@@ -135,9 +134,9 @@ fn draw_model(app App, model_pos m4.Vec4) u32 {
 
 	sd := obj.Shader_data{
 		vs_data: unsafe { &tmp_vs_param }
-		vs_len: int(sizeof(tmp_vs_param))
+		vs_len:  int(sizeof(tmp_vs_param))
 		fs_data: unsafe { &tmp_fs_params }
-		fs_len: int(sizeof(tmp_fs_params))
+		fs_len:  int(sizeof(tmp_fs_params))
 	}
 
 	return app.obj_part.bind_and_draw_all(sd)
@@ -178,7 +177,7 @@ fn frame(mut app App) {
 	*/
 	draw_end_glsl(app)
 
-	// println("v:$n_vertex_drawn")
+	// println("v:${n_vertex_drawn}")
 	app.frame_count++
 }
 
@@ -190,7 +189,7 @@ fn draw_start_glsl(app App) {
 	gfx.apply_viewport(0, 0, ws.width, ws.height, true)
 }
 
-fn draw_end_glsl(app App) {
+fn draw_end_glsl(_app App) {
 	gfx.end_pass()
 	gfx.commit()
 }
@@ -229,9 +228,9 @@ fn my_init(mut app App) {
 	app.init_flag = true
 }
 
-fn cleanup(mut app App) {
+fn cleanup(mut _app App) {
 	/*
-	for _, mat in app.obj_part.texture {
+	for _, mat in _app.obj_part.texture {
 		obj.destroy_texture(mat)
 	}
 	*/
@@ -292,16 +291,16 @@ fn main() {
 	}
 
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'V Wavefront OBJ viewer - Use the mouse wheel to zoom'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		init_fn: my_init
-		cleanup_fn: cleanup
-		event_fn: my_event_manager
+		window_title:  'V Wavefront OBJ viewer - Use the mouse wheel to zoom'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		init_fn:       my_init
+		cleanup_fn:    cleanup
+		event_fn:      my_event_manager
 	)
 
 	app.ticks = time.ticks()

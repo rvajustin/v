@@ -39,6 +39,7 @@
 
     - on macOS: AudioToolbox
     - on iOS: AudioToolbox, AVFoundation
+    - on FreeBSD: asound
     - on Linux: asound
     - on Android: link with OpenSLES or aaudio
     - on Windows with MSVC or Clang toolchain: no action needed, libs are defined in-source via pragma-comment-lib
@@ -51,6 +52,7 @@
 
     - Windows: WASAPI
     - Linux: ALSA
+    - FreeBSD: ALSA
     - macOS: CoreAudio
     - iOS: CoreAudio+AVAudioSession
     - emscripten: WebAudio with ScriptProcessorNode
@@ -727,7 +729,37 @@ inline void saudio_setup(const saudio_desc& desc) { return saudio_setup(&desc); 
     #define CONST_VTABLE
     #endif
     #include <mmdeviceapi.h>
+    /* TCC's audioclient.h may miss these transitive audio format/channel mask definitions. */
+    #include <mmreg.h>
     #include <audioclient.h>
+    #if defined(__TINYC__)
+    #undef COINIT_MULTITHREADED
+    #define COINIT_MULTITHREADED 0
+    #pragma pack(push, 1)
+    typedef struct {
+        WORD wFormatTag;
+        WORD nChannels;
+        DWORD nSamplesPerSec;
+        DWORD nAvgBytesPerSec;
+        WORD nBlockAlign;
+        WORD wBitsPerSample;
+        WORD cbSize;
+    } _saudio_tcc_waveformat_ex;
+    typedef struct {
+        _saudio_tcc_waveformat_ex Format;
+        union {
+            WORD wValidBitsPerSample;
+            WORD wSamplesPerBlock;
+            WORD wReserved;
+        } Samples;
+        DWORD dwChannelMask;
+        GUID SubFormat;
+    } _saudio_tcc_waveformat_extensible;
+    #pragma pack(pop)
+    #define _SAUDIO_WAVEFORMATEXTENSIBLE _saudio_tcc_waveformat_extensible
+    #else
+    #define _SAUDIO_WAVEFORMATEXTENSIBLE WAVEFORMATEXTENSIBLE
+    #endif
     static const IID _saudio_IID_IAudioClient                               = { 0x1cb9ad4c, 0xdbfa, 0x4c32, {0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2} };
     static const IID _saudio_IID_IMMDeviceEnumerator                        = { 0xa95664d2, 0x9614, 0x4f35, {0xa7, 0x46, 0xde, 0x8d, 0xb6, 0x36, 0x17, 0xe6} };
     static const CLSID _saudio_CLSID_IMMDeviceEnumerator                    = { 0xbcde0395, 0xe52f, 0x467c, {0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e} };
@@ -780,13 +812,9 @@ inline void saudio_setup(const saudio_desc& desc) { return saudio_setup(&desc); 
         #include "aaudio/AAudio.h"
     #endif
 #elif defined(_SAUDIO_LINUX)
-// __v_ start
-#if !defined(__FreeBSD__)
-// __v_ end
-    #include <alloca.h>
-// __v_ start
-#endif
-// __v_ end
+    #if !defined(__FreeBSD__)
+        #include <alloca.h>
+    #endif
     #define _SAUDIO_PTHREADS (1)
     #include <pthread.h>
     #define ALSA_PCM_NEW_HW_PARAMS_API
@@ -1069,6 +1097,7 @@ typedef struct {
 /* sokol-audio state */
 typedef struct {
     bool valid;
+    bool setup_called;
     void (*stream_cb)(float* buffer, int num_frames, int num_channels);
     void (*stream_userdata_cb)(float* buffer, int num_frames, int num_channels, void* user_data);
     void* user_data;
@@ -1689,7 +1718,7 @@ _SOKOL_PRIVATE bool _saudio_wasapi_backend_init(void) {
         goto error;
     }
 
-    WAVEFORMATEXTENSIBLE fmtex;
+    _SAUDIO_WAVEFORMATEXTENSIBLE fmtex;
     _saudio_clear(&fmtex, sizeof(fmtex));
     fmtex.Format.nChannels = (WORD)_saudio.num_channels;
     fmtex.Format.nSamplesPerSec = (DWORD)_saudio.sample_rate;
@@ -2488,9 +2517,11 @@ void _saudio_backend_shutdown(void) {
 // >>public
 SOKOL_API_IMPL void saudio_setup(const saudio_desc* desc) {
     SOKOL_ASSERT(!_saudio.valid);
+    SOKOL_ASSERT(!_saudio.setup_called);
     SOKOL_ASSERT(desc);
     SOKOL_ASSERT((desc->allocator.alloc_fn && desc->allocator.free_fn) || (!desc->allocator.alloc_fn && !desc->allocator.free_fn));
     _saudio_clear(&_saudio, sizeof(_saudio));
+    _saudio.setup_called = true;
     _saudio.desc = *desc;
     _saudio.stream_cb = desc->stream_cb;
     _saudio.stream_userdata_cb = desc->stream_userdata_cb;
@@ -2521,6 +2552,8 @@ SOKOL_API_IMPL void saudio_setup(const saudio_desc* desc) {
 }
 
 SOKOL_API_IMPL void saudio_shutdown(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
+    _saudio.setup_called = false;
     if (_saudio.valid) {
         _saudio_backend_shutdown();
         _saudio_fifo_shutdown(&_saudio.fifo);
@@ -2534,26 +2567,32 @@ SOKOL_API_IMPL bool saudio_isvalid(void) {
 }
 
 SOKOL_API_IMPL void* saudio_userdata(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.desc.user_data;
 }
 
 SOKOL_API_IMPL saudio_desc saudio_query_desc(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.desc;
 }
 
 SOKOL_API_IMPL int saudio_sample_rate(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.sample_rate;
 }
 
 SOKOL_API_IMPL int saudio_buffer_frames(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.buffer_frames;
 }
 
 SOKOL_API_IMPL int saudio_channels(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     return _saudio.num_channels;
 }
 
 SOKOL_API_IMPL bool saudio_suspended(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     #if defined(_SAUDIO_EMSCRIPTEN)
         if (_saudio.valid) {
             return 1 == saudio_js_suspended();
@@ -2567,6 +2606,7 @@ SOKOL_API_IMPL bool saudio_suspended(void) {
 }
 
 SOKOL_API_IMPL int saudio_expect(void) {
+    SOKOL_ASSERT(_saudio.setup_called);
     if (_saudio.valid) {
         const int num_frames = _saudio_fifo_writable_bytes(&_saudio.fifo) / _saudio.bytes_per_frame;
         return num_frames;
@@ -2577,6 +2617,7 @@ SOKOL_API_IMPL int saudio_expect(void) {
 }
 
 SOKOL_API_IMPL int saudio_push(const float* frames, int num_frames) {
+    SOKOL_ASSERT(_saudio.setup_called);
     SOKOL_ASSERT(frames && (num_frames > 0));
     if (_saudio.valid) {
         const int num_bytes = num_frames * _saudio.bytes_per_frame;

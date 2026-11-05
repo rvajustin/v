@@ -1,3 +1,4 @@
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 /**********************************************************************
 *
 * Sokol 3d cube demo
@@ -14,7 +15,6 @@
 * - add instancing
 **********************************************************************/
 import gg
-import gx
 // import math
 import sokol.sapp
 import sokol.gfx
@@ -29,7 +29,7 @@ fn C.cube_shader_desc(gfx.Backend) &gfx.ShaderDesc
 
 const win_width = 800
 const win_height = 800
-const bg_color = gx.white
+const bg_color = gg.white
 
 struct App {
 mut:
@@ -56,17 +56,17 @@ mut:
 fn create_texture(w int, h int, buf &u8) (gfx.Image, gfx.Sampler) {
 	sz := w * h * 4
 	mut img_desc := gfx.ImageDesc{
-		width: w
-		height: h
-		num_mipmaps: 0
+		width:         w
+		height:        h
+		num_mipmaps:   0
 		// usage: .dynamic
-		label: &u8(0)
+		label:         &char(unsafe { nil })
 		d3d11_texture: 0
 	}
 	// comment if .dynamic is enabled
 	img_desc.data.subimage[0][0] = gfx.Range{
-		ptr: buf
-		size: usize(sz)
+		ptr:  buf
+		size: uint(sz)
 	}
 
 	sg_img := gfx.make_image(&img_desc)
@@ -74,27 +74,12 @@ fn create_texture(w int, h int, buf &u8) (gfx.Image, gfx.Sampler) {
 	mut smp_desc := gfx.SamplerDesc{
 		min_filter: .linear
 		mag_filter: .linear
-		wrap_u: .clamp_to_edge
-		wrap_v: .clamp_to_edge
+		wrap_u:     .clamp_to_edge
+		wrap_v:     .clamp_to_edge
 	}
 
 	sg_smp := gfx.make_sampler(&smp_desc)
 	return sg_img, sg_smp
-}
-
-fn destroy_texture(sg_img gfx.Image) {
-	gfx.destroy_image(sg_img)
-}
-
-// Use only if usage: .dynamic is enabled
-fn update_text_texture(sg_img gfx.Image, w int, h int, buf &u8) {
-	sz := w * h * 4
-	mut tmp_sbc := gfx.ImageData{}
-	tmp_sbc.subimage[0][0] = gfx.Range{
-		ptr: buf
-		size: usize(sz)
-	}
-	gfx.update_image(sg_img, &tmp_sbc)
 }
 
 /******************************************************************************
@@ -302,13 +287,13 @@ fn init_cube_glsl(mut app App) {
 	}
 	unsafe { vmemset(&vert_buffer_desc, 0, int(sizeof(vert_buffer_desc))) }
 
-	vert_buffer_desc.size = usize(vertices.len * int(sizeof(Vertex_t)))
+	vert_buffer_desc.size = uint(vertices.len * int(sizeof(Vertex_t)))
 	vert_buffer_desc.data = gfx.Range{
-		ptr: vertices.data
-		size: usize(vertices.len * int(sizeof(Vertex_t)))
+		ptr:  vertices.data
+		size: uint(vertices.len * int(sizeof(Vertex_t)))
 	}
 
-	vert_buffer_desc.@type = .vertexbuffer
+	vert_buffer_desc.type = .vertexbuffer
 	// vert_buffer_desc.usage   = .immutable
 	vbuf := gfx.make_buffer(&vert_buffer_desc)
 
@@ -329,17 +314,17 @@ fn init_cube_glsl(mut app App) {
 	}
 	unsafe { vmemset(&index_buffer_desc, 0, int(sizeof(index_buffer_desc))) }
 
-	index_buffer_desc.size = usize(indices.len * int(sizeof(u16)))
+	index_buffer_desc.size = uint(indices.len * int(sizeof(u16)))
 	index_buffer_desc.data = gfx.Range{
-		ptr: indices.data
-		size: usize(indices.len * int(sizeof(u16)))
+		ptr:  indices.data
+		size: uint(indices.len * int(sizeof(u16)))
 	}
 
-	index_buffer_desc.@type = .indexbuffer
+	index_buffer_desc.type = .indexbuffer
 	ibuf := gfx.make_buffer(&index_buffer_desc)
 
 	// create shader
-	shader := gfx.make_shader(C.cube_shader_desc(C.sg_query_backend()))
+	shader := gfx.make_shader(voidptr(C.cube_shader_desc(C.sg_query_backend())))
 
 	mut pipdesc := gfx.PipelineDesc{}
 	unsafe { vmemset(&pipdesc, 0, int(sizeof(pipdesc))) }
@@ -356,15 +341,16 @@ fn init_cube_glsl(mut app App) {
 
 	pipdesc.depth = gfx.DepthState{
 		write_enabled: true
-		compare: .less_equal
+		compare:       .less_equal
 	}
 	pipdesc.cull_mode = .back
 
-	pipdesc.label = 'glsl_shader pipeline'.str
+	pipdesc.label = c'glsl_shader pipeline'
 
 	app.cube_bind.vertex_buffers[0] = vbuf
 	app.cube_bind.index_buffer = ibuf
 	app.cube_bind.fs.images[C.SLOT_tex] = app.texture
+	app.cube_bind.fs.samplers[C.SLOT_smp] = app.sampler
 	app.cube_pip_glsl = gfx.make_pipeline(&pipdesc)
 	println('GLSL init DONE!')
 }
@@ -406,8 +392,8 @@ fn draw_cube_glsl(app App) {
 		// passing the view matrix as uniform
 		// res is a 4x4 matrix of f32 thus: 4*16 byte of size
 		vs_uniforms_range := gfx.Range{
-			ptr: &tr_matrix
-			size: usize(4 * 16)
+			ptr:  unsafe { &tr_matrix }
+			size: uint(4 * 16)
 		}
 		gfx.apply_uniforms(.vs, C.SLOT_vs_params, &vs_uniforms_range)
 
@@ -420,8 +406,8 @@ fn draw_cube_glsl(app App) {
 			0, // padding 4 Bytes == 1 f32
 		]!
 		fs_uniforms_range := gfx.Range{
-			ptr: unsafe { &text_res }
-			size: usize(4 * 4)
+			ptr:  unsafe { &text_res }
+			size: uint(4 * 4)
 		}
 		gfx.apply_uniforms(.fs, C.SLOT_fs_params, &fs_uniforms_range)
 
@@ -484,8 +470,6 @@ fn frame(mut app App) {
 	y0 := 0
 	y1 := int(f32(dh) * 0.5)
 
-	// app.gg.begin()
-
 	app.gg.begin()
 	{
 		sgl.defaults()
@@ -529,7 +513,7 @@ fn my_init(mut app App) {
 
 	color_state := gfx.ColorTargetState{
 		blend: gfx.BlendState{
-			enabled: true
+			enabled:        true
 			src_factor_rgb: .src_alpha
 			dst_factor_rgb: .one_minus_src_alpha
 		}
@@ -538,7 +522,7 @@ fn my_init(mut app App) {
 
 	pipdesc.depth = gfx.DepthState{
 		write_enabled: true
-		compare: .less_equal
+		compare:       .less_equal
 	}
 	pipdesc.cull_mode = .back
 
@@ -611,15 +595,15 @@ fn main() {
 	println(a)
 
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: '3D Cube Demo'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		init_fn: my_init
-		event_fn: my_event_manager
+		window_title:  '3D Cube Demo'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		init_fn:       my_init
+		event_fn:      my_event_manager
 	)
 
 	app.ticks = time.ticks()

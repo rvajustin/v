@@ -4,15 +4,28 @@ $if freebsd || openbsd {
 	#flag -I/usr/local/include
 	#flag -L/usr/local/lib
 }
-$if windows {
-	#flag windows -I@VEXEROOT/thirdparty/sqlite
-	#flag windows -L@VEXEROOT/thirdparty/sqlite
-	#flag windows @VEXEROOT/thirdparty/sqlite/sqlite3.o
-} $else {
-	#flag -lsqlite3
+$if tinyc {
+	#flag -DSQLITE_DISABLE_INTRINSIC
 }
-
-#include "sqlite3.h"
+$if $pkgconfig('sqlite3') {
+	#pkgconfig sqlite3
+	#include "sqlite3.h" # The SQLite header file is missing. Please install the corresponding development package.
+} $else $if windows {
+	#flag -I@VEXEROOT/thirdparty/sqlite
+	#flag @VEXEROOT/thirdparty/sqlite/sqlite3.o
+	#include "sqlite3.h" # The SQLite header file is missing. Please run vlib/db/sqlite/install_thirdparty_sqlite.vsh to download an SQLite amalgamation.
+} $else $if darwin {
+	// macOS ships libsqlite3, so do not require a separately downloaded amalgamation.
+	#flag darwin -lsqlite3
+	#include "sqlite3.h"
+} $else {
+	#flag -I@VEXEROOT/thirdparty/sqlite
+	#include "sqlite3.h" # The SQLite header file is missing. Please run vlib/db/sqlite/install_thirdparty_sqlite.vsh to download an SQLite amalgamation.
+	#flag @VEXEROOT/thirdparty/sqlite/sqlite3.c
+}
+$if linux {
+	#flag -lm
+}
 
 // https://www.sqlite.org/rescode.html
 pub const sqlite_ok = 0
@@ -42,6 +55,12 @@ pub enum SyncMode {
 	full
 }
 
+pub enum Sqlite3TransactionLevel {
+	deferred
+	immediate
+	exclusive
+}
+
 pub enum JournalMode {
 	off
 	delete
@@ -59,7 +78,7 @@ pub struct C.sqlite3_stmt {
 @[heap]
 pub struct Stmt {
 	stmt &C.sqlite3_stmt = unsafe { nil }
-	db   &DB = unsafe { nil }
+	db   &DB             = unsafe { nil }
 }
 
 struct SQLError {
@@ -82,61 +101,114 @@ pub fn (db &DB) str() string {
 
 pub struct Row {
 pub mut:
-	vals []string
+	vals  []string
+	names []string
+}
+
+// val returns the value at `index`.
+pub fn (row Row) val(index int) string {
+	return row.vals[index]
+}
+
+// values returns all row values.
+pub fn (row Row) values() []string {
+	return row.vals.clone()
+}
+
+// get_string returns the value for the given column name, or '' if the column is not found
+// or if the corresponding value index is out of range.
+pub fn (r &Row) get_string(col_name string) string {
+	for i, name in r.names {
+		if name == col_name {
+			if i < r.vals.len {
+				return r.vals[i]
+			}
+			return ''
+		}
+	}
+	return ''
+}
+
+// get_int returns the integer value for the given column name, or 0 if the column is not found.
+pub fn (r &Row) get_int(col_name string) int {
+	return r.get_string(col_name).int()
+}
+
+pub type Params = []string | [][]string
+
+fn sqlite_cstring(s string) &char {
+	cstr := unsafe { malloc_noscan(s.len + 1) }
+	unsafe {
+		if s.len > 0 {
+			vmemcpy(cstr, s.str, s.len)
+		}
+		cstr[s.len] = 0
+	}
+	return &char(cstr)
 }
 
 //
-fn C.sqlite3_open(&char, &&C.sqlite3) int
+fn C.sqlite3_open(&char, &&C.sqlite3) i32
 
-fn C.sqlite3_close(&C.sqlite3) int
+fn C.sqlite3_close(&C.sqlite3) i32
 
-fn C.sqlite3_busy_timeout(db &C.sqlite3, ms int) int
+fn C.sqlite3_busy_timeout(db &C.sqlite3, ms i32) i32
 
 fn C.sqlite3_last_insert_rowid(&C.sqlite3) i64
 
 //
-fn C.sqlite3_prepare_v2(&C.sqlite3, &char, int, &&C.sqlite3_stmt, &&char) int
+fn C.sqlite3_prepare_v2(&C.sqlite3, &char, i32, &&C.sqlite3_stmt, &&char) i32
 
-fn C.sqlite3_step(&C.sqlite3_stmt) int
+fn C.sqlite3_step(&C.sqlite3_stmt) i32
 
-fn C.sqlite3_finalize(&C.sqlite3_stmt) int
+fn C.sqlite3_reset(&C.sqlite3_stmt) i32
 
-//
-fn C.sqlite3_column_name(&C.sqlite3_stmt, int) &char
-
-fn C.sqlite3_column_text(&C.sqlite3_stmt, int) &u8
-
-fn C.sqlite3_column_int(&C.sqlite3_stmt, int) int
-
-fn C.sqlite3_column_int64(&C.sqlite3_stmt, int) i64
-
-fn C.sqlite3_column_double(&C.sqlite3_stmt, int) f64
-
-fn C.sqlite3_column_count(&C.sqlite3_stmt) int
-
-fn C.sqlite3_column_type(&C.sqlite3_stmt, int) int
+fn C.sqlite3_finalize(&C.sqlite3_stmt) i32
 
 //
-fn C.sqlite3_errstr(int) &char
+fn C.sqlite3_column_name(&C.sqlite3_stmt, i32) &char
+
+fn C.sqlite3_column_text(&C.sqlite3_stmt, i32) &u8
+
+fn C.sqlite3_column_int(&C.sqlite3_stmt, i32) i32
+
+fn C.sqlite3_column_int64(&C.sqlite3_stmt, i32) i64
+
+fn C.sqlite3_column_double(&C.sqlite3_stmt, i32) f64
+
+fn C.sqlite3_column_count(&C.sqlite3_stmt) i32
+
+fn C.sqlite3_column_type(&C.sqlite3_stmt, i32) i32
+
+fn C.sqlite3_column_bytes(&C.sqlite3_stmt, i32) i32
+
+//
+fn C.sqlite3_errstr(i32) &char
 
 fn C.sqlite3_errmsg(&C.sqlite3) &char
 
 fn C.sqlite3_free(voidptr)
 
-fn C.sqlite3_changes(&C.sqlite3) int
+fn C.sqlite3_changes(&C.sqlite3) i32
+
+fn C.sqlite3_get_autocommit(&C.sqlite3) i32
 
 // connect Opens the connection with a database.
 pub fn connect(path string) !DB {
 	db := &C.sqlite3(unsafe { nil })
-	code := C.sqlite3_open(&char(path.str), &db)
+	path_cstr := sqlite_cstring(path)
+	defer {
+		unsafe { free(path_cstr) }
+	}
+	code := C.sqlite3_open(path_cstr, &db)
 	if code != 0 {
 		return &SQLError{
-			msg: unsafe { cstring_to_vstring(&char(C.sqlite3_errmsg(db))) }
+			msg:  unsafe { cstring_to_vstring(&char(C.sqlite3_errmsg(db))) }
 			code: code
 		}
 	}
 	return DB{
-		conn: db
+		conn:    db
 		is_open: true
 	}
 }
@@ -144,26 +216,24 @@ pub fn connect(path string) !DB {
 // close Closes the DB.
 // TODO: For all functions, determine whether the connection is
 // closed first, and determine what to do if it is
-pub fn (mut db DB) close() !bool {
+pub fn (mut db DB) close() ! {
 	code := C.sqlite3_close(db.conn)
 	if code == 0 {
 		db.is_open = false
 	} else {
 		return &SQLError{
-			msg: unsafe { cstring_to_vstring(&char(C.sqlite3_errmsg(db.conn))) }
+			msg:  unsafe { cstring_to_vstring(&char(C.sqlite3_errmsg(db.conn))) }
 			code: code
 		}
 	}
-	return true // successfully closed
 }
 
 // Only for V ORM
 fn get_int_from_stmt(stmt &C.sqlite3_stmt) int {
 	x := C.sqlite3_step(stmt)
-	if x != C.SQLITE_OK && x != C.SQLITE_DONE {
+	if x != sqlite_ok && x != sqlite_done {
 		C.puts(C.sqlite3_errstr(x))
 	}
-
 	res := C.sqlite3_column_int(stmt, 0)
 	C.sqlite3_finalize(stmt)
 	return res
@@ -182,68 +252,136 @@ pub fn (db &DB) get_affected_rows_count() int {
 
 // q_int returns a single integer value, from the first column of the result of executing `query`, or an error on failure
 pub fn (db &DB) q_int(query string) !int {
+	$if trace_sqlite ? {
+		eprintln('> q_int query: "${query}"')
+	}
 	stmt := &C.sqlite3_stmt(unsafe { nil })
+	pres := C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
+	if pres != sqlite_ok {
+		return db.error_message(pres, query)
+	}
 	defer {
 		C.sqlite3_finalize(stmt)
 	}
-	C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
 	code := C.sqlite3_step(stmt)
-	if code != sqlite.sqlite_row {
+	if code != sqlite_row {
 		return db.error_message(code, query)
 	}
-
 	res := C.sqlite3_column_int(stmt, 0)
 	return res
 }
 
 // q_string returns a single string value, from the first column of the result of executing `query`, or an error on failure
 pub fn (db &DB) q_string(query string) !string {
+	$if trace_sqlite ? {
+		eprintln('> q_string query: "${query}"')
+	}
 	stmt := &C.sqlite3_stmt(unsafe { nil })
+	pres := C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
+	if pres != sqlite_ok {
+		return db.error_message(pres, query)
+	}
 	defer {
 		C.sqlite3_finalize(stmt)
 	}
-	C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
 	code := C.sqlite3_step(stmt)
-	if code != sqlite.sqlite_row {
+	if code != sqlite_row {
 		return db.error_message(code, query)
 	}
-
 	val := unsafe { &u8(C.sqlite3_column_text(stmt, 0)) }
-	return if val != &u8(0) { unsafe { tos_clone(val) } } else { '' }
+	return if val != &u8(unsafe { nil }) { unsafe { tos_clone(val) } } else { '' }
 }
 
-// exec executes the query on the given `db`, and returns an array of all the results, or an error on failure
-@[manualfree]
-pub fn (db &DB) exec(query string) ![]Row {
+// exec_map executes the query on the given `db`, and returns an array of maps of strings, or an error on failure
+pub fn (db &DB) exec_map(query string) ![]map[string]string {
+	$if trace_sqlite ? {
+		eprintln('> exec_map query: "${query}"')
+	}
 	stmt := &C.sqlite3_stmt(unsafe { nil })
+	mut code := C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
+	if code != sqlite_ok {
+		return db.error_message(code, query)
+	}
 	defer {
 		C.sqlite3_finalize(stmt)
 	}
+	if stmt == unsafe { nil } {
+		// an empty or comment-only query compiles to no statement, and stepping it is a misuse
+		return []map[string]string{}
+	}
+	nr_cols := C.sqlite3_column_count(stmt)
+	mut col_names := []string{cap: nr_cols}
+	for i in 0 .. nr_cols {
+		col_char := unsafe { &u8(C.sqlite3_column_name(stmt, i)) }
+		col_names << if col_char != unsafe { nil } { unsafe { tos_clone(col_char) } } else { '' }
+	}
+	mut res := 0
+	mut rows := []map[string]string{}
+	for {
+		res = C.sqlite3_step(stmt)
+		if res != sqlite_row {
+			break
+		}
+		mut row := map[string]string{}
+		for i in 0 .. nr_cols {
+			val := unsafe { &u8(C.sqlite3_column_text(stmt, i)) }
+			row[col_names[i]] = if val != unsafe { nil } { unsafe { tos_clone(val) } } else { '' }
+		}
+		rows << row
+	}
+	if is_error(res) {
+		return db.error_message(res, query)
+	}
+	return rows
+}
+
+fn C.sqlite3_memory_used() i64
+
+// exec executes the query on the given `db`, and returns an array of all the results, or an error on failure
+pub fn (db &DB) exec(query string) ![]Row {
+	$if trace_sqlite ? {
+		eprintln('> exec query: "${query}"')
+	}
+	stmt := &C.sqlite3_stmt(unsafe { nil })
 	mut code := C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
-	if code != sqlite.sqlite_ok {
+	if code != sqlite_ok {
 		return db.error_message(code, query)
 	}
-
+	defer {
+		C.sqlite3_finalize(stmt)
+	}
+	if stmt == unsafe { nil } {
+		// an empty or comment-only query compiles to no statement, and stepping it is a misuse
+		return []Row{}
+	}
 	nr_cols := C.sqlite3_column_count(stmt)
+	mut col_names := []string{cap: nr_cols}
+	for i in 0 .. nr_cols {
+		col_char := unsafe { &u8(C.sqlite3_column_name(stmt, i)) }
+		col_names << if col_char != unsafe { nil } { unsafe { tos_clone(col_char) } } else { '' }
+	}
 	mut res := 0
 	mut rows := []Row{}
 	for {
 		res = C.sqlite3_step(stmt)
-		// Result Code SQLITE_ROW; Another row is available
-		if res != 100 {
-			// C.puts(C.sqlite3_errstr(res))
+		if res != sqlite_row {
 			break
 		}
-		mut row := Row{}
+		mut row := Row{
+			names: col_names
+		}
 		for i in 0 .. nr_cols {
 			val := unsafe { &u8(C.sqlite3_column_text(stmt, i)) }
-			if val == &u8(0) {
+			if val == &u8(unsafe { nil }) {
 				row.vals << ''
 			} else {
 				row.vals << unsafe { tos_clone(val) }
 			}
 		}
 		rows << row
+	}
+	if is_error(res) {
+		return db.error_message(res, query)
 	}
 	return rows
 }
@@ -258,8 +396,8 @@ pub fn (db &DB) exec_one(query string) !Row {
 	}
 	if rows.len == 0 {
 		return &SQLError{
-			msg: 'No rows'
-			code: sqlite.sqlite_done
+			msg:  'No rows'
+			code: sqlite_done
 		}
 	}
 	res := rows[0]
@@ -273,7 +411,7 @@ pub fn (db &DB) error_message(code int, query string) IError {
 	msg := '${errmsg} (${code}) (${query})'
 	unsafe { errmsg.free() }
 	return SQLError{
-		msg: msg
+		msg:  msg
 		code: code
 	}
 }
@@ -282,54 +420,105 @@ pub fn (db &DB) error_message(code int, query string) IError {
 // Use it, in case you don't expect any row results, but still want a result code.
 // e.g. for queries like these: `INSERT INTO ... VALUES (...)`
 pub fn (db &DB) exec_none(query string) int {
+	$if trace_sqlite ? {
+		eprintln('> exec_none query: "${query}"')
+	}
 	stmt := &C.sqlite3_stmt(unsafe { nil })
-	C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
+	pres := C.sqlite3_prepare_v2(db.conn, &char(query.str), query.len, &stmt, 0)
+	if pres != sqlite_ok {
+		return -1
+	}
+	defer {
+		C.sqlite3_finalize(stmt)
+	}
 	code := C.sqlite3_step(stmt)
-	C.sqlite3_finalize(stmt)
 	return code
 }
 
 // exec_param_many executes a query with parameters provided as ?,
 // and returns either an error on failure, or the full result set on success
-pub fn (db &DB) exec_param_many(query string, params []string) ![]Row {
+pub fn (db &DB) exec_param_many(query string, params Params) ![]Row {
+	$if trace_sqlite ? {
+		eprintln('> exec_param_many query: "${query}", params: ${params}')
+	}
 	mut stmt := &C.sqlite3_stmt(unsafe { nil })
+	mut code := C.sqlite3_prepare_v2(db.conn, &char(query.str), -1, &stmt, 0)
+	if code != sqlite_ok {
+		return db.error_message(code, query)
+	}
 	defer {
 		C.sqlite3_finalize(stmt)
 	}
 
-	mut code := C.sqlite3_prepare_v2(db.conn, &char(query.str), -1, &stmt, 0)
-	if code != 0 {
-		return db.error_message(code, query)
-	}
-
-	for i, param in params {
-		code = C.sqlite3_bind_text(stmt, i + 1, voidptr(param.str), param.len, 0)
-		if code != 0 {
-			return db.error_message(code, query)
-		}
-	}
-
-	nr_cols := C.sqlite3_column_count(stmt)
-	mut res := 0
 	mut rows := []Row{}
-	for {
-		res = C.sqlite3_step(stmt)
-		if res != sqlite.sqlite_row {
-			if rows.len == 0 && is_error(res) {
-				return db.error_message(res, query)
-			}
-			break
-		}
-		mut row := Row{}
-		for i in 0 .. nr_cols {
-			val := unsafe { &u8(C.sqlite3_column_text(stmt, i)) }
-			if val == &u8(0) {
-				row.vals << ''
-			} else {
-				row.vals << unsafe { tos_clone(val) }
+	nr_cols := C.sqlite3_column_count(stmt)
+	mut col_names := []string{cap: nr_cols}
+	for i in 0 .. nr_cols {
+		col_char := unsafe { &u8(C.sqlite3_column_name(stmt, i)) }
+		col_names << if col_char != unsafe { nil } { unsafe { tos_clone(col_char) } } else { '' }
+	}
+
+	if params is []string {
+		for i, param in params {
+			code = C.sqlite3_bind_text(stmt, i + 1, voidptr(param.str), param.len, 0)
+			if code != sqlite_ok {
+				return db.error_message(code, query)
 			}
 		}
-		rows << row
+		for {
+			mut row := Row{
+				names: col_names
+			}
+			code = C.sqlite3_step(stmt)
+			if is_error(code) {
+				return db.error_message(code, query)
+			}
+			if code == sqlite_done {
+				break
+			}
+			for i in 0 .. nr_cols {
+				val := unsafe { &u8(C.sqlite3_column_text(stmt, i)) }
+				if val == &u8(unsafe { nil }) {
+					row.vals << ''
+				} else {
+					row.vals << unsafe { tos_clone(val) }
+				}
+			}
+			rows << row
+		}
+	} else if params is [][]string {
+		// Rows to process
+		for params_row in params {
+			mut row := Row{
+				names: col_names
+			}
+			// Param values to bind
+			for i, param in params_row {
+				code = C.sqlite3_bind_text(stmt, i + 1, voidptr(param.str), param.len, 0)
+				if code != sqlite_ok {
+					return db.error_message(code, query)
+				}
+			}
+			for {
+				code = C.sqlite3_step(stmt)
+				if is_error(code) {
+					return db.error_message(code, query)
+				}
+				if code == sqlite_done {
+					break
+				}
+				for i in 0 .. nr_cols {
+					val := unsafe { &u8(C.sqlite3_column_text(stmt, i)) }
+					if val == &u8(unsafe { nil }) {
+						row.vals << ''
+					} else {
+						row.vals << unsafe { tos_clone(val) }
+					}
+				}
+				rows << row
+			}
+			C.sqlite3_reset(stmt)
+		}
 	}
 
 	return rows
@@ -341,10 +530,15 @@ pub fn (db &DB) exec_param(query string, param string) ![]Row {
 	return db.exec_param_many(query, [param])
 }
 
+// exec_param2 executes a query with two parameters provided as ? placeholders.
+pub fn (db &DB) exec_param2(query string, param string, param2 string) ![]Row {
+	return db.exec_param_many(query, [param, param2])
+}
+
 // create_table issues a "create table if not exists" command to the db.
 // It creates the table named 'table_name', with columns generated from 'columns' array.
 // The default columns type will be TEXT.
-pub fn (db &DB) create_table(table_name string, columns []string) ! {
+pub fn (mut db DB) create_table(table_name string, columns []string) ! {
 	db.exec('create table if not exists ${table_name} (' + columns.join(',\n') + ')')!
 }
 
@@ -393,4 +587,121 @@ pub fn (db &DB) journal_mode(journal_mode JournalMode) ! {
 	} else {
 		db.exec('pragma journal_mode = MEMORY;')!
 	}
+}
+
+@[params]
+pub struct Sqlite3TransactionParam {
+	transaction_level Sqlite3TransactionLevel = .deferred
+}
+
+// begin begins a new transaction.
+pub fn (mut db DB) begin(param Sqlite3TransactionParam) ! {
+	mut sql_stmt := 'BEGIN '
+	match param.transaction_level {
+		.deferred { sql_stmt += 'DEFERRED;' }
+		.immediate { sql_stmt += 'IMMEDIATE;' }
+		.exclusive { sql_stmt += 'EXCLUSIVE;' }
+	}
+
+	db.exec(sql_stmt)!
+}
+
+// savepoint create a new savepoint.
+pub fn (mut db DB) savepoint(savepoint string) ! {
+	if !savepoint.is_identifier() {
+		return error('savepoint should be a identifier string')
+	}
+	db.exec('SAVEPOINT ${savepoint};')!
+}
+
+// commit commits the current transaction.
+pub fn (mut db DB) commit() ! {
+	db.exec('COMMIT;')!
+}
+
+// rollback rollbacks the current transaction.
+// It does nothing when no transaction is active, e.g. after SQLite rolled it back on an error.
+pub fn (mut db DB) rollback() ! {
+	if !db.in_transaction() {
+		return
+	}
+	db.exec('ROLLBACK;')!
+}
+
+// rollback_to rollbacks to a specified savepoint.
+pub fn (mut db DB) rollback_to(savepoint string) ! {
+	if !savepoint.is_identifier() {
+		return error('savepoint should be a identifier string')
+	}
+	if !db.in_transaction() {
+		// an error already rolled back the whole transaction, and its savepoints with it
+		return
+	}
+	db.exec('ROLLBACK TO ${savepoint};')!
+}
+
+// release_savepoint releases a specified savepoint.
+pub fn (mut db DB) release_savepoint(savepoint string) ! {
+	if !savepoint.is_identifier() {
+		return error('savepoint should be a identifier string')
+	}
+	if !db.in_transaction() {
+		// an error already rolled back the whole transaction, and its savepoints with it
+		return
+	}
+	db.exec('RELEASE SAVEPOINT ${savepoint};')!
+}
+
+// in_transaction reports whether a transaction is active on the connection.
+// SQLite ends a transaction on its own after some errors, see https://www.sqlite.org/c3ref/get_autocommit.html
+fn (db &DB) in_transaction() bool {
+	return C.sqlite3_get_autocommit(db.conn) == 0
+}
+
+// tables returns the names of all user tables in the database.
+pub fn (db &DB) tables() ![]string {
+	rows :=
+		db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")!
+	return rows.map(it.vals[0])
+}
+
+// columns returns the column names for the given table.
+pub fn (db &DB) columns(table string) ![]string {
+	escaped := table.replace('"', '""')
+	rows := db.exec('PRAGMA table_info("${escaped}")')!
+	return rows.map(it.vals[1])
+}
+
+// schema returns the CREATE statement(s) for the given table, or for all
+// objects if table is empty.
+pub fn (db &DB) schema(table string) !string {
+	filter := if table != '' {
+		escaped := table.replace("'", "''")
+		"AND name='${escaped}'"
+	} else {
+		''
+	}
+	rows :=
+		db.exec("SELECT sql FROM sqlite_master WHERE type IN ('table','index','view','trigger') ${filter} AND sql IS NOT NULL ORDER BY type, name")!
+	return rows.map(it.vals[0]).join('\n\n')
+}
+
+// db_size returns the database file size in bytes, computed from page_count
+// and page_size.
+pub fn (db &DB) db_size() !i64 {
+	pc := db.exec('PRAGMA page_count')!
+	ps := db.exec('PRAGMA page_size')!
+	if pc.len == 0 || ps.len == 0 {
+		return 0
+	}
+	return pc[0].vals[0].i64() * ps[0].vals[0].i64()
+}
+
+// reset returns the connection to initial state for reuse
+pub fn (mut db DB) reset() ! {
+}
+
+// validate checks if the connection is still usable
+pub fn (mut db DB) validate() !bool {
+	return db.exec_none('SELECT 1') == 100
 }

@@ -1,5 +1,5 @@
 import toml
-import strconv
+import math
 
 const toml_text = '
 modules = [ "ui", "toml" ]
@@ -46,6 +46,16 @@ const toml_text_2 = "
     'RUN_TIME' = 5
     'TEST_PATH' = '/tmp/test'
 "
+
+const toml_text_3 = '
+[[foo.bar]]
+baz = 1
+bzz = 1
+
+[[foo.bar]]
+baz = 2
+bzz = 2
+'
 
 fn test_value_query_in_array() {
 	toml_doc := toml.parse_text(toml_text) or { panic(err) }
@@ -97,10 +107,8 @@ fn test_inf_and_nan_query() {
 	value := toml_doc.value('values.nan').string()
 	assert value == 'nan'
 
-	mut value_u64 := toml_doc.value('values.inf').u64()
-	assert value_u64 == strconv.double_plus_infinity
-	value_u64 = toml_doc.value('values.minus-inf').u64()
-	assert value_u64 == strconv.double_minus_infinity
+	assert math.is_inf(toml_doc.value('values.inf').f64(), 1)
+	assert math.is_inf(toml_doc.value('values.minus-inf').f64(), -1)
 }
 
 fn test_any_value_query_2() {
@@ -108,4 +116,14 @@ fn test_any_value_query_2() {
 	defaults := toml_doc.value('defaults')
 	assert defaults.value('run.flags[0]').string() == '-f 1'
 	assert defaults.value('env[0].RUN_TIME').int() == 5
+}
+
+fn test_any_value_query_for_nested_tables_array() {
+	toml_doc := toml.parse_text(toml_text_3) or { panic(err) }
+	items := toml_doc.value('foo.bar').array()
+	assert items.len == 2
+	assert items[0].value('baz').int() == 1
+	assert items[0].value('bzz').int() == 1
+	assert items[1].value('baz').int() == 2
+	assert items[1].value('bzz').int() == 2
 }

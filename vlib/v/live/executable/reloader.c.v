@@ -5,6 +5,9 @@ import time
 import dl
 import v.live
 
+fn C.v_live_mutex_lock(mutex voidptr) int
+fn C.v_live_mutex_unlock(mutex voidptr) int
+
 // The live reloader code is implemented here.
 // Note: new_live_reload_info will be called by generated C code inside main()
 @[markused]
@@ -16,18 +19,20 @@ pub fn new_live_reload_info(original string, vexe string, vopts string, live_fn_
 		so_extension = '.dylib'
 	}
 	// $if msvc { so_extension = '.dll' } $else { so_extension = '.so' }
-	return &live.LiveReloadInfo{
-		original: original
-		vexe: vexe
-		vopts: vopts
-		live_fn_mutex: live_fn_mutex
-		live_linkfn: live_linkfn
-		so_extension: so_extension
+	res := &live.LiveReloadInfo{
+		original:         original
+		vexe:             vexe
+		vopts:            vopts
+		live_fn_mutex:    live_fn_mutex
+		live_linkfn:      live_linkfn
+		so_extension:     so_extension
 		so_name_template: '${so_dir}/tmp.%d.${file_base}'
-		live_lib: 0
-		reloads: 0
-		reload_time_ms: 0
+		live_lib:         0
+		reloads:          0
+		reload_time_ms:   0
 	}
+	elog(res, @FN)
+	return res
 }
 
 // Note: start_reloader will be called by generated code inside main(), to start
@@ -35,6 +40,7 @@ pub fn new_live_reload_info(original string, vexe string, vopts string, live_fn_
 // the original main thread.
 @[markused]
 pub fn start_reloader(mut r live.LiveReloadInfo) {
+	elog(r, @FN)
 	// The shared library should be loaded once in the main thread
 	// If that fails, the program would crash anyway, just provide
 	// an error message to the user and exit:
@@ -48,7 +54,7 @@ pub fn start_reloader(mut r live.LiveReloadInfo) {
 
 // add_live_monitored_file will be called by the generated code inside main(), to add a list of all the .v files
 // that were used during the main program compilation. Any change to any of them, will later trigger a
-// recompilation and reloading of the produced shared library. This makes it possible for [live] functions
+// recompilation and reloading of the produced shared library. This makes it possible for @[live] functions
 // inside modules to also work, not just in the top level program.
 @[markused]
 pub fn add_live_monitored_file(mut lri live.LiveReloadInfo, path string) {
@@ -62,7 +68,7 @@ pub fn add_live_monitored_file(mut lri live.LiveReloadInfo, path string) {
 
 @[if debuglive ?]
 fn elog(r &live.LiveReloadInfo, s string) {
-	eprintln(s)
+	eprintln('> debuglive r: ${voidptr(r)} &g_live_reload_info: ${voidptr(&g_live_reload_info)} | g_live_reload_info: ${voidptr(g_live_reload_info)} ${s}')
 }
 
 fn compile_and_reload_shared_lib(mut r live.LiveReloadInfo) !bool {
@@ -75,11 +81,12 @@ fn compile_and_reload_shared_lib(mut r live.LiveReloadInfo) !bool {
 }
 
 fn compile_lib(mut r live.LiveReloadInfo) ?string {
-	new_lib_path, new_lib_path_with_extension := current_shared_library_path(mut r)
-	cmd := '${os.quoted_path(r.vexe)} ${r.vopts} -o ${os.quoted_path(new_lib_path)} ${os.quoted_path(r.original)}'
+	_, new_lib_path_with_extension := current_shared_library_path(mut r)
+	cmd := '${os.quoted_path(r.vexe)} ${r.vopts} -o ${os.quoted_path(new_lib_path_with_extension)} ${os.quoted_path(r.original)}'
 	elog(r, '>       compilation cmd: ${cmd}')
 	cwatch := time.new_stopwatch()
-	recompilation_result := os.execute(cmd)
+	recompilation_result := os.exec([r.vexe, ...(os.split_args(r.vopts) or { panic(err) }), '-o',
+		new_lib_path_with_extension, '${r.original}'])
 	elog(r, 'compilation took: ${cwatch.elapsed().milliseconds()}ms')
 	if recompilation_result.exit_code != 0 {
 		eprintln('recompilation error:')
@@ -101,29 +108,37 @@ fn current_shared_library_path(mut r live.LiveReloadInfo) (string, string) {
 
 fn load_lib(mut r live.LiveReloadInfo, new_lib_path string) {
 	elog(r, 'live mutex locking...')
-	C.pthread_mutex_lock(r.live_fn_mutex)
+	$if windows {
+		C.v_live_mutex_lock(r.live_fn_mutex)
+	} $else {
+		C.pthread_mutex_lock(r.live_fn_mutex)
+	}
 	elog(r, 'live mutex locked')
-	//
+
 	if r.cb_locked_before != unsafe { nil } {
 		r.cb_locked_before(r)
 	}
-	//
+
 	protected_load_lib(mut r, new_lib_path)
-	//
+
 	r.reloads_ok++
 	if r.cb_locked_after != unsafe { nil } {
 		r.cb_locked_after(r)
 	}
-	//
+
 	elog(r, 'live mutex unlocking...')
-	C.pthread_mutex_unlock(r.live_fn_mutex)
+	$if windows {
+		C.v_live_mutex_unlock(r.live_fn_mutex)
+	} $else {
+		C.pthread_mutex_unlock(r.live_fn_mutex)
+	}
 	elog(r, 'live mutex unlocked')
 }
 
 fn protected_load_lib(mut r live.LiveReloadInfo, new_lib_path string) {
 	if r.live_lib != 0 {
 		dl.close(r.live_lib)
-		r.live_lib = C.NULL
+		r.live_lib = unsafe { nil }
 	}
 	r.live_lib = dl.open(new_lib_path, dl.rtld_lazy)
 	if r.live_lib == 0 {
@@ -139,7 +154,7 @@ fn protected_load_lib(mut r live.LiveReloadInfo, new_lib_path string) {
 
 // Note: r.reloader() is executed in a new, independent thread
 fn reloader(mut r live.LiveReloadInfo) {
-	//	elog(r,'reloader, r: $r')
+	//	elog(r,'reloader, r: ${r}')
 	mut last_ts := r.last_mod_ts
 	mut monitored_file_paths := r.monitored_files.clone()
 	// it is much more likely that the user will be changing *the latest* files

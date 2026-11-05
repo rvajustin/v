@@ -20,28 +20,54 @@ const hide_warnings = '-hide-warnings' in os.args || '-w' in os.args
 const show_progress = os.getenv('GITHUB_JOB') == '' && '-silent' !in os.args
 const non_option_args = cmdline.only_non_options(os.args[2..])
 const is_verbose = os.getenv('VERBOSE') != ''
-const vcheckfolder = os.join_path(os.vtmp_dir(), 'vcheck_${os.getuid()}')
-const should_autofix = os.getenv('VAUTOFIX') != ''
+const vcheckfolder = os.join_path(os.vtmp_dir(), 'vcheck_${os.getpid()}')
+const should_autofix = os.getenv('VAUTOFIX') != '' || '-fix' in os.args
 const vexe = @VEXE
 
 struct CheckResult {
 pub mut:
 	files    int
-	warnings int
-	errors   int
+	lines    int
+	examples int
 	oks      int
+	warnings int
+	ferrors  int
+	errors   int
+}
+
+struct VCheckIgnoreRule {
+	base_dir string
+	pattern  string
+}
+
+struct VCheckIgnoreContext {
+	repo_root string
+}
+
+struct VCheckIgnoreMatch {
+	ignore_file string
+	pattern     string
+}
+
+struct MDPathScanResult {
+	files   []string
+	skipped int
 }
 
 fn (v1 CheckResult) + (v2 CheckResult) CheckResult {
 	return CheckResult{
-		files: v1.files + v2.files
+		files:    v1.files + v2.files
+		lines:    v1.lines + v2.lines
+		examples: v1.examples + v2.examples
+		oks:      v1.oks + v2.oks
 		warnings: v1.warnings + v2.warnings
-		errors: v1.errors + v2.errors
-		oks: v1.oks + v2.oks
+		ferrors:  v1.ferrors + v2.ferrors
+		errors:   v1.errors + v2.errors
 	}
 }
 
 fn main() {
+	unbuffer_stdout()
 	if non_option_args.len == 0 || '-help' in os.args {
 		help.print_and_exit('check-md')
 	}
@@ -50,10 +76,6 @@ fn main() {
 		exit(1)
 	}
 	mut skip_line_length_check := '-skip-line-length-check' in os.args
-	if show_progress {
-		// this is intended to be replaced by the progress lines
-		println('')
-	}
 	mut files_paths := non_option_args.clone()
 	mut res := CheckResult{}
 	if term_colors {
@@ -63,10 +85,14 @@ fn main() {
 	defer {
 		os.rmdir_all(vcheckfolder) or {}
 	}
+	mut all_mdfiles := []MDFile{}
+	mut skipped_mdfiles := 0
 	for i := 0; i < files_paths.len; i++ {
 		file_path := files_paths[i]
 		if os.is_dir(file_path) {
-			files_paths << md_file_paths(file_path)
+			scan_result := md_file_paths(file_path)
+			files_paths << scan_result.files
+			skipped_mdfiles += scan_result.skipped
 			continue
 		}
 		real_path := os.real_path(file_path)
@@ -75,33 +101,195 @@ fn main() {
 			res.warnings++
 			continue
 		}
-		mut mdfile := MDFile{
+		all_mdfiles << MDFile{
 			skip_line_length_check: skip_line_length_check
-			path: file_path
-			lines: lines
+			path:                   file_path
+			lines:                  lines
 		}
+	}
+	println('> Found: ${all_mdfiles.len} .md files. Skipped by .vcheckignore: ${skipped_mdfiles}.')
+	if is_verbose {
+		for idx, mdfile in all_mdfiles {
+			println('> file ${idx + 1} is ${mdfile.path}')
+		}
+	}
+	if show_progress {
+		// this is intended to be replaced by the progress lines
+		println('')
+	}
+	for idx, mut mdfile in all_mdfiles {
+		mdfile.idx = idx
+		mdfile.nfiles = all_mdfiles.len
 		res += mdfile.check()
 	}
 	if res.errors == 0 && show_progress {
 		clear_previous_line()
 	}
-	println('Checked .md files: ${res.files} | OKs: ${res.oks} | Warnings: ${res.warnings} | Errors: ${res.errors}')
+	println('Checked .md files: ${res.files} | Ex.: ${res.examples} | Lines: ${res.lines} | OKs: ${res.oks} | Warnings: ${res.warnings} | Errors: ${res.errors} | Fmt errors: ${res.ferrors}')
+	if res.ferrors > 0 && !should_autofix {
+		println('Note: you can use `VAUTOFIX=1 v check-md file.md`, or `v check-md -fix file.md`,')
+		println('      to fix the V formatting errors in the markdown code blocks, when possible.')
+		println('      Run the command 2 times, to verify that all formatting errors were fixed.')
+		println('Note: `v help check-md` shows a list of ```v fence keywords (for partial code).')
+	}
 	if res.errors > 0 {
 		exit(1)
 	}
 }
 
-fn md_file_paths(dir string) []string {
+fn md_file_paths(dir string) MDPathScanResult {
 	mut files_to_check := []string{}
+	mut skipped := 0
+	vcheckignore := collect_vcheckignore_context(dir)
 	md_files := os.walk_ext(dir, '.md')
 	for file in md_files {
 		nfile := file.replace('\\', '/')
-		if nfile.contains_any_substr(['/thirdparty/', 'CHANGELOG']) {
+		if nfile.contains_any_substr(['/thirdparty/', 'CHANGELOG', '/testdata/']) {
+			continue
+		}
+		if skip_match := vcheckignore.skip_match(file) {
+			if is_verbose {
+				println('SKIP: ${vcheckignore.repo_relative_path(file)} (from ${vcheckignore.repo_relative_path(skip_match.ignore_file)}: ${skip_match.pattern})')
+			}
+			skipped++
 			continue
 		}
 		files_to_check << file
 	}
-	return files_to_check
+	return MDPathScanResult{
+		files:   files_to_check
+		skipped: skipped
+	}
+}
+
+fn collect_vcheckignore_context(cwd string) VCheckIgnoreContext {
+	repo_root := find_repo_root(cwd)
+	return VCheckIgnoreContext{
+		repo_root: repo_root
+	}
+}
+
+fn find_repo_root(cwd string) string {
+	mut dir := os.real_path(cwd)
+	for {
+		if os.exists(os.join_path(dir, '.git')) {
+			return dir
+		}
+		parent := os.dir(dir)
+		if parent == dir || parent == '' {
+			return dir
+		}
+		dir = parent
+	}
+	return dir
+}
+
+fn (ctx VCheckIgnoreContext) skip_match(file_path string) ?VCheckIgnoreMatch {
+	file := os.real_path(file_path).replace('\\', '/')
+	mut dir := os.dir(file)
+	repo_root := ctx.repo_root.replace('\\', '/')
+	for {
+		ignore_path := os.join_path(dir, '.vcheckignore')
+		if os.is_file(ignore_path) {
+			lines := os.read_lines(ignore_path) or { []string{} }
+			for line in lines {
+				pattern := normalize_vcheckignore_line(line)
+				if pattern == '' || pattern.starts_with('#') {
+					continue
+				}
+				if matches_vcheckignore_rule(file, VCheckIgnoreRule{
+					base_dir: dir
+					pattern:  pattern
+				}) {
+					return VCheckIgnoreMatch{
+						ignore_file: ignore_path
+						pattern:     pattern
+					}
+				}
+			}
+		}
+		if dir.replace('\\', '/') == repo_root {
+			break
+		}
+		parent := os.dir(dir)
+		if parent == dir || parent == '' {
+			break
+		}
+		dir = parent
+	}
+	return none
+}
+
+fn normalize_vcheckignore_line(line string) string {
+	trimmed := line.trim_space()
+	if trimmed == '' {
+		return ''
+	}
+	if comment_idx := trimmed.index('#') {
+		return trimmed[..comment_idx].trim_space()
+	}
+	return trimmed
+}
+
+fn (ctx VCheckIgnoreContext) repo_relative_path(file_path string) string {
+	file := os.real_path(file_path).replace('\\', '/')
+	root := ctx.repo_root.replace('\\', '/')
+	root_prefix := root + '/'
+	if file.starts_with(root_prefix) {
+		return file.all_after(root_prefix)
+	}
+	return file
+}
+
+fn matches_vcheckignore_rule(file string, rule VCheckIgnoreRule) bool {
+	base := rule.base_dir.replace('\\', '/')
+	base_prefix := base + '/'
+	if !file.starts_with(base_prefix) {
+		return false
+	}
+	relative_file := file.all_after(base_prefix)
+	mut pattern := rule.pattern.replace('\\', '/')
+	if pattern.starts_with('!') {
+		return false
+	}
+	mut anchored := false
+	if pattern.starts_with('/') {
+		anchored = true
+		pattern = pattern.trim_left('/')
+	}
+	if pattern.ends_with('/') {
+		pattern = pattern.trim_right('/')
+		return matches_vcheckignore_directory_pattern(relative_file, pattern, anchored)
+	}
+	if anchored {
+		return relative_file.match_glob(pattern)
+	}
+	if pattern.contains('/') {
+		return relative_file.match_glob(pattern)
+	}
+	return os.file_name(relative_file).match_glob(pattern)
+}
+
+fn matches_vcheckignore_directory_pattern(relative_file string, pattern string, anchored bool) bool {
+	mut relative_dir := os.dir(relative_file).replace('\\', '/')
+	if relative_dir == '.' || relative_dir == '' {
+		return false
+	}
+	if anchored {
+		return relative_dir.match_glob(pattern) || relative_dir.match_glob(pattern + '/*')
+	}
+	mut candidate := relative_dir
+	for {
+		if candidate.match_glob(pattern) || candidate.match_glob(pattern + '/*') {
+			return true
+		}
+		if slash_idx := candidate.index('/') {
+			candidate = candidate[slash_idx + 1..]
+			continue
+		}
+		break
+	}
+	return false
 }
 
 fn wprintln(s string) {
@@ -130,8 +318,7 @@ fn rtext(s string) string {
 }
 
 fn wline(file_path string, lnumber int, column int, message string) string {
-	return btext('${file_path}:${lnumber + 1}:${column + 1}:') + btext(mtext(' warn:')) +
-		rtext(' ${message}')
+	return btext('${file_path}:${lnumber + 1}:${column + 1}:') + btext(mtext(' warn:')) + rtext(' ${message}')
 }
 
 fn eline(file_path string, lnumber int, column int, message string) string {
@@ -139,6 +326,14 @@ fn eline(file_path string, lnumber int, column int, message string) string {
 }
 
 const default_command = 'compile'
+// fence languages that begin with `v` but hold something other than V source
+const non_v_fence_languages = ['vml']
+
+// fence_language returns the first token of a code fence's info string.
+fn fence_language(line string) string {
+	fields := line.replace('```', '').fields()
+	return if fields.len > 0 { fields[0] } else { '' }
+}
 
 struct VCodeExample {
 mut:
@@ -158,16 +353,23 @@ struct MDFile {
 	path                   string
 	skip_line_length_check bool
 mut:
+	idx      int
+	nfiles   int
 	lines    []string
 	examples []VCodeExample
 	current  VCodeExample
 	state    MDFileParserState = .markdown
+
+	oks      int
+	warnings int
+	errors   int // compilation errors + formatting errors
+	ferrors  int // purely formatting errors
 }
 
 fn (mut f MDFile) progress(message string) {
 	if show_progress {
 		clear_previous_line()
-		println('File: ${f.path:-30s}, Lines: ${f.lines.len:5}, ${message}')
+		println('${message} | File ${f.idx + 1:3}/${f.nfiles:-3}: ${f.path}')
 	}
 }
 
@@ -177,47 +379,44 @@ struct CheckResultContext {
 	line        string
 }
 
-fn (mut res CheckResult) wcheck(actual int, limit int, ctx CheckResultContext, msg_template string) {
+fn (mut f MDFile) wcheck(actual int, limit int, ctx CheckResultContext, msg_template string) {
 	if actual > limit {
-		wprintln(wline(ctx.path, ctx.line_number, ctx.line.len, msg_template.replace('@',
-			limit.str())))
+		final := msg_template.replace('@', limit.str()) + ', actual: ' + actual.str()
+		wprintln(wline(ctx.path, ctx.line_number, ctx.line.len, final))
 		wprintln(ctx.line)
 		wprintln(ftext('-'.repeat(limit) + '^', term.gray))
-		res.warnings++
+		f.warnings++
 	}
 }
 
-fn (mut res CheckResult) echeck(actual int, limit int, ctx CheckResultContext, msg_template string) {
+fn (mut f MDFile) echeck(actual int, limit int, ctx CheckResultContext, msg_template string) {
 	if actual > limit {
-		eprintln(eline(ctx.path, ctx.line_number, ctx.line.len, msg_template.replace('@',
-			limit.str())))
+		final := msg_template.replace('@', limit.str()) + ', actual: ' + actual.str()
+		eprintln(eline(ctx.path, ctx.line_number, ctx.line.len, final))
 		eprintln(ctx.line)
 		eprintln(ftext('-'.repeat(limit) + '^', term.gray))
-		res.errors++
+		f.errors++
 	}
 }
 
 fn (mut f MDFile) check() CheckResult {
-	mut res := CheckResult{
-		files: 1
-	}
 	mut anchor_data := AnchorData{}
 	for j, line in f.lines {
-		// f.progress('line: $j')
+		// f.progress('line: ${j}')
 		if !f.skip_line_length_check {
 			ctx := CheckResultContext{f.path, j, line}
 			if f.state == .vexample {
-				res.wcheck(line.len, too_long_line_length_example, ctx, 'example lines must be less than @ characters')
+				f.wcheck(line.len, too_long_line_length_example, ctx, 'example lines must be less than @ characters')
 			} else if f.state == .codeblock {
-				res.wcheck(line.len, too_long_line_length_codeblock, ctx, 'code lines must be less than @ characters')
+				f.wcheck(line.len, too_long_line_length_codeblock, ctx, 'code lines must be less than @ characters')
 			} else if line.starts_with('|') {
-				res.wcheck(line.len, too_long_line_length_table, ctx, 'table lines must be less than @ characters')
+				f.wcheck(line.len, too_long_line_length_table, ctx, 'table lines must be less than @ characters')
 			} else if line.contains('http') {
 				// vfmt off
-				res.wcheck(line.all_after('https').len, too_long_line_length_link, ctx,	'link lines must be less than @ characters')
+				f.wcheck(line.all_after('https').len, too_long_line_length_link, ctx,	'link lines must be less than @ characters')
 				// vfmt on
 			} else {
-				res.echeck(line.len, too_long_line_length_other, ctx, 'must be less than @ characters')
+				f.echeck(line.len, too_long_line_length_other, ctx, 'must be less than @ characters')
 			}
 		}
 		if f.state == .markdown {
@@ -227,13 +426,23 @@ fn (mut f MDFile) check() CheckResult {
 
 		f.parse_line(j, line)
 	}
-	anchor_data.check_link_target_match(f.path, mut res)
-	res += f.check_examples()
-	return res
+	f.check_link_target_match(anchor_data)
+	f.check_examples()
+	return CheckResult{
+		files:    1
+		lines:    f.lines.len
+		examples: f.examples.len
+		oks:      f.oks
+		warnings: f.warnings
+		errors:   f.errors
+		ferrors:  f.ferrors
+	}
 }
 
 fn (mut f MDFile) parse_line(lnumber int, line string) {
-	if line.starts_with('```v') {
+	// Only the first word of a fence info string names the language; anything after it
+	// (e.g. `title=example`) is metadata and must not affect the decision.
+	if line.starts_with('```v') && fence_language(line) !in non_v_fence_languages {
 		if f.state == .markdown {
 			f.state = .vexample
 			mut command := line.replace('```v', '').trim_space()
@@ -243,7 +452,7 @@ fn (mut f MDFile) parse_line(lnumber int, line string) {
 				command += ' ${default_command}'
 			}
 			f.current = VCodeExample{
-				sline: lnumber
+				sline:   lnumber
 				command: command
 			}
 		}
@@ -304,8 +513,11 @@ fn (mut ad AnchorData) add_links(line_number int, line string) {
 	for elem in res {
 		re.match_string(elem)
 		link := re.get_group_by_name(elem, 'link')
+		if link !in ad.links {
+			ad.links[link] = []AnchorLink{}
+		}
 		ad.links[link] << AnchorLink{
-			line: line_number
+			line:  line_number
 			label: re.get_group_by_name(elem, 'label')
 		}
 	}
@@ -316,8 +528,11 @@ fn (mut ad AnchorData) add_link_targets(line_number int, line string) {
 		if headline_start_pos := line.index(' ') {
 			headline := line.substr(headline_start_pos + 1, line.len)
 			link := create_ref_link(headline)
+			if link !in ad.anchors {
+				ad.anchors[link] = []AnchorTarget{}
+			}
 			ad.anchors[link] << Headline{
-				line: line_number
+				line:  line_number
 				label: headline
 				level: headline_start_pos
 			}
@@ -330,6 +545,9 @@ fn (mut ad AnchorData) add_link_targets(line_number int, line string) {
 		for elem in res {
 			re.match_string(elem)
 			link := re.get_group_by_name(elem, 'link')
+			if link !in ad.anchors {
+				ad.anchors[link] = []AnchorTarget{}
+			}
 			ad.anchors[link] << Anchor{
 				line: line_number
 			}
@@ -337,7 +555,7 @@ fn (mut ad AnchorData) add_link_targets(line_number int, line string) {
 	}
 }
 
-fn (mut ad AnchorData) check_link_target_match(fpath string, mut res CheckResult) {
+fn (mut f MDFile) check_link_target_match(ad AnchorData) {
 	mut checked_headlines := []string{}
 	mut found_error_warning := false
 	for link, linkdata in ad.links {
@@ -345,16 +563,16 @@ fn (mut ad AnchorData) check_link_target_match(fpath string, mut res CheckResult
 			checked_headlines << link
 			if ad.anchors[link].len > 1 {
 				found_error_warning = true
-				res.errors++
+				f.errors++
 				for anchordata in ad.anchors[link] {
-					eprintln(eline(fpath, anchordata.line, 0, 'multiple link targets of existing link (#${link})'))
+					eprintln(eline(f.path, anchordata.line, 0, 'multiple link targets of existing link (#${link})'))
 				}
 			}
 		} else {
 			found_error_warning = true
-			res.errors++
+			f.errors++
 			for brokenlink in linkdata {
-				eprintln(eline(fpath, brokenlink.line, 0, 'no link target found for existing link [${brokenlink.label}](#${link})'))
+				eprintln(eline(f.path, brokenlink.line, 0, 'no link target found for existing link [${brokenlink.label}](#${link})'))
 			}
 		}
 	}
@@ -370,9 +588,10 @@ fn (mut ad AnchorData) check_link_target_match(fpath string, mut res CheckResult
 							anchor.line
 						}
 					}
-					wprintln(wline(fpath, line, 0, 'multiple link target for non existing link (#${link})'))
+
+					wprintln(wline(f.path, line, 0, 'multiple link target for non existing link (#${link})'))
 					found_error_warning = true
-					res.warnings++
+					f.warnings++
 				}
 			}
 		}
@@ -416,7 +635,7 @@ fn (mut f MDFile) debug() {
 
 fn cmdexecute(cmd string) int {
 	verbose_println(cmd)
-	res := os.execute(cmd)
+	res := os.exec(os.split_args(cmd) or { panic(err) })
 	if res.exit_code < 0 {
 		return 1
 	}
@@ -428,7 +647,7 @@ fn cmdexecute(cmd string) int {
 
 fn silent_cmdexecute(cmd string) int {
 	verbose_println(cmd)
-	res := os.execute(cmd)
+	res := os.exec(os.split_args(cmd) or { panic(err) })
 	return res.exit_code
 }
 
@@ -436,10 +655,8 @@ fn get_fmt_exit_code(vfile string, vexe string) int {
 	return silent_cmdexecute('${os.quoted_path(vexe)} fmt -verify ${os.quoted_path(vfile)}')
 }
 
-fn (mut f MDFile) check_examples() CheckResult {
-	mut errors := 0
-	mut oks := 0
-	recheck_all_examples: for e in f.examples {
+fn (mut f MDFile) check_examples() {
+	recheck_all_examples: for eidx, e in f.examples {
 		if e.command == 'ignore' {
 			continue
 		}
@@ -452,17 +669,19 @@ fn (mut f MDFile) check_examples() CheckResult {
 		vfile := os.join_path(vcheckfolder, 'check_${fname}_example_${e.sline}__${e.eline}__${uid}.v')
 		efile := os.join_path(vcheckfolder, 'check_${fname}_example_${e.sline}__${e.eline}__${uid}.exe')
 		mut should_cleanup_vfile := true
-		// eprintln('>>> checking example $vfile ...')
+		// eprintln('>>> checking example ${vfile} ...')
 		vcontent := e.text.join('\n') + '\n'
 		os.write_file(vfile, vcontent) or { panic(err) }
 		mut acommands := e.command.split(' ')
 		nofmt := 'nofmt' in acommands
 		for command in acommands {
-			f.progress('example from ${e.sline} to ${e.eline}, command: ${command}')
+			f.progress('OK: ${f.oks:3}, W: ${f.warnings:2}, E: ${f.errors:2}, F: ${f.ferrors:2}, ex. ${eidx + 1:3}/${f.examples.len:-3}, from line ${e.sline:4} to line ${e.eline:-4} of ${f.lines.len:-4}, command: ${command:12s}')
 			fmt_res := if nofmt { 0 } else { get_fmt_exit_code(vfile, vexe) }
+			f.ferrors += fmt_res
 			match command {
 				'compile' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(efile)} ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(efile)} ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to compile'))
@@ -474,13 +693,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'cgen' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to generate C code'))
@@ -492,13 +712,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'globals' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -enable-globals -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -enable-globals -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, '`example failed to compile with -enable-globals'))
@@ -510,13 +731,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'live' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -live -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -live -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'example failed to compile with -live'))
@@ -528,13 +750,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'shared' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -shared -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -shared -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, 'module example failed to compile with -shared'))
@@ -546,13 +769,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'failcompile' {
-					res := silent_cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
+					res :=
+						silent_cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -o ${os.quoted_path(cfile)} ${os.quoted_path(vfile)}')
 					if res == 0 || fmt_res != 0 {
 						if res == 0 {
 							eprintln(eline(f.path, e.sline, 0, '`failcompile` example compiled'))
@@ -564,13 +788,14 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'oksyntax' {
-					res := cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -check-syntax ${os.quoted_path(vfile)}')
+					res :=
+						cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -check-syntax ${os.quoted_path(vfile)}')
 					if res != 0 || fmt_res != 0 {
 						if res != 0 {
 							eprintln(eline(f.path, e.sline, 0, '`oksyntax` example with invalid syntax'))
@@ -582,10 +807,10 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'okfmt' {
 					if fmt_res != 0 {
@@ -596,21 +821,22 @@ fn (mut f MDFile) check_examples() CheckResult {
 						}
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'badsyntax' {
-					res := silent_cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -check-syntax ${os.quoted_path(vfile)}')
+					res :=
+						silent_cmdexecute('${os.quoted_path(vexe)} -w -Wfatal-errors -check-syntax ${os.quoted_path(vfile)}')
 					if res == 0 {
 						eprintln(eline(f.path, e.sline, 0, '`badsyntax` example can be parsed fine'))
 						eprintln(vcontent)
 						should_cleanup_vfile = false
-						errors++
+						f.errors++
 						continue
 					}
-					oks++
+					f.oks++
 				}
 				'nofmt' {}
 				// mark the example as playable inside docs
@@ -622,7 +848,7 @@ fn (mut f MDFile) check_examples() CheckResult {
 				else {
 					eprintln(eline(f.path, e.sline, 0, 'unrecognized command: "${command}", use one of: wip/ignore/compile/failcompile/okfmt/nofmt/oksyntax/badsyntax/cgen/globals/live/shared'))
 					should_cleanup_vfile = false
-					errors++
+					f.errors++
 				}
 			}
 		}
@@ -631,10 +857,6 @@ fn (mut f MDFile) check_examples() CheckResult {
 		if should_cleanup_vfile {
 			os.rm(vfile) or { panic(err) }
 		}
-	}
-	return CheckResult{
-		errors: errors
-		oks: oks
 	}
 }
 

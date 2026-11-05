@@ -29,7 +29,7 @@ fn read_from_string(text string, capacity int) []u8 {
 		text: text
 	}
 	mut stream := io.new_buffered_reader(reader: str, cap: capacity)
-	//
+
 	mut buf := []u8{len: 1}
 	mut res := []u8{}
 	mut i := 0
@@ -63,7 +63,6 @@ pub fn test_buffered_reader_readline() {
 		text: text
 	}
 	mut stream := io.new_buffered_reader(reader: str)
-	mut buf := []u8{len: 1}
 	mut i := 0
 	for {
 		line := stream.read_line() or {

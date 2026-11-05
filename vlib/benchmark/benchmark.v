@@ -2,6 +2,9 @@ module benchmark
 
 import time
 import term
+import arrays
+
+const step_label_width = 5
 
 pub const b_ok = term.ok_message('OK  ')
 pub const b_fail = term.fail_message('FAIL')
@@ -24,13 +27,14 @@ pub mut:
 	bok             string
 	bfail           string
 	measured_steps  []string
+	step_data       map[string][]f64
 }
 
 // new_benchmark returns a `Benchmark` instance on the stack.
 pub fn new_benchmark() Benchmark {
 	return Benchmark{
 		bench_timer: time.new_stopwatch()
-		verbose: true
+		verbose:     true
 	}
 }
 
@@ -38,8 +42,8 @@ pub fn new_benchmark() Benchmark {
 pub fn new_benchmark_no_cstep() Benchmark {
 	return Benchmark{
 		bench_timer: time.new_stopwatch()
-		verbose: true
-		no_cstep: true
+		verbose:     true
+		no_cstep:    true
 	}
 }
 
@@ -48,7 +52,7 @@ pub fn new_benchmark_no_cstep() Benchmark {
 pub fn new_benchmark_pointer() &Benchmark {
 	return &Benchmark{
 		bench_timer: time.new_stopwatch()
-		verbose: true
+		verbose:     true
 	}
 }
 
@@ -127,24 +131,27 @@ pub fn start() Benchmark {
 	return b
 }
 
-// measure prints the current time spent doing `label`, since the benchmark was started, or since its last call
+// measure prints the current time spent doing `label`, since the benchmark was started, or since its last call.
 pub fn (mut b Benchmark) measure(label string) i64 {
 	b.ok()
 	res := b.step_timer.elapsed().microseconds()
-	println(b.step_message_with_label(benchmark.b_spent, 'in ${label}'))
+	println(b.step_message_with_label(b_spent, 'in ${label}'))
 	b.step()
 	return res
 }
 
-// record_measure stores the current time doing `label`, since the benchmark
-// was started, or since the last call to `b.record_measure`.
+// record_measure stores the current time doing `label`, since the benchmark was started, or since the last call to `b.record_measure`.
 // It is similar to `b.measure`, but unlike it, will not print the measurement
 // immediately, just record it for later. You can call `b.all_recorded_measures`
 // to retrieve all measures stored by `b.record_measure` calls.
 pub fn (mut b Benchmark) record_measure(label string) i64 {
 	b.ok()
 	res := b.step_timer.elapsed().microseconds()
-	b.measured_steps << b.step_message_with_label(benchmark.b_spent, 'in ${label}')
+	b.measured_steps << b.step_message_with_label(b_spent, 'in ${label}')
+	if label !in b.step_data {
+		b.step_data[label] = []f64{}
+	}
+	b.step_data[label] << f64(res)
 	b.step()
 	return res
 }
@@ -158,8 +165,10 @@ pub:
 }
 
 // step_message_with_label_and_duration returns a string describing the current step.
-pub fn (b &Benchmark) step_message_with_label_and_duration(label string, msg string, sduration time.Duration, opts MessageOptions) string {
+pub fn (b &Benchmark) step_message_with_label_and_duration(label string, msg string, sduration time.Duration,
+	opts MessageOptions) string {
 	timed_line := b.tdiff_in_ms(msg, sduration.microseconds())
+	flabel := format_step_label(label)
 	if b.nexpected_steps > 1 {
 		mut sprogress := ''
 		if b.nexpected_steps < 10 {
@@ -188,17 +197,24 @@ pub fn (b &Benchmark) step_message_with_label_and_duration(label string, msg str
 			}
 		}
 		if opts.preparation > 0 {
-			return '${label:-5s} [${sprogress}] C: ${f64(opts.preparation.microseconds()) / 1_000.0:7.1F} ms, R: ${timed_line}'
+			return '${flabel} [${sprogress}] C: ${f64(opts.preparation.microseconds()) / 1_000.0:7.1F} ms, R: ${timed_line}'
 		}
-		return '${label:-5s} [${sprogress}] ${timed_line}'
+		return '${flabel} [${sprogress}] ${timed_line}'
 	}
-	return '${label:-5s}${timed_line}'
+	return '${flabel}${timed_line}'
+}
+
+fn format_step_label(label string) string {
+	visible_len := term.strip_ansi(label).len
+	if visible_len >= step_label_width {
+		return label
+	}
+	return label + ' '.repeat(step_label_width - visible_len)
 }
 
 // step_message_with_label returns a string describing the current step using current time as duration.
 pub fn (b &Benchmark) step_message_with_label(label string, msg string, opts MessageOptions) string {
-	return b.step_message_with_label_and_duration(label, msg, b.step_timer.elapsed(),
-		opts)
+	return b.step_message_with_label_and_duration(label, msg, b.step_timer.elapsed(), opts)
 }
 
 // step_message returns a string describing the current step.
@@ -208,17 +224,17 @@ pub fn (b &Benchmark) step_message(msg string, opts MessageOptions) string {
 
 // step_message_ok returns a string describing the current step with an standard "OK" label.
 pub fn (b &Benchmark) step_message_ok(msg string, opts MessageOptions) string {
-	return b.step_message_with_label(benchmark.b_ok, msg, opts)
+	return b.step_message_with_label(b_ok, msg, opts)
 }
 
 // step_message_fail returns a string describing the current step with an standard "FAIL" label.
 pub fn (b &Benchmark) step_message_fail(msg string, opts MessageOptions) string {
-	return b.step_message_with_label(benchmark.b_fail, msg, opts)
+	return b.step_message_with_label(b_fail, msg, opts)
 }
 
 // step_message_skip returns a string describing the current step with an standard "SKIP" label.
 pub fn (b &Benchmark) step_message_skip(msg string, opts MessageOptions) string {
-	return b.step_message_with_label(benchmark.b_skip, msg, opts)
+	return b.step_message_with_label(b_skip, msg, opts)
 }
 
 // total_message returns a string with total summary of the benchmark run.
@@ -243,11 +259,16 @@ pub fn (b &Benchmark) total_message(msg string) string {
 		}
 	}
 	tmsg += '${b.ntotal} total. ${term.colorize(term.bold, 'Elapsed time:')} ${b.bench_timer.elapsed().microseconds() / 1000} ms${njobs_label}.'
+	if msg in b.step_data && b.step_data[msg].len > 1 {
+		min := arrays.min(b.step_data[msg]) or { 0 } / 1000.0
+		max := arrays.max(b.step_data[msg]) or { 0 } / 1000.0
+		avg := (arrays.sum(b.step_data[msg]) or { 0 } / b.step_data[msg].len) / 1000.0
+		tmsg += ' Min: ${min:.3f} ms. Max: ${max:.3f} ms. Avg: ${avg:.3f} ms'
+	}
 	return tmsg
 }
 
-// all_recorded_measures returns a string, that contains all the recorded
-// measure messages, done by individual calls to `b.record_measure`.
+// all_recorded_measures returns a string, that contains all the recorded measure messages, done by individual calls to `b.record_measure`.
 pub fn (b &Benchmark) all_recorded_measures() string {
 	return b.measured_steps.join_lines()
 }

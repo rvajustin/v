@@ -1,5 +1,5 @@
 import net.http
-import json
+import json2 as json
 
 struct MimeType {
 	source       string
@@ -13,7 +13,7 @@ fn main() {
 	chdir(mime_folder)!
 	//
 	mt_json := http.get('https://raw.githubusercontent.com/jshttp/mime-db/master/db.json')!
-	mt_map := json.decode(map[string]MimeType, mt_json.body)!
+	mt_map := json.decode[map[string]MimeType](mt_json.body)!
 
 	mut ext_to_mt_str := map[string]string{}
 	for mt_str, mt in mt_map {
@@ -21,6 +21,8 @@ fn main() {
 			ext_to_mt_str[ext] = mt_str
 		}
 	}
+	ext_to_mt_str['v'] = 'text/x-vlang'
+	ext_to_mt_str['vsh'] = 'text/x-vlang'
 
 	write_file('db.v', '
 	module mime
@@ -32,4 +34,5 @@ fn main() {
 	const ext_to_mt_str = ${ext_to_mt_str}	
 	')!
 	execute('${@VEXE} fmt -w db.v')
+	println('db.v was regenerated. New file size: ${file_size('db.v')} bytes .')
 }

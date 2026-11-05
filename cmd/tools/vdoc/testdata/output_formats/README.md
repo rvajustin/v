@@ -11,6 +11,32 @@ This is a script `<script>console.log('hi from README.md');</script>` .
 
 ## Examples
 
+### Functions that return different literals:
+
+Example of a function returning boolean:
+```v
+fn is_odd(x int) bool {
+	if x % 2 == 0 {
+		return false
+	}
+	return true
+}
+```
+
+Another example of a function returning a string:
+```v
+fn answer() string {
+	return '42'
+}
+```
+
+This example shows a function returning a string with interpolation:
+```v
+fn str_with_interplation() string {
+	return 'this string has ${42:6} interpolation in it.'
+}
+```
+
 ### Processing command line args
 
 ```v
@@ -37,7 +63,7 @@ fn main() {
 import crypto.hmac
 import crypto.sha256
 import encoding.base64
-import json
+import json2
 import time
 
 struct JwtHeader {
@@ -63,8 +89,8 @@ fn main() {
 }
 
 fn make_token(secret string) string {
-	header := base64.url_encode(json.encode(JwtHeader{'HS256', 'JWT'}).bytes())
-	payload := base64.url_encode(json.encode(JwtPayload{'1234567890', 'John Doe', 1516239022}).bytes())
+	header := base64.url_encode(json2.encode(JwtHeader{'HS256', 'JWT'}).bytes())
+	payload := base64.url_encode(json2.encode(JwtPayload{'1234567890', 'John Doe', 1516239022}).bytes())
 	signature := base64.url_encode(hmac.new(secret.bytes(), '${header}.${payload}'.bytes(),
 		sha256.sum, sha256.block_size))
 	jwt := '${header}.${payload}.${signature}'
@@ -138,3 +164,26 @@ const html = '<!DOCTYPE html>
 1. Numbered markdown list point 1
 2. List point 2
 3. List point 3
+
+A code block without a specific language should be rendered verbatim:
+```
+.
+├── static/
+│   ├── css/
+│   │   └── main.css
+│   └── js/
+│       └── main.js
+└── main.v
+```
+
+The s tags here in the code block, should be rendered verbatim, not interpreted as HTML ones:
+```
+h:m:s      // 5:02:33
+m:s.mi<s>  // 2:33.015
+s.mi<s>    // 33.015s
+mi.mc<ms>  // 15.007ms
+mc.ns<ns>  // 7.234us
+ns<ns>     // 234ns
+```
+
+The End.

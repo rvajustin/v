@@ -3,6 +3,36 @@
 // that can be found in the LICENSE file.
 module toml
 
+import strings
+
+// escape_basic_string escapes a string for use in a TOML basic string:
+// quotation marks, backslashes and control characters are emitted with
+// their escape sequences, everything else passes through unchanged.
+fn escape_basic_string(s string) string {
+	mut sb := strings.new_builder(s.len)
+	for c in s.bytes() {
+		match c {
+			`"` { sb.write_string('\\"') }
+			`\\` { sb.write_string('\\\\') }
+			`\b` { sb.write_string('\\b') }
+			`\t` { sb.write_string('\\t') }
+			`\n` { sb.write_string('\\n') }
+			`\f` { sb.write_string('\\f') }
+			`\r` { sb.write_string('\\r') }
+			else {
+				if c < 0x20 || c == 0x7f {
+					sb.write_string('\\u00')
+					sb.write_u8('0123456789ABCDEF'[c >> 4])
+					sb.write_u8('0123456789ABCDEF'[c & 0xf])
+				} else {
+					sb.write_u8(c)
+				}
+			}
+		}
+	}
+	return sb.str()
+}
+
 // Pretty much all the same builtin types as the `json2.Any` type plus `DateTime`,`Date`,`Time`
 pub type Any = Date
 	| DateTime
@@ -26,6 +56,7 @@ pub fn (a Any) string() string {
 		// ... certain call-patterns to this function will cause a memory corruption.
 		// See `tests/toml_memory_corruption_test.v` for a matching regression test.
 		string { return (a as string).clone() }
+		f64 { return a.str() }
 		DateTime { return a.str().clone() }
 		Date { return a.str().clone() }
 		Time { return a.str().clone() }
@@ -51,7 +82,7 @@ pub fn (a Any) to_toml() string {
 		// ... certain call-patterns to this function will cause a memory corruption.
 		// See `tests/toml_memory_corruption_test.v` for a matching regression test.
 		string {
-			return '"' + (a as string).clone() + '"'
+			return '"' + escape_basic_string(a as string) + '"'
 		}
 		DateTime {
 			return a.str().clone()
@@ -68,31 +99,41 @@ pub fn (a Any) to_toml() string {
 	}
 }
 
-// int returns `Any` as an 32-bit integer.
+// int returns `Any` as an integer, or zero for an integer outside its range.
 pub fn (a Any) int() int {
 	match a {
 		int { return a }
-		i64, f32, f64, bool { return int(a) }
+		u64 {
+			limit := if sizeof(int) == 4 { u64(2147483647) } else { u64(9223372036854775807) }
+			return if a <= limit { int(a) } else { 0 }
+		}
+		i64 {
+			if sizeof(int) == 4 && (a < -2147483648 || a > 2147483647) { return 0 }
+			return int(a)
+		}
+		f32, f64, bool { return int(a) }
 		// time.Time { return int(0) } // TODO
 		else { return 0 }
 	}
 }
 
-// i64 returns `Any` as a 64-bit integer.
+// i64 returns `Any` as a 64-bit integer, or zero for an unsigned value outside its range.
 pub fn (a Any) i64() i64 {
 	match a {
 		i64 { return a }
+		u64 { return if a <= u64(9223372036854775807) { i64(a) } else { i64(0) } }
 		int, f32, f64, bool { return i64(a) }
 		// time.Time { return i64(0) } // TODO
 		else { return 0 }
 	}
 }
 
-// u64 returns `Any` as a 64-bit unsigned integer.
+// u64 returns `Any` as a 64-bit unsigned integer, or zero for a negative integer.
 pub fn (a Any) u64() u64 {
 	match a {
 		u64 { return a }
-		int, i64, f32, f64, bool { return u64(a) }
+		int, i64 { return if a >= 0 { u64(a) } else { u64(0) } }
+		f32, f64, bool { return u64(a) }
 		// time.Time { return u64(0) } // TODO
 		else { return 0 }
 	}
@@ -102,7 +143,7 @@ pub fn (a Any) u64() u64 {
 pub fn (a Any) f32() f32 {
 	match a {
 		f32 { return a }
-		int, i64, f64 { return f32(a) }
+		int, i64, u64, f64 { return f32(a) }
 		// time.Time { return f32(0) } // TODO
 		else { return 0.0 }
 	}
@@ -112,7 +153,7 @@ pub fn (a Any) f32() f32 {
 pub fn (a Any) f64() f64 {
 	match a {
 		f64 { return a }
-		int, i64, f32 { return f64(a) }
+		int, i64, u64, f32 { return f64(a) }
 		// time.Time { return f64(0) } // TODO
 		else { return 0.0 }
 	}
@@ -328,184 +369,15 @@ fn (a Any) value_(value Any, key []string) Any {
 // value of any 1st level TOML key by the same name.
 pub fn (a Any) reflect[T]() T {
 	mut reflected := T{}
-	$for field in T.fields {
-		mut toml_field_name := field.name
-		// Remapping of field names, for example:
-		// TOML: 'assert = "ok"'
-		// V:    User { asrt string [toml: 'assert'] }
-		// User.asrt == 'ok'
-		for attr in field.attrs {
-			if attr.starts_with('toml:') {
-				toml_field_name = attr.all_after(':').trim_space()
-			}
-		}
-
-		$if field.typ is string {
-			reflected.$(field.name) = a.value(toml_field_name).default_to('').string()
-		} $else $if field.typ is bool {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(false).bool()
-		} $else $if field.typ is int {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(0).int()
-		} $else $if field.typ is f32 {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(0.0).f32()
-		} $else $if field.typ is f64 {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(0.0).f64()
-		} $else $if field.typ is i64 {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(0).i64()
-		} $else $if field.typ is u64 {
-			reflected.$(field.name) = a.value(toml_field_name).default_to(0).u64()
-		} $else $if field.typ is Any {
-			reflected.$(field.name) = a.value(toml_field_name)
-		} $else $if field.typ is DateTime {
-			dt := DateTime{'0000-00-00T00:00:00.000'}
-			reflected.$(field.name) = a.value(toml_field_name).default_to(dt).datetime()
-		} $else $if field.typ is Date {
-			da := Date{'0000-00-00'}
-			reflected.$(field.name) = a.value(toml_field_name).default_to(da).date()
-		} $else $if field.typ is Time {
-			t := Time{'00:00:00.000'}
-			reflected.$(field.name) = a.value(toml_field_name).default_to(t).time()
-		}
-		// Arrays of primitive types
-		$else $if field.typ is []string {
-			any_array := a.value(toml_field_name).array()
-			reflected.$(field.name) = any_array.as_strings()
-		} $else $if field.typ is []bool {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []bool{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.bool()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []int {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []int{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.int()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []f32 {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []f32{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.f32()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []f64 {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []f64{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.f64()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []i64 {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []i64{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.i64()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []u64 {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []u64{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.u64()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []Any {
-			reflected.$(field.name) = a.value(toml_field_name).array()
-		} $else $if field.typ is []DateTime {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []DateTime{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.datetime()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []Date {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []Date{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.date()
-			}
-			reflected.$(field.name) = arr
-		} $else $if field.typ is []Time {
-			any_array := a.value(toml_field_name).array()
-			mut arr := []Time{cap: any_array.len}
-			for any_value in any_array {
-				arr << any_value.time()
-			}
-			reflected.$(field.name) = arr
-		}
-		// String key maps of primitive types
-		$else $if field.typ is map[string]string {
-			any_map := a.value(toml_field_name).as_map()
-			reflected.$(field.name) = any_map.as_strings()
-		} $else $if field.typ is map[string]bool {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]bool{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.bool()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]int {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]int{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.int()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]f32 {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]f32{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.f32()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]f64 {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]f64{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.f64()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]i64 {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]i64{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.i64()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]u64 {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]u64{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.u64()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]Any {
-			reflected.$(field.name) = a.value(toml_field_name).as_map()
-		} $else $if field.typ is map[string]DateTime {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]DateTime{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.datetime()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]Date {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]Date{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.date()
-			}
-			reflected.$(field.name) = type_map.clone()
-		} $else $if field.typ is map[string]Time {
-			any_map := a.value(toml_field_name).as_map()
-			mut type_map := map[string]Time{}
-			for k, any_value in any_map {
-				type_map[k] = any_value.time()
-			}
-			reflected.$(field.name) = type_map.clone()
+	$for method in T.methods {
+		$if method.name == 'from_toml' {
+			reflected.$method(a)
+			return reflected
 		}
 	}
+	$if T !is $struct {
+		$compile_error('toml.Any.reflect: expects struct as T')
+	}
+	decode_struct[T](a, mut reflected)
 	return reflected
 }

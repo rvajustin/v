@@ -7,5 +7,10 @@ pub mut:
 }
 
 fn C.gettid() u32
-fn C.clock_gettime(int, &C.timespec)
-fn C.pthread_self() u64
+fn C.clock_gettime(i32, &C.timespec) i32
+
+$if macos {
+	fn C.pthread_self() voidptr
+} $else {
+	fn C.pthread_self() uint
+}

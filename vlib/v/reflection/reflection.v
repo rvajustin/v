@@ -1,8 +1,6 @@
 @[has_globals]
 module reflection
 
-import arrays
-
 __global g_reflection = Reflection{}
 
 @[heap; minify]
@@ -25,14 +23,13 @@ pub enum VLanguage {
 	i386
 	arm64 // 64-bit arm
 	arm32 // 32-bit arm
-	rv64 // 64-bit risc-v
-	rv32 // 32-bit risc-v
+	rv64  // 64-bit risc-v
+	rv32  // 32-bit risc-v
 	wasm32
 }
 
-type VType = u32
+type VType = u64
 
-// max of 8
 pub enum VTypeFlag {
 	option
 	result
@@ -58,27 +55,27 @@ pub enum VKind {
 	u16
 	u32
 	u64
-	usize
+	uint
 	f32
 	f64
 	char
 	rune
 	bool
-	none_
+	none
 	string
 	array
 	array_fixed
 	map
 	chan
 	any
-	struct_
+	struct
 	generic_inst
 	multi_return
 	sum_type
 	alias
-	enum_
+	enum
 	function
-	interface_
+	interface
 	float_literal
 	int_literal
 	aggregate
@@ -88,16 +85,16 @@ pub enum VKind {
 // return true if `flag` is set on `t`
 @[inline]
 pub fn (t VType) has_flag(flag VTypeFlag) bool {
-	return int(t) & (1 << (int(flag) + 24)) > 0
+	return u64(t) & (u64(1) << (int(flag) + 32)) > 0
 }
 
 @[inline]
 pub fn (t VType) idx() int {
-	return u16(t) & 0xffff
+	return int(u32(t) & 0xff00ffff)
 }
 
 pub fn (t VType) str() string {
-	return 'VType(0x${t.hex()} = ${u32(t)})'
+	return 'VType(0x${t.hex()} = ${u64(t)})'
 }
 
 // return true if `t` is a pointer (nr_muls>0)
@@ -131,7 +128,7 @@ pub:
 	name       string        // interface name
 	methods    []Function    // methods
 	fields     []StructField // fields
-	is_generic bool // is generic?
+	is_generic bool          // is generic?
 }
 
 pub struct None {
@@ -147,17 +144,17 @@ pub:
 
 pub struct StructField {
 pub:
-	name   string   // field name
-	typ    VType    // type
-	attrs  []string // field attrs
-	is_pub bool     // is pub?
-	is_mut bool     // is mut?
+	name   string       // field name
+	typ    VType        // type
+	attrs  []VAttribute // field attrs
+	is_pub bool         // is pub?
+	is_mut bool         // is mut?
 }
 
 pub struct Struct {
 pub:
 	parent_idx int           // parent type
-	attrs      []string      // struct attrs
+	attrs      []VAttribute  // struct attrs
 	fields     []StructField // fields
 }
 
@@ -193,6 +190,7 @@ pub type TypeInfo = Alias
 pub struct TypeSymbol {
 pub:
 	name       string     // symbol name
+	mod        string     // mod name
 	idx        int        // symbol idx
 	parent_idx int        // symbol parent idx
 	language   VLanguage  // language
@@ -224,14 +222,15 @@ pub struct Function {
 pub:
 	mod_name     string        // module name
 	name         string        // function/method name
+	attrs        []VAttribute  // function/method attrs
 	args         []FunctionArg // function/method args
-	file_idx     int   // source file name
-	line_start   int   // decl start line
-	line_end     int   // decl end line
-	is_variadic  bool  // is variadic?
-	return_typ   VType // return type idx
-	receiver_typ VType // receiver type idx (is a method)
-	is_pub       bool  // is pub?
+	file_idx     int           // source file name
+	line_start   int           // decl start line
+	line_end     int           // decl end line
+	is_variadic  bool          // is variadic?
+	return_typ   VType         // return type idx
+	receiver_typ VType         // receiver type idx (is a method)
+	is_pub       bool          // is pub?
 }
 
 // API module
@@ -253,12 +252,16 @@ pub fn get_modules() []Module {
 // get_functions returns the functions built with V source
 pub fn get_funcs() []Function {
 	mut out := g_reflection.funcs.clone()
-	out << arrays.flatten[Function](get_types().map(it.sym.methods).filter(it.len))
+	for typ in g_reflection.types {
+		if typ.sym.methods.len > 0 {
+			out << typ.sym.methods
+		}
+	}
 	return out
 }
 
 pub fn get_structs() []Type {
-	struct_idxs := g_reflection.type_symbols.filter(it.kind == .struct_).map(it.idx)
+	struct_idxs := g_reflection.type_symbols.filter(it.kind == .struct).map(it.idx)
 	return g_reflection.types.filter(it.idx in struct_idxs)
 }
 
@@ -269,7 +272,7 @@ pub fn get_types() []Type {
 
 // get_enums returns the registered enums
 pub fn get_enums() []Type {
-	enum_idxs := g_reflection.type_symbols.filter(it.kind == .enum_).map(it.idx)
+	enum_idxs := g_reflection.type_symbols.filter(it.kind == .enum).map(it.idx)
 	return g_reflection.types.filter(it.idx in enum_idxs)
 }
 
@@ -281,7 +284,7 @@ pub fn get_aliases() []Type {
 
 // get_interfaces returns the registered aliases
 pub fn get_interfaces() []Interface {
-	iface_idxs := g_reflection.type_symbols.filter(it.kind == .interface_).map(it.idx)
+	iface_idxs := g_reflection.type_symbols.filter(it.kind == .interface).map(it.idx)
 	return g_reflection.types.filter(it.idx in iface_idxs).map(it.sym.info as Interface)
 }
 

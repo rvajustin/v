@@ -1,6 +1,9 @@
 module term
 
 import os
+import time
+
+#include <conio.h>
 
 @[typedef]
 pub struct C.COORD {
@@ -53,7 +56,8 @@ fn C.SetConsoleTitle(title &u16) bool
 fn C.SetConsoleCursorPosition(handle C.HANDLE, coord C.COORD) bool
 
 // ref - https://docs.microsoft.com/en-us/windows/console/scrollconsolescreenbuffer
-fn C.ScrollConsoleScreenBuffer(output C.HANDLE, scroll_rect &C.SMALL_RECT, clip_rect &C.SMALL_RECT, des C.COORD, fill &C.CHAR_INFO) bool
+fn C.ScrollConsoleScreenBuffer(output C.HANDLE, scroll_rect &C.SMALL_RECT, clip_rect &C.SMALL_RECT, des C.COORD,
+	fill &C.CHAR_INFO) bool
 
 // get_terminal_size returns a number of columns and rows of terminal window.
 pub fn get_terminal_size() (int, int) {
@@ -68,7 +72,7 @@ pub fn get_terminal_size() (int, int) {
 	return default_columns_size, default_rows_size
 }
 
-// get_cursor_position returns a Coord containing the current cursor position
+// get_cursor_position returns a Coord containing the current cursor position.
 pub fn get_cursor_position() !Coord {
 	mut res := Coord{}
 	if os.is_atty(1) > 0 && os.getenv('TERM') != 'dumb' {
@@ -83,13 +87,13 @@ pub fn get_cursor_position() !Coord {
 	return res
 }
 
-// set_terminal_title changes the terminal title
+// set_terminal_title changes the terminal title.
 pub fn set_terminal_title(title string) bool {
 	wide_title := title.to_wide()
 	return C.SetConsoleTitle(wide_title)
 }
 
-// set_tab_title changes the terminal *tab title*, for terminal emulators that do support several tabs
+// set_tab_title changes the terminal *tab title*, for terminal emulators that do support several tabs.
 pub fn set_tab_title(title string) bool {
 	// TODO: investigate, whether there is an API for changing just the tab title on windows yet.
 	return set_terminal_title(title)
@@ -123,7 +127,7 @@ pub fn clear() bool {
 	fill.Attributes = csbi.wAttributes
 
 	// Do the scroll
-	C.ScrollConsoleScreenBuffer(hconsole, &scrollrect, C.NULL, scrolltarget, &fill)
+	C.ScrollConsoleScreenBuffer(hconsole, &scrollrect, unsafe { nil }, scrolltarget, &fill)
 
 	// Move the cursor to the top left corner too.
 	csbi.dwCursorPosition.X = 0
@@ -153,5 +157,56 @@ pub fn supports_sixel() bool {
 pub fn graphics_num_colors() u16 {
 	// Since this call is related to sixel terminal graphics and Windows Console and Terminal
 	// does not have support for querying the graphics setup this call returns 0
+	return 0
+}
+
+// enable_echo enable/disable echo input characters.
+pub fn enable_echo(enable bool) {
+	// no need under windows, use key_pressed func's echo
+}
+
+fn C.kbhit() bool
+fn C._getch() i32
+fn C._getche() i32
+
+// KeyPressedParams contains the optional parameters that you can pass to key_pressed.
+@[params]
+pub struct KeyPressedParams {
+pub mut:
+	blocking bool // whether to wait for a pressed key
+	echo     bool // whether to output the pressed key to stdout
+}
+
+// key_pressed gives back a single character, read from the standard input.
+// It returns -1 on error or no character in non-blocking mode
+pub fn key_pressed(params KeyPressedParams) i64 {
+	for {
+		if C.kbhit() {
+			res := if params.echo {
+				C._getche()
+			} else {
+				C._getch()
+			}
+			// see https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/getche-getwche?view=msvc-170
+			// > When _getche or _getwche reads a function key or an arrow key, the function must be called twice;
+			// > the first call returns 0 or 0xE0, and the second call returns the actual key code.
+			if res in [0, 0xe0] {
+				if C.kbhit() {
+					res2 := if params.echo {
+						C._getche()
+					} else {
+						C._getch()
+					}
+					return i64(u32(0xe0) << 16 | u32(res2))
+				}
+			}
+			return i64(res)
+		}
+		if !params.blocking {
+			// in non-blocking mode, we need to return immediately
+			return -1
+		}
+		time.sleep(1 * time.millisecond)
+	}
 	return 0
 }

@@ -74,16 +74,12 @@ const colors = [
 
 const frame_rate = 30 // fps
 
-const msg_display_time = 5 * frame_rate
 const w = 200
 const h = 100
 const space = ' '
 const spaces = '  '
 const select_color = 'Select color: '
 const select_size = 'Size: ＋  －'
-const help_1 = '╭────────╮'
-const help_2 = '│  HELP  │'
-const help_3 = '╰────────╯'
 
 struct App {
 mut:
@@ -98,8 +94,8 @@ mut:
 	secondary_color_idx int          = 28
 	bg_color            ui.Color     = ui.Color{0, 0, 0}
 	drawing             [][]ui.Color = [][]ui.Color{len: h, init: []ui.Color{len: w}}
-	size                int  = 1
-	should_redraw       bool = true
+	size                int          = 1
+	should_redraw       bool         = true
 	is_dragging         bool
 }
 
@@ -116,11 +112,15 @@ type FrameFn = fn (voidptr)
 fn main() {
 	mut app := &App{}
 	app.ui = ui.init(
-		user_data: app
-		frame_fn: FrameFn(frame)
-		event_fn: EventFn(event)
-		frame_rate: frame_rate
-		hide_cursor: true
+		user_data:    app
+		// The tui callback slots are `voidptr`; `frame`/`event` instead take the typed app
+		// pointer that `user_data` hands back. `&T` and `voidptr` share a representation, so
+		// reinterpreting the fn pointer across that parameter is ABI-safe; the cast only
+		// satisfies the static fn-type check.
+		frame_fn:     unsafe { FrameFn(frame) }
+		event_fn:     unsafe { EventFn(event) }
+		frame_rate:   frame_rate
+		hide_cursor:  true
 		window_title: 'V terminal pixelart drawing app'
 	)
 	app.mouse_pos.x = 40
@@ -196,8 +196,8 @@ fn event(event &ui.Event, mut app App) {
 					nevent := ui.Event{
 						...oevent
 						button: ui.MouseButton.left
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -206,8 +206,8 @@ fn event(event &ui.Event, mut app App) {
 					nevent := ui.Event{
 						...oevent
 						button: ui.MouseButton.right
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -216,8 +216,8 @@ fn event(event &ui.Event, mut app App) {
 					nevent := ui.Event{
 						...oevent
 						button: .left
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -226,8 +226,8 @@ fn event(event &ui.Event, mut app App) {
 					nevent := ui.Event{
 						...oevent
 						button: .middle
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -291,6 +291,7 @@ fn event(event &ui.Event, mut app App) {
 		}
 		else {}
 	}
+
 	app.should_redraw = true
 }
 
@@ -343,6 +344,7 @@ fn (mut app App) paint(event &ui.Event) {
 		.right { app.secondary_color }
 		else { app.bg_color }
 	}
+
 	for x in x_start .. x_start + app.size {
 		for y in y_start .. y_start + app.size {
 			app.set_pixel(x, y, color)
@@ -422,8 +424,9 @@ fn (mut app App) draw_header() {
 		app.ui.draw_text(0, 0, ' ${app.msg} ')
 		app.ui.reset()
 	}
-	//'tick: $app.ui.frame_count | ' +
-	app.ui.draw_text(3, 2, 'terminal size: (${app.ui.window_width}, ${app.ui.window_height}) | primary color: ${app.primary_color.hex()} | secondary color: ${app.secondary_color.hex()}')
+	//'tick: ${app.ui.frame_count} | ' +
+	app.ui.draw_text(3, 2,
+		'terminal size: (${app.ui.window_width}, ${app.ui.window_height}) | primary color: ${app.primary_color.hex()} | secondary color: ${app.secondary_color.hex()}')
 	app.ui.horizontal_separator(3)
 }
 

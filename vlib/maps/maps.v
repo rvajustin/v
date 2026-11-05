@@ -5,8 +5,14 @@ pub fn filter[K, V](m map[K]V, f fn (key K, val V) bool) map[K]V {
 	mut mp := map[K]V{}
 
 	for k, v in m {
-		if f(k, v) {
-			mp[k] = v
+		$if V is $interface {
+			if f(k, unsafe { v }) {
+				mp[k] = v
+			}
+		} $else {
+			if f(k, v) {
+				mp[k] = v
+			}
 		}
 	}
 
@@ -18,7 +24,11 @@ pub fn to_array[K, V, I](m map[K]V, f fn (key K, val V) I) []I {
 	mut a := []I{cap: m.len}
 
 	for k, v in m {
-		a << f(k, v)
+		$if V is $interface {
+			a << f(k, unsafe { v })
+		} $else {
+			a << f(k, v)
+		}
 	}
 
 	return a
@@ -29,7 +39,11 @@ pub fn flat_map[K, V, I](m map[K]V, f fn (key K, val V) []I) []I {
 	mut a := []I{cap: m.len}
 
 	for k, v in m {
-		a << f(k, v)
+		$if V is $interface {
+			a << f(k, unsafe { v })
+		} $else {
+			a << f(k, v)
+		}
 	}
 
 	return a
@@ -40,8 +54,13 @@ pub fn to_map[K, V, X, Y](m map[K]V, f fn (key K, val V) (X, Y)) map[X]Y {
 	mut mp := map[X]Y{}
 
 	for k, v in m {
-		x, y := f(k, v)
-		mp[x] = y
+		$if V is $interface {
+			x, y := f(k, unsafe { v })
+			mp[x] = y
+		} $else {
+			x, y := f(k, v)
+			mp[x] = y
+		}
 	}
 
 	return mp
@@ -75,7 +94,11 @@ pub fn from_array[T](array []T) map[int]T {
 // Note that this function modifes `m1`, while `m2` will not be.
 pub fn merge_in_place[K, V](mut m1 map[K]V, m2 map[K]V) {
 	for k, v in m2 {
-		m1[k] = v
+		$if v is $map {
+			m1[k] = v.clone()
+		} $else {
+			m1[k] = v
+		}
 	}
 }
 
@@ -86,7 +109,11 @@ pub fn merge_in_place[K, V](mut m1 map[K]V, m2 map[K]V) {
 pub fn merge[K, V](m1 map[K]V, m2 map[K]V) map[K]V {
 	mut res := m1.clone()
 	for k, v in m2 {
-		res[k] = v
+		$if v is $map {
+			res[k] = v.clone()
+		} $else {
+			res[k] = v
+		}
 	}
 	return res
 }

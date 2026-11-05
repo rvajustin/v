@@ -16,11 +16,6 @@ struct Pet {
 	title          JobTitle
 	address        Address
 	meal_frequency map[string]int
-	// *¹ Currently it is only possible to decode a single nested struct generically.
-	// As soon as we decode another nested struct (e.g. within this struct, like `contact` below)
-	// or only one nested struct within another struct, it results in wrong values or errors.
-	// Related issue: https://github.com/vlang/v/issues/18110
-	// contact Contact
 }
 
 struct Address {
@@ -28,11 +23,9 @@ struct Address {
 	city   string
 }
 
-// *¹
-/*
-struct Contact {
-	phone string
-}*/
+struct AnyStruct {
+	val toml.Any
+}
 
 struct Employee {
 mut:
@@ -56,9 +49,24 @@ struct Arrs {
 	times []toml.Time
 }
 
+// individual because toml.decode[Foo](str)! == foo is false
+struct AnyArr {
+	arr []toml.Any
+}
+
+struct Item {
+	name string
+}
+
+struct Doc {
+	items []Item
+}
+
+struct MapDoc {
+	items map[string]Item
+}
+
 fn test_encode_and_decode() {
-	// *¹
-	// p := Pet{'Mr. Scratchy McEvilPaws', ['Freddy', 'Fred', 'Charles'], 8, -1, 0.8, true, .manager, Address{'1428 Elm Street', 'Springwood'}, Contact{'123-456-7890'}}
 	p := Pet{'Mr. Scratchy McEvilPaws', ['Freddy', 'Fred', 'Charles'], 8, -1, 0.8, true, .manager, Address{'1428 Elm Street', 'Springwood'}, {
 		'bones':  2
 		'kibble': 5
@@ -76,10 +84,17 @@ has_furr = true
 title = 2
 address = { street = "1428 Elm Street", city = "Springwood" }
 meal_frequency = { bones = 2, kibble = 5 }'
-	// contact = { phone = "123-456-7890" }' // *¹
 
 	assert toml.encode[Pet](p) == s
 	assert toml.decode[Pet](s)! == p
+}
+
+fn test_encode_and_decode_any() {
+	a := AnyStruct{toml.Any(10)}
+	s := 'val = 10'
+
+	assert toml.encode[AnyStruct](a) == s
+	assert toml.decode[AnyStruct](s)!.val.int() == 10
 }
 
 pub fn (e Employee) to_toml() string {
@@ -192,19 +207,19 @@ struct Example6 {
 }
 
 fn test_encode_for_exotic_types() {
-	assert toml.encode(Example6{ ptr: &voidptr(0), r: `🚀` }) == 'ptr = "0x0"\nr = "🚀"'
+	assert toml.encode(Example6{ ptr: unsafe { &voidptr(nil) }, r: `🚀` }) == 'ptr = "0x0"\nr = "🚀"'
 }
 
 fn test_array_encode_decode() {
 	a := Arrs{
-		strs: ['foo', 'bar']
+		strs:  ['foo', 'bar']
 		bools: [true, false]
-		ints: [-1, 2]
-		i64s: [i64(-2)]
-		u64s: [u64(123)]
-		f32s: [f32(1.0), f32(2.5)]
-		f64s: [100000.5, -123.0]
-		dts: [toml.DateTime{'1979-05-27T07:32:00Z'}, toml.DateTime{'1979-05-27T07:32:00Z'}]
+		ints:  [-1, 2]
+		i64s:  [i64(-2)]
+		u64s:  [u64(123)]
+		f32s:  [f32(1.0), f32(2.5)]
+		f64s:  [100000.5, -123.0]
+		dts:   [toml.DateTime{'1979-05-27T07:32:00Z'}, toml.DateTime{'1979-05-27T07:32:00Z'}]
 		dates: [toml.Date{'1979-05-27'}, toml.Date{'2022-12-31'}]
 		times: [toml.Time{'07:32:59'}, toml.Time{'17:32:04'}]
 	}
@@ -250,6 +265,68 @@ times = [
 
 	assert toml.encode[Arrs](a) == s
 	assert toml.decode[Arrs](s)! == a
+
+	any_a := AnyArr{[toml.Any(10), 20, 30]}
+	any_s := 'arr = [
+  10,
+  20,
+  30
+]'
+
+	assert toml.encode[AnyArr](any_a) == any_s
+	assert toml.decode[AnyArr](any_s)!.arr.map(it.int()) == [10, 20, 30]
+}
+
+fn test_array_of_struct_decode() {
+	doc := Doc{
+		items: [
+			Item{
+				name: 'item #1'
+			},
+			Item{
+				name: 'item #2'
+			},
+			Item{
+				name: 'item #3'
+			},
+		]
+	}
+
+	encoded := toml.encode[Doc](doc)
+	assert toml.decode[Doc](encoded)! == doc
+
+	array_of_tables := '[[items]]
+name = "item #1"
+
+[[items]]
+name = "item #2"
+
+[[items]]
+name = "item #3"'
+	assert toml.decode[Doc](array_of_tables)! == doc
+}
+
+fn test_map_of_struct_decode() {
+	doc := MapDoc{
+		items: {
+			'first':  Item{
+				name: 'first one'
+			}
+			'second': Item{
+				name: 'second one'
+			}
+		}
+	}
+
+	encoded := toml.encode[MapDoc](doc)
+	assert toml.decode[MapDoc](encoded)! == doc
+
+	table_doc := '[items.first]
+name = "first one"
+
+[items.second]
+name = "second one"'
+	assert toml.decode[MapDoc](table_doc)! == doc
 }
 
 fn test_decode_doc() {
@@ -297,5 +374,45 @@ fn test_unsupported_type() {
 		assert false
 	} else {
 		assert err.msg() == 'Doc.decode: expected struct, found string'
+	}
+}
+
+fn test_date_array_decode_with_spaces() {
+	// test space after yyyy-mm-dd is not date-time separator but white to consume. issue # 25279
+	s := '
+dates = [ 1979-05-27    , 2022-12-31    ]
+'
+	a := Arrs{
+		dates: [toml.Date{'1979-05-27'}, toml.Date{'2022-12-31'}]
+	}
+	assert toml.decode[Arrs](s)! == a
+}
+
+struct EscapedStrings {
+	text string
+}
+
+fn test_encode_escapes_special_characters_in_strings() {
+	// strings requiring escapes must round-trip: an unescaped quote,
+	// backslash or newline produces TOML the decoder rejects.
+	for original in ['plain', 'say "hi"', 'back\\slash', 'tab\there', 'new\nline', 'nul\x00here',
+		'esc\x1b!', 'del\x7f!'] {
+		encoded := toml.encode(EscapedStrings{
+			text: original
+		})
+		decoded := toml.decode[EscapedStrings](encoded)!
+		assert decoded.text == original
+	}
+}
+
+fn test_encode_escapes_all_control_bytes_and_preserves_unicode() {
+	for c in 0 .. 32 {
+		original := [u8(c)].bytestr()
+		encoded := toml.encode(EscapedStrings{ text: original })
+		assert toml.decode[EscapedStrings](encoded)!.text == original
+	}
+	for original in ['こんにちは 😀', '\r\n\b\f', '\\\\\"'] {
+		encoded := toml.encode(EscapedStrings{ text: original })
+		assert toml.decode[EscapedStrings](encoded)!.text == original
 	}
 }

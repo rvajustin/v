@@ -1,3 +1,4 @@
+// vtest build: present_node?
 import strings.textscanner
 
 fn test_remaining() {
@@ -71,7 +72,7 @@ fn test_peek() {
 	assert s.peek() == `a`
 	assert s.peek() == `a`
 	assert s.peek() == `a`
-	//
+
 	assert s.next() == `a`
 	assert s.next() == `b`
 	assert s.next() == `c`
@@ -85,7 +86,7 @@ fn test_peek_n() {
 	assert s.peek_n(2) == `c`
 	assert s.peek_n(3) == -1
 	assert s.peek_n(4) == -1
-	//
+
 	assert s.next() == `a`
 	assert s.next() == `b`
 	assert s.next() == `c`

@@ -17,7 +17,7 @@ pub:
 // other XML nodes, CDATA, plain text, or comments.
 pub struct XMLNode {
 pub:
-	name       string            @[required]
+	name       string @[required]
 	attributes map[string]string
 	children   []XMLNodeContents
 }
@@ -56,8 +56,10 @@ pub:
 
 pub struct DocumentType {
 pub:
-	name string  @[required]
+	name string @[required]
 	dtd  DTDInfo
+	// external_id retains the quoted SYSTEM or PUBLIC identifier; external resources are not loaded.
+	external_id string
 }
 
 type DTDInfo = DocumentTypeDefinition | string
@@ -69,7 +71,7 @@ pub:
 	encoding string       = 'UTF-8'
 	doctype  DocumentType = DocumentType{
 		name: ''
-		dtd: ''
+		dtd:  ''
 	}
 	comments []XMLComment
 }

@@ -11,7 +11,7 @@ fn get_folder_index_html(requested_file_path string, uri_path string, filter_mye
 	sw := time.new_stopwatch()
 	mut files := os.ls(requested_file_path) or { [] }
 	if filter_myexe {
-		files = files.filter(!it.contains(file.myexe_prefix))
+		files = files.filter(!it.contains(myexe_prefix))
 	}
 	mut sb := strings.new_builder(files.len * 200)
 	write_page_header(mut sb, uri_path)
@@ -34,7 +34,7 @@ fn write_page_header(mut sb strings.Builder, uri_path string) {
 	sb.writeln('<body>')
 }
 
-fn write_page_footer(mut sb strings.Builder, uri_path string) {
+fn write_page_footer(mut sb strings.Builder, _uri_path string) {
 	// html boilerplate for the footer
 	sb.writeln('</body>')
 	sb.writeln('</html>')

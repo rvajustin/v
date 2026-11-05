@@ -10,7 +10,7 @@ module rc4
 // applications.
 // Based off:   https://github.com/golang/go/blob/master/src/crypto/rc4
 // Last commit: https://github.com/golang/go/commit/b35dacaac57b039205d9b07ea24098e2c3fcb12e
-import crypto.internal.subtle
+import crypto.subtle
 
 // A Cipher is an instance of RC4 using a particular key.
 struct Cipher {
@@ -31,11 +31,12 @@ pub fn (mut c Cipher) free() {
 
 // new_cipher creates and returns a new Cipher. The key argument should be the
 // RC4 key, at least 1 byte and at most 256 bytes.
-pub fn new_cipher(key []u8) !Cipher {
+@[direct_array_access]
+pub fn new_cipher(key []u8) !&Cipher {
 	if key.len < 1 || key.len > 256 {
 		return error('crypto.rc4: invalid key size ' + key.len.str())
 	}
-	mut c := Cipher{
+	mut c := &Cipher{
 		s: []u32{len: (256)}
 	}
 	for i in 0 .. 256 {
@@ -56,7 +57,7 @@ pub fn new_cipher(key []u8) !Cipher {
 // Deprecated: Reset can't guarantee that the key will be entirely removed from
 // the process's memory.
 pub fn (mut c Cipher) reset() {
-	for i in c.s {
+	for i in 0 .. 256 {
 		c.s[i] = 0
 	}
 	c.i = 0
@@ -65,7 +66,8 @@ pub fn (mut c Cipher) reset() {
 
 // xor_key_stream sets dst to the result of XORing src with the key stream.
 // Dst and src must overlap entirely or not at all.
-pub fn (mut c Cipher) xor_key_stream(mut dst []u8, mut src []u8) {
+@[direct_array_access]
+pub fn (mut c Cipher) xor_key_stream(mut dst []u8, src []u8) {
 	if src.len == 0 {
 		return
 	}

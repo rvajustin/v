@@ -1,5 +1,4 @@
 import os
-import log
 
 fn dump_of_int() {
 	x := dump(1) + 1
@@ -19,16 +18,16 @@ mut:
 }
 
 struct Aa {
-	log &log.Logger
+	cmd &os.Command
 }
 
 fn dump_of_struct() {
 	p := Point{1, 2, 3}
 	mut p_mut := Point{1, 2, 3}
 	p_ptr := &Point{1, 2, 3}
-	l := &log.Log{}
+	c := &os.Command{}
 	a := Aa{
-		log: l
+		cmd: c
 	}
 
 	dump(a)
@@ -40,7 +39,7 @@ fn dump_of_struct() {
 	x3.x += 100
 	assert x1 == Point{101, 2, 3}
 	assert x2 == Point{101, 2, 3}
-	assert x3 == Point{101, 2, 3}
+	assert *x3 == Point{101, 2, 3}
 }
 
 fn dump_of_callexpr() {

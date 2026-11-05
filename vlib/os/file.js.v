@@ -10,6 +10,7 @@ pub mut:
 $if !js_browser {
 	#const $buffer = require('buffer');
 }
+
 // todo(playX):   __as_cast is broken here
 /*
 pub struct ErrFileNotOpened {
@@ -59,21 +60,21 @@ pub fn create(path string) !File {
 
 pub fn stdin() File {
 	return File{
-		fd: 0
+		fd:        0
 		is_opened: true
 	}
 }
 
 pub fn stdout() File {
 	return File{
-		fd: 1
+		fd:        1
 		is_opened: true
 	}
 }
 
 pub fn stderr() File {
 	return File{
-		fd: 2
+		fd:        2
 		is_opened: true
 	}
 }
@@ -126,7 +127,7 @@ pub fn (mut f File) write_to(pos u64, buf []u8) !int {
 	return nbytes
 }
 
-// write_string writes the string `s` into the file
+// write_string writes the string `s` into the file.
 // It returns how many bytes were actually written.
 pub fn (mut f File) write_string(s string) !int {
 	nbytes := f.write(s.bytes())!
@@ -137,7 +138,8 @@ pub fn (mut f File) close() {
 	#$fs.closeSync(f.valueOf().fd.valueOf())
 }
 
-pub fn (mut f File) write_full_buffer(s voidptr, buffer_len usize) ! {}
+// write_full_buffer writes buffer_len bytes from s to the file.
+pub fn (mut f File) write_full_buffer(s voidptr, buffer_len uint) ! {}
 
 pub fn (mut f File) write_array(buffer array) !int {
 	if !f.is_opened {

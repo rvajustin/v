@@ -1,5 +1,7 @@
-// vtest flaky: true
-// vtest retry: 4
+@[has_globals]
+module main
+
+// vtest retry: 2
 import sync
 
 fn one() int {
@@ -65,6 +67,7 @@ __global (
 	ch        chan f64
 	mys       shared MyStruct
 	sem       sync.Semaphore
+	sem_ready sync.Semaphore
 	shmap     shared map[string]f64
 	mtx       sync.RwMutex
 	f1        = f64(545 / (sizeof(f64) + f32(8))) // directly initialized
@@ -95,6 +98,7 @@ fn init() {
 	// reasons they cannot have a "default constructor" at the moment and must
 	// be initialized "manually"
 	sem.init(0)
+	sem_ready.init(0)
 	mtx.init()
 }
 
@@ -105,12 +109,21 @@ mut:
 }
 
 fn switch() {
+	mut announced := false
 	for !sem.try_wait() {
 		lock mys {
 			if mys.x == 13.0 {
 				mys.x = 13.75
+				if !announced {
+					announced = true
+					sem_ready.post()
+				}
 			} else if mys.y == 13.0 {
 				mys.y = 13.75
+				if !announced {
+					announced = true
+					sem_ready.post()
+				}
 			}
 		}
 		lock mys {
@@ -125,6 +138,7 @@ fn test_global_shared() {
 		mys.y = -35.125
 	}
 	t := spawn switch()
+	sem_ready.wait()
 	for _ in 0 .. 2500000 {
 		lock mys {
 			mys.x, mys.y = mys.y, mys.x
@@ -136,7 +150,9 @@ fn test_global_shared() {
 	sem.post()
 	t.wait()
 	eprintln('> a: ${a} | b: ${b}')
-	assert (a == 13.75 && b == -35.125) || (a == -35.125 && b == 13.75)
+	c1 := dump(a == 13.75 && b == -35.125)
+	c2 := dump(a == -35.125 && b == 13.75)
+	assert c1 || c2
 }
 
 fn test_global_shared_map() {
@@ -155,7 +171,7 @@ fn switch2() u64 {
 	mut cnt := u64(0)
 	for {
 		cnt++
-		mtx.@lock()
+		mtx.lock()
 		f1, f2 = f2, f1
 		if f1 == 17.0 || f2 == 17.0 {
 			mtx.unlock()
@@ -170,18 +186,18 @@ fn test_global_mutex() {
 	assert f1 == 34.0625
 	t := spawn switch2()
 	for _ in 0 .. 25000 {
-		mtx.@lock()
+		mtx.lock()
 		f1, f2 = f2, f1
 		mtx.unlock()
 	}
-	mtx.@lock()
+	mtx.lock()
 	if f1 == 0.0 {
 		f1 = 17.0
 	} else {
 		f2 = 17.0
 	}
 	mtx.unlock()
-	mtx.@rlock()
+	mtx.rlock()
 	assert (f1 == 17.0 && f2 == 34.0625) || (f1 == 34.0625 && f2 == 17.0)
 	mtx.runlock()
 	n := t.wait()

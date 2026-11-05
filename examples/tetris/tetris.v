@@ -3,11 +3,11 @@
 // that can be found in the LICENSE file.
 module main
 
-import os
+import os.asset
 import rand
 import time
-import gx
 import gg
+
 // import sokol.sapp
 
 const block_size = 20 // virtual pixels
@@ -18,20 +18,17 @@ const field_width = 10
 const tetro_size = 4
 const win_width = block_size * field_width
 const win_height = block_size * field_height
-const timer_period = 250 // ms
-
 const text_size = 24
-const limit_thickness = 3
 
-const text_cfg = gx.TextCfg{
+const text_cfg = gg.TextCfg{
 	align: .left
-	size: text_size
-	color: gx.rgb(0, 0, 0)
+	size:  text_size
+	color: gg.rgb(0, 0, 0)
 }
-const over_cfg = gx.TextCfg{
+const over_cfg = gg.TextCfg{
 	align: .left
-	size: text_size
-	color: gx.white
+	size:  text_size
+	color: gg.white
 }
 
 // Tetros' 4 possible states are encoded in binaries
@@ -51,18 +48,17 @@ const b_tetros = [
 ]
 // Each tetro has its unique color
 const colors = [
-	gx.rgb(0, 0, 0), // unused ?
-	gx.rgb(255, 242, 0), // yellow quad
-	gx.rgb(174, 0, 255), // purple triple
-	gx.rgb(60, 255, 0), // green short topright
-	gx.rgb(255, 0, 0), // red short topleft
-	gx.rgb(255, 180, 31), // orange long topleft
-	gx.rgb(33, 66, 255), // blue long topright
-	gx.rgb(74, 198, 255), // lightblue longest
-	gx.rgb(0, 170, 170),
+	gg.rgb(0, 0, 0), // unused ?
+	gg.rgb(255, 242, 0), // yellow quad
+	gg.rgb(174, 0, 255), // purple triple
+	gg.rgb(60, 255, 0), // green short topright
+	gg.rgb(255, 0, 0), // red short topleft
+	gg.rgb(255, 180, 31), // orange long topleft
+	gg.rgb(33, 66, 255), // blue long topright
+	gg.rgb(74, 198, 255), // lightblue longest
+	gg.rgb(0, 170, 170),
 ]
-const background_color = gx.white
-const ui_color = gx.rgba(255, 0, 0, 210)
+const ui_color = gg.rgba(255, 0, 0, 210)
 
 // TODO: type Tetro [tetro_size]struct{ x, y int }
 struct Block {
@@ -140,7 +136,8 @@ fn (mut game Game) showfps() {
 }
 
 fn frame(mut game Game) {
-	if game.gg.frame & 15 == 0 {
+	if game.gg.timer.elapsed().milliseconds() > 264 {
+		game.gg.timer.restart()
 		game.update_game_state()
 	}
 	ws := gg.window_size()
@@ -157,20 +154,17 @@ fn frame(mut game Game) {
 
 fn main() {
 	mut game := &Game{}
-	mut fpath := os.resource_abs_path(os.join_path('..', 'assets', 'fonts', 'RobotoMono-Regular.ttf'))
-	$if android {
-		fpath = 'fonts/RobotoMono-Regular.ttf'
-	}
 	game.gg = gg.new_context(
-		bg_color: gx.white
-		width: win_width
-		height: win_height
+		bg_color:      gg.white
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'V Tetris'
-		user_data: game
-		frame_fn: frame
-		event_fn: on_event
-		font_path: fpath // wait_events: true
+		window_title:  'V Tetris'
+		user_data:     game
+		frame_fn:      frame
+		event_fn:      on_event
+		font_path:     asset.get_path('../assets', 'fonts/RobotoMono-Regular.ttf')
+		// wait_events: true
 	)
 	game.init_game()
 	game.gg.run() // Run the render loop in the main thread
@@ -183,7 +177,7 @@ fn (mut g Game) init_game() {
 	g.field = []
 	// Generate the field, fill it with 0's, add -1's on each edge
 	for _ in 0 .. field_height + 2 {
-		mut row := [0].repeat(field_width + 2)
+		mut row := []int{len: field_width + 2}
 		row[0] = -1
 		row[field_width + 1] = -1
 		g.field << row.clone()
@@ -219,8 +213,7 @@ fn (g &Game) draw_ghost() {
 		pos_y := g.move_ghost()
 		for i in 0 .. tetro_size {
 			tetro := g.tetro[i]
-			g.draw_block_color(pos_y + tetro.y, g.pos_x + tetro.x, gx.rgba(125, 125, 225,
-				40))
+			g.draw_block_color(pos_y + tetro.y, g.pos_x + tetro.x, gg.rgba(125, 125, 225, 40))
 		}
 	}
 }
@@ -342,18 +335,18 @@ fn (g &Game) draw_next_tetro() {
 		pos_x := field_width / 2 - tetro_size / 2
 		for i in 0 .. tetro_size {
 			block := next_tetro[i]
-			g.draw_block_color(pos_y + block.y, pos_x + block.x, gx.rgb(220, 220, 220))
+			g.draw_block_color(pos_y + block.y, pos_x + block.x, gg.rgb(220, 220, 220))
 		}
 	}
 }
 
-fn (g &Game) draw_block_color(i int, j int, color gx.Color) {
+fn (g &Game) draw_block_color(i int, j int, color gg.Color) {
 	g.gg.draw_rect_filled(f32((j - 1) * g.block_size) + g.margin, f32((i - 1) * g.block_size),
 		f32(g.block_size - 1), f32(g.block_size - 1), color)
 }
 
 fn (g &Game) draw_block(i int, j int, color_idx int) {
-	color := if g.state == .gameover { gx.gray } else { colors[color_idx] }
+	color := if g.state == .gameover { gg.gray } else { colors[color_idx] }
 	g.draw_block_color(i, j, color)
 }
 
@@ -395,10 +388,10 @@ fn (mut g Game) draw_scene() {
 
 fn parse_binary_tetro(t_ int) []Block {
 	mut t := t_
-	mut res := [Block{}].repeat(4)
+	mut res := []Block{len: 4}
 	mut cnt := 0
 	horizontal := t == 9 // special case for the horizontal line
-	ten_powers := [1000, 100, 10, 1]
+	ten_powers := [1000, 100, 10, 1]!
 	for i := 0; i <= 3; i++ {
 		// Get ith digit of t
 		p := ten_powers[i]
@@ -419,7 +412,7 @@ fn parse_binary_tetro(t_ int) []Block {
 }
 
 fn on_event(e &gg.Event, mut game Game) {
-	// println('code=$e.char_code')
+	// println('code=${e.char_code}')
 	if e.typ == .key_down {
 		game.key_down(e.key_code)
 	}
@@ -465,6 +458,7 @@ fn (mut game Game) key_down(key gg.KeyCode) {
 		}
 		else {}
 	}
+
 	if game.state != .running {
 		return
 	}

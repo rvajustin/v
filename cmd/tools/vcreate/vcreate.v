@@ -4,6 +4,7 @@ module main
 
 import os
 import cli { Command, Flag }
+import v.vmod
 
 // Note: this program follows a similar convention as Rust cargo:
 // `init` creates the structure of project in the current directory,
@@ -34,66 +35,78 @@ enum Template {
 fn main() {
 	flags := [
 		Flag{
-			flag: .bool
-			name: 'bin'
+			flag:        .bool
+			name:        'bin'
 			description: 'Use the template for an executable application [default].'
 		},
 		Flag{
-			flag: .bool
-			name: 'lib'
+			flag:        .bool
+			name:        'lib'
 			description: 'Use the template for a library project.'
 		},
 		Flag{
-			flag: .bool
-			name: 'web'
-			description: 'Use the template for a vweb project.'
+			flag:        .bool
+			name:        'web'
+			description: 'Use the template for a veb project.'
+		},
+		Flag{
+			flag:        .bool
+			name:        'agents-md'
+			description: 'Generate an `AGENTS.md` contributor contract for AI agents.'
 		},
 	]
 	mut cmd := Command{
-		flags: [
+		flags:      [
 			Flag{
-				flag: .bool
-				name: 'help'
+				flag:        .bool
+				name:        'help'
 				description: 'Print help information.'
-				global: true
+				global:      true
 			},
 		]
 		posix_mode: true
-		commands: [
+		commands:   [
 			Command{
-				name: 'new'
-				usage: '<project_name>'
+				name:        'new'
+				usage:       '<project_name>'
 				description: [
 					'Creates a new V project in a directory with the specified project name.',
 					'',
-					'A setup prompt is started to create a `v.mod` file with the projects metadata.',
-					'The <project_name> argument can be omitted and entered in the prompts dialog.',
+					'When run in a terminal, a setup prompt is started to create a `v.mod` file with',
+					'the projects metadata; the <project_name> argument can then be omitted and',
+					'entered in the prompts dialog. When stdin is not a terminal (piped/redirected,',
+					'e.g. in CI) the prompts are skipped, defaults are used, and <project_name> is',
+					'required.',
 					'If git is installed, `git init` will be performed during the setup.',
+					'Pass `--agents-md` to also generate an `AGENTS.md` contributor contract.',
 				].join_lines()
-				parent: &Command{
+				parent:      &Command{
 					name: 'v'
 				}
-				posix_mode: true
-				flags: flags
+				posix_mode:  true
+				flags:       flags
 				pre_execute: validate
-				execute: new_project
+				execute:     new_project
 			},
 			Command{
-				name: 'init'
+				name:        'init'
 				description: [
 					'Sets up a V project within the current directory.',
 					'',
 					"If no `v.mod` exists, a setup prompt is started to create one with the project's metadata.",
+					'If a valid `v.mod` exists, its module name is used and the manifest is preserved.',
+					'The prompts run only when stdin is a terminal; otherwise the defaults are used.',
 					'If no `.v` file exists, a project template is generated. If the current directory is not a',
 					'git project and git is installed, `git init` will be performed during the setup.',
+					'Pass `--agents-md` to also generate an `AGENTS.md` contributor contract.',
 				].join_lines()
-				parent: &Command{
+				parent:      &Command{
 					name: 'v'
 				}
-				posix_mode: true
-				flags: flags
+				posix_mode:  true
+				flags:       flags
 				pre_execute: validate
-				execute: init_project
+				execute:     init_project
 			},
 		]
 	}
@@ -115,7 +128,7 @@ fn validate(cmd Command) ! {
 fn new_project(cmd Command) ! {
 	mut c := Create{
 		template: get_template(cmd)
-		new_dir: true
+		new_dir:  true
 	}
 	c.prompt(cmd.args)
 	println('Initialising ...')
@@ -124,6 +137,9 @@ fn new_project(cmd Command) ! {
 	c.write_vmod()
 	c.write_gitattributes()
 	c.write_editorconfig()
+	if cmd.flags.get_bool('agents-md') or { false } {
+		c.write_agents_md()
+	}
 	c.create_git_repo(c.name)
 }
 
@@ -140,20 +156,43 @@ fn init_project(cmd Command) ! {
 		if mod_dir_has_hyphens {
 			println('The directory name `${dir_name}` is invalid as a module name. The module name in `v.mod` was set to `${c.name}`')
 		}
+	} else {
+		// v.mod already exists (e.g. second `v init` run): reuse its name,
+		// so the summary message and .gitignore do not end up with an empty name.
+		if mod := vmod.from_file('v.mod') {
+			c.name = mod.name
+		}
+		if c.name == '' {
+			c.name = dir_name.replace('-', '_')
+		}
 	}
 	println('Initialising ...')
 	c.create_files_and_directories()
 	c.write_gitattributes()
 	c.write_editorconfig()
+	if cmd.flags.get_bool('agents-md') or { false } {
+		c.write_agents_md()
+	}
 	c.create_git_repo('.')
+}
+
+// prompt_input asks for a line of input, but only when stdin is a terminal.
+// When it is not (piped input, CI, some IDE terminals), the interactive prompt
+// would block forever waiting for input that never arrives, making
+// `v new`/`v init` appear to hang, so return `default` instead. See #28061.
+fn prompt_input(prompt string, default string) string {
+	if os.is_atty(0) == 0 {
+		return default
+	}
+	return os.input(prompt)
 }
 
 fn (mut c Create) prompt(args []string) {
 	if c.name == '' {
-		c.name = check_name(args[0] or { os.input('Input your project name: ') })
+		c.name = check_name(args[0] or { prompt_input('Input your project name: ', '') })
 		if c.name == '' {
 			eprintln('')
-			cerror('project name cannot be empty')
+			cerror('project name cannot be empty; pass it on the command line, e.g. `v new my_project`')
 			exit(1)
 		}
 		if c.name.contains('-') {
@@ -167,14 +206,14 @@ fn (mut c Create) prompt(args []string) {
 			exit(3)
 		}
 	}
-	c.description = os.input('Input your project description: ')
+	c.description = prompt_input('Input your project description: ', '')
 	default_version := '0.0.0'
-	c.version = os.input('Input your project version: (${default_version}) ')
+	c.version = prompt_input('Input your project version: (${default_version}) ', default_version)
 	if c.version == '' {
 		c.version = default_version
 	}
 	default_license := 'MIT'
-	c.license = os.input('Input your project license: (${default_license}) ')
+	c.license = prompt_input('Input your project license: (${default_license}) ', default_license)
 	if c.license == '' {
 		c.license = default_license
 	}
@@ -268,10 +307,54 @@ indent_style = tab
 	os.write_file(path, content) or { panic(err) }
 }
 
+fn (c &Create) write_agents_md() {
+	path := if c.new_dir { '${c.name}/AGENTS.md' } else { 'AGENTS.md' }
+	if !c.new_dir && (os.exists(path) || os.is_link(path)) {
+		return
+	}
+	// Fall back to the directory name when no project name is available.
+	name := if c.name == '' { os.file_name(os.getwd()) } else { c.name }
+	kind := match c.template {
+		.bin { 'binary (application)' }
+		.lib { 'library' }
+		.web { 'web' }
+	}
+	entry := match c.template {
+		.bin, .web {
+			if c.new_dir || os.is_file('main.v') {
+				'- `main.v` holds `fn main`'
+			} else {
+				'- Application V sources hold `fn main`.'
+			}
+		}
+		.lib {
+			if c.new_dir || os.is_file('${name}.v') {
+				'- `${name}.v` is the module root (public API)'
+			} else {
+				'- Library V sources define the public API.'
+			}
+		}
+	}
+	mut lines := ['# AGENTS.md - ${name}',
+		'> Generated by `v new`/`v init`. Short contract for AI/human contributors.', '', '## Commands']
+	if c.template != .lib {
+		lines << '- Run: `v run .`'
+	}
+	lines << ['- Test: `v test .`', '- Format: `v fmt -w .`', '- Vet: `v vet .`', '', '## Layout',
+		entry, '- Add `*_test.v` files alongside sources or in `tests/`.', '', '## Conventions',
+		'- Tabs for indentation (see `.editorconfig`)', '- Run `v fmt -w .` before every commit',
+		'- Run `v test .` before pushing', '', '## Notes', '- Project type: ${kind}']
+	if c.description != '' {
+		lines << '- Description: ${c.description}'
+	}
+	lines << ''
+	os.write_file(path, lines.join_lines()) or { panic(err) }
+}
+
 fn (c &Create) create_git_repo(dir string) {
 	// Initialize git and add a .gitignore file.
 	if !os.is_dir('${dir}/.git') {
-		res := os.execute('git init ${dir}')
+		res := os.exec(['git', 'init', dir])
 		if res.exit_code != 0 {
 			eprintln('')
 			cerror('unable to initialize a git repository')
@@ -303,9 +386,12 @@ bin/
 # ENV
 .env
 
-# vweb and database
+# Web assets and local databases
 *.db
 *.js
+
+# Modules installed with `v install --local` land beside this file, one
+# directory per module. Add them here if they should stay out of the repo.
 '
 	os.write_file(ignore_path, ignore_content) or {}
 }
@@ -328,5 +414,6 @@ fn (mut c Create) create_files_and_directories() {
 		.lib { 'library' }
 		.web { 'web' }
 	}
+
 	println('Created ${kind} project `${c.name}`')
 }

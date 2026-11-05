@@ -23,7 +23,7 @@ const empty_set = GCDSet{'1', '1', '1'}
 const with_dots = false
 
 fn main() {
-	fp := os.join_path(@VROOT, prime.toml_path)
+	fp := os.join_path(@VEXEROOT, prime.toml_path)
 	if !prime_file_exists(fp) {
 		panic('expected file |${fp}| - not found.')
 	}
@@ -233,11 +233,15 @@ fn bench_euclid_vs_binary(test_config PrimeCfg, heap bool, predicate_fn fn (ps P
 	// here to avoid measuring string-parsing-cycles
 	// during later testing.
 	//
-	mut casted_sets := if heap { gcd_primes.map(unsafe {
+	mut casted_sets := if heap {
+		gcd_primes.map(unsafe {
 			DataI(&PrimeSet(&it)).cast[HeapData]()
-		}) } else { gcd_primes.map(unsafe {
+		})
+	} else {
+		gcd_primes.map(unsafe {
 			DataI(&PrimeSet(&it)).cast[StackData]()
-		}) }
+		})
+	}
 
 	// ready use the primes in the benchmark
 	//
@@ -319,7 +323,7 @@ pub fn (hd HeapData) to_primeset() PrimeSet {
 
 pub fn (hd HeapData) from_primeset(p PrimeSet) DataI {
 	return DataI(HeapData{
-		r: bi_from_decimal_string(p.r)
+		r:  bi_from_decimal_string(p.r)
 		aa: bi_from_decimal_string(p.a)
 		bb: bi_from_decimal_string(p.b)
 	})
@@ -342,7 +346,7 @@ pub fn (sd StackData) to_primeset() PrimeSet {
 
 pub fn (sd StackData) from_primeset(p PrimeSet) DataI {
 	return DataI(StackData{
-		r: bi_from_decimal_string(p.r)
+		r:  bi_from_decimal_string(p.r)
 		aa: bi_from_decimal_string(p.a)
 		bb: bi_from_decimal_string(p.b)
 	})

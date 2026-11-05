@@ -1,5 +1,7 @@
+// vtest build: present_sqlite3? && !windows // present_sqlite3?: imports db.sqlite; !windows: fasthttp.Server.run not implemented
 import veb
 import time
+import net.http
 import db.sqlite
 
 const port = 13004
@@ -7,7 +9,12 @@ const port = 13004
 pub struct Context {
 	veb.Context
 pub mut:
-	user_id string
+	cid int
+}
+
+pub fn (mut ctx Context) before_request() {
+	dump(@LOCATION)
+	ctx.cid = 123
 }
 
 pub struct App {
@@ -17,6 +24,7 @@ pub mut:
 }
 
 pub fn (mut app App) before_accept_loop() {
+	dump(@LOCATION)
 	app.started <- true
 }
 
@@ -35,10 +43,15 @@ fn test_veb_application_compiles() {
 	spawn veb.run_at[App, Context](mut app, port: port, family: .ip, timeout_in_seconds: 2)
 	// app startup time
 	_ := <-app.started
-}
-
-pub fn (mut ctx Context) before_request() {
-	ctx.user_id = ctx.get_cookie('id') or { '0' }
+	res := http.fetch(url: 'http://127.0.0.1:${port}/get_cid')!
+	assert res.status_code == 200
+	assert res.body == '123'
+	okres := http.fetch(url: 'http://127.0.0.1:${port}/ok')!
+	assert okres.status_code == 200
+	assert okres.body == '{"success":true,"result":123}'
+	hello := http.fetch(url: 'http://127.0.0.1:${port}/hello')!
+	assert hello.status_code == 200
+	assert hello.body == 'hello world'
 }
 
 @['/new_article'; post]
@@ -50,7 +63,7 @@ pub fn (mut app App) new_article(mut ctx Context) veb.Result {
 	}
 	article := Article{
 		title: title
-		text: text
+		text:  text
 	}
 	println('posting article')
 	println(article)
@@ -71,6 +84,10 @@ pub fn (mut app App) time_json(mut ctx Context) veb.Result {
 	})
 }
 
+fn (app App) hello(mut ctx Context) veb.Result {
+	return ctx.text('hello world')
+}
+
 fn (mut app App) time_json_pretty(mut ctx Context) veb.Result {
 	return ctx.json_pretty({
 		'time': time.now().format()
@@ -85,7 +102,7 @@ struct ApiSuccessResponse[T] {
 fn (mut app App) json_success[T](mut ctx Context, result T) {
 	response := ApiSuccessResponse[T]{
 		success: true
-		result: result
+		result:  result
 	}
 
 	ctx.json(response)
@@ -95,14 +112,19 @@ fn (mut app App) json_success[T](mut ctx Context, result T) {
 fn (mut app App) some_helper[T](result T) ApiSuccessResponse[T] {
 	response := ApiSuccessResponse[T]{
 		success: true
-		result: result
+		result:  result
 	}
 	return response
 }
 
 // should compile, the route method itself is not generic
 fn (mut app App) ok(mut ctx Context) veb.Result {
-	return ctx.json(app.some_helper(123))
+	return ctx.json(app.some_helper(ctx.cid))
+}
+
+// should compile, the route method itself is not generic
+fn (mut app App) get_cid(mut ctx Context) veb.Result {
+	return ctx.text(ctx.cid.str())
 }
 
 struct ExampleStruct {

@@ -8,8 +8,6 @@
 // Last updated: August 2015
 module sha3
 
-import math
-
 // size_224 is the size, in bytes, of a sha3 sum224 checksum.
 pub const size_224 = 28
 // size_256 is the size, in bytes, of a sha3 sum256 checksum.
@@ -33,40 +31,44 @@ pub const xof_rate_128 = 168
 // xof_rate_256 is the capacity, in bytes, of a 256 bit extended output function sponge
 pub const xof_rate_256 = 136
 
-// the low order pad bits for a hash function
-const hash_pad = u8(0x06)
-
-// the low order pad bits for an extended output function
-const xof_pad = u8(0x1f)
-
 // new512 initializes the digest structure for a sha3 512 bit hash
 pub fn new512() !&Digest {
-	return new_digest(sha3.rate_512, sha3.size_512)!
+	return new_digest(rate_512, size_512)!
 }
 
 // new384 initializes the digest structure for a sha3 384 bit hash
 pub fn new384() !&Digest {
-	return new_digest(sha3.rate_384, sha3.size_384)!
+	return new_digest(rate_384, size_384)!
 }
 
 // new256 initializes the digest structure for a sha3 256 bit hash
 pub fn new256() !&Digest {
-	return new_digest(sha3.rate_256, sha3.size_256)!
+	return new_digest(rate_256, size_256)!
 }
 
 // new224 initializes the digest structure for a sha3 224 bit hash
 pub fn new224() !&Digest {
-	return new_digest(sha3.rate_224, sha3.size_224)!
+	return new_digest(rate_224, size_224)!
+}
+
+// new256keccak initializes the digest structure for a keccak 256 bit hash
+pub fn new256keccak() !&Digest {
+	return new_digest(rate_256, size_256, padding: .keccak)!
+}
+
+// new512keccak initializes the digest structure for a keccak 512 bit hash
+pub fn new512keccak() !&Digest {
+	return new_digest(rate_512, size_512, padding: .keccak)!
 }
 
 // new256_xof initializes the digest structure for a sha3 256 bit extended output function
 pub fn new256xof(output_len int) !&Digest {
-	return new_xof_digest(sha3.xof_rate_256, output_len)!
+	return new_xof_digest(xof_rate_256, output_len)!
 }
 
 // new128_xof initializes the digest structure for a sha3 128 bit extended output function
 pub fn new128xof(output_len int) !&Digest {
-	return new_xof_digest(sha3.xof_rate_128, output_len)!
+	return new_xof_digest(xof_rate_128, output_len)!
 }
 
 struct HashSizeError {
@@ -75,7 +77,8 @@ struct HashSizeError {
 }
 
 fn (err HashSizeError) msg() string {
-	return 'Hash size ${err.size} must be ${sha3.size_224}, ${sha3.size_256}, ${sha3.size_384}, or ${sha3.size_512}'
+	return 'Hash size ' + err.size.str() + ' must be ' + size_224.str() + ', ' + size_256.str() +
+		', ' + size_384.str() + ', or ' + size_512.str()
 }
 
 struct AbsorptionRateError {
@@ -85,7 +88,8 @@ struct AbsorptionRateError {
 }
 
 fn (err AbsorptionRateError) msg() string {
-	return 'Absorption rate ${err.rate} is not compatible with a hash size of ${err.size}'
+	return 'Absorption rate ' + err.rate.str() + ' is not compatible with a hash size of ' +
+		err.size.str()
 }
 
 struct XOFRateError {
@@ -94,7 +98,8 @@ struct XOFRateError {
 }
 
 fn (err XOFRateError) msg() string {
-	return 'Extended output rate ${err.rate} must be ${sha3.xof_rate_128} or ${sha3.xof_rate_256}'
+	return 'Extended output rate ' + err.rate.str() + ' must be ' + xof_rate_128.str() + ' or ' +
+		xof_rate_256.str()
 }
 
 struct XOFSizeError {
@@ -103,72 +108,56 @@ struct XOFSizeError {
 }
 
 fn (err XOFSizeError) msg() string {
-	return 'Extended output size ${err.size} must be > 0'
+	return 'Extended output size ' + err.size.str() + ' must be > 0'
 }
 
 struct Digest {
 	rate       int // the number of bytes absorbed per permutation
-	suffix     u8  // the domain suffix, 0x06 for hash, 0x1f for extended output
+	suffix     u8  // the domain suffix, 0x06 for hash, 0x01 for keccak, 0x1f for extended output
 	output_len int // the number of bytes to output
 mut:
 	input_buffer []u8  // temporary holding buffer for input bytes
 	s            State // the state of a kaccak-p[1600, 24] sponge
 }
 
+// the low order pad bits for a hash function
+pub enum Padding as u8 {
+	keccak = 0x01
+	sha3   = 0x06
+	xof    = 0x1f
+}
+
+@[params]
+pub struct PaddingConfig {
+pub:
+	padding Padding = .sha3
+}
+
 // new_digest creates an initialized digest structure based on
-// the hash size and whether or not you specify a MAC key.
+// the hash size.
 //
 // absorption_rate is the number of bytes to be absorbed into the
 //     sponge per permutation.
 //
 // hash_size - the number if bytes in the generated hash.
 //     Legal values are 224, 256, 384, and 512.
-pub fn new_digest(absorption_rate int, hash_size int) !&Digest {
-	match hash_size {
-		sha3.size_224 {
-			if absorption_rate != sha3.rate_224 {
-				return AbsorptionRateError{
-					rate: absorption_rate
-					size: hash_size
-				}
-			}
-		}
-		sha3.size_256 {
-			if absorption_rate != sha3.rate_256 {
-				return AbsorptionRateError{
-					rate: absorption_rate
-					size: hash_size
-				}
-			}
-		}
-		sha3.size_384 {
-			if absorption_rate != sha3.rate_384 {
-				return AbsorptionRateError{
-					rate: absorption_rate
-					size: hash_size
-				}
-			}
-		}
-		sha3.size_512 {
-			if absorption_rate != sha3.rate_512 {
-				return AbsorptionRateError{
-					rate: absorption_rate
-					size: hash_size
-				}
-			}
-		}
-		else {
-			return HashSizeError{
-				size: hash_size
-			}
-		}
+//
+// config - the padding setting for hash generation. .sha3 should be used for FIPS PUB 202 compliant SHA3-224, SHA3-256, SHA3-384 and SHA3-512. Use .keccak if you want a legacy Keccak-224, Keccak-256, Keccak-384 or Keccak-512 algorithm. .xof is for extended output functions.
+pub fn new_digest(absorption_rate int, hash_size int, config PaddingConfig) !&Digest {
+	match config.padding {
+		.sha3, .keccak { validate_sha3(absorption_rate, hash_size)! }
+		.xof { validate_xof(absorption_rate, hash_size)! }
 	}
 
+	return new_digest_unchecked(absorption_rate, hash_size, config.padding)
+}
+
+fn new_digest_unchecked(absorption_rate int, hash_size int, padding Padding) &Digest {
 	d := Digest{
-		rate: absorption_rate
-		suffix: sha3.hash_pad
+		rate:       absorption_rate
+		suffix:     u8(padding)
 		output_len: hash_size
-		s: State{}
+		s:          State{}
 	}
 
 	return &d
@@ -184,8 +173,54 @@ pub fn new_digest(absorption_rate int, hash_size int) !&Digest {
 // hash_size - the number if bytes in the generated hash.
 //     Legal values are positive integers.
 pub fn new_xof_digest(absorption_rate int, hash_size int) !&Digest {
+	return new_digest(absorption_rate, hash_size, padding: .xof)
+}
+
+fn validate_sha3(absorption_rate int, hash_size int) ! {
+	match hash_size {
+		size_224 {
+			if absorption_rate != rate_224 {
+				return AbsorptionRateError{
+					rate: absorption_rate
+					size: hash_size
+				}
+			}
+		}
+		size_256 {
+			if absorption_rate != rate_256 {
+				return AbsorptionRateError{
+					rate: absorption_rate
+					size: hash_size
+				}
+			}
+		}
+		size_384 {
+			if absorption_rate != rate_384 {
+				return AbsorptionRateError{
+					rate: absorption_rate
+					size: hash_size
+				}
+			}
+		}
+		size_512 {
+			if absorption_rate != rate_512 {
+				return AbsorptionRateError{
+					rate: absorption_rate
+					size: hash_size
+				}
+			}
+		}
+		else {
+			return HashSizeError{
+				size: hash_size
+			}
+		}
+	}
+}
+
+fn validate_xof(absorption_rate int, hash_size int) ! {
 	match absorption_rate {
-		sha3.xof_rate_128, sha3.xof_rate_256 {
+		xof_rate_128, xof_rate_256 {
 			if hash_size < 1 {
 				return XOFSizeError{
 					size: hash_size
@@ -198,21 +233,16 @@ pub fn new_xof_digest(absorption_rate int, hash_size int) !&Digest {
 			}
 		}
 	}
-
-	d := Digest{
-		rate: absorption_rate
-		suffix: sha3.xof_pad
-		output_len: hash_size
-		s: State{}
-	}
-
-	return &d
 }
 
 // write adds bytes to the sponge.
 //
 // This is the absorption phase of the computation.
 pub fn (mut d Digest) write(data []u8) ! {
+	d.write_bytes(data)
+}
+
+fn (mut d Digest) write_bytes(data []u8) {
 	// if no data is being added to the hash,
 	// just return
 	if data.len == 0 {
@@ -254,16 +284,25 @@ pub fn (mut d Digest) write(data []u8) ! {
 	}
 
 	if bytes_remaining.len > 0 {
-		d.input_buffer = bytes_remaining
+		d.input_buffer = bytes_remaining.clone()
 	}
 }
 
 // checksum finalizes the hash and returns the generated bytes.
+// It resets the digest, so it can hash a new message afterwards.
 pub fn (mut d Digest) checksum() []u8 {
-	return d.checksum_internal() or { panic(err) }
+	out := d.checksum_internal()
+	d.reset()
+	return out
 }
 
-fn (mut d Digest) checksum_internal() ![]u8 {
+// reset restores the digest to its initial state, so it can hash a new message.
+pub fn (mut d Digest) reset() {
+	d.s = State{}
+	d.input_buffer = []u8{}
+}
+
+fn (mut d Digest) checksum_internal() []u8 {
 	// pad the last input bytes to have rate bytes
 	if d.input_buffer.len == d.rate - 1 {
 		// a single byte pad needs to be handled specially
@@ -304,7 +343,7 @@ fn (mut d Digest) checksum_internal() ![]u8 {
 	mut remaining_ouput_len := d.output_len
 
 	for remaining_ouput_len > 0 {
-		mut byte_len_this_round := math.min[int](remaining_ouput_len, d.rate)
+		mut byte_len_this_round := int_min(remaining_ouput_len, d.rate)
 		output_bytes << d.s.to_bytes()[..byte_len_this_round]
 
 		remaining_ouput_len -= byte_len_this_round
@@ -319,42 +358,56 @@ fn (mut d Digest) checksum_internal() ![]u8 {
 
 // sum512 returns the sha3 512 bit checksum of the data.
 pub fn sum512(data []u8) []u8 {
-	mut d := new512() or { panic(err) }
-	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	mut d := new_digest_unchecked(rate_512, size_512, .sha3)
+	d.write_bytes(data)
+	return d.checksum_internal()
 }
 
 // sum384 returns the sha3 384 bit checksum of the data.
 pub fn sum384(data []u8) []u8 {
-	mut d := new384() or { panic(err) }
-	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	mut d := new_digest_unchecked(rate_384, size_384, .sha3)
+	d.write_bytes(data)
+	return d.checksum_internal()
 }
 
 // sum256 returns the sha3 256 bit checksum of the data.
 pub fn sum256(data []u8) []u8 {
-	mut d := new256() or { panic(err) }
-	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	mut d := new_digest_unchecked(rate_256, size_256, .sha3)
+	d.write_bytes(data)
+	return d.checksum_internal()
 }
 
 // sum224 returns the sha3 224 bit checksum of the data.
 pub fn sum224(data []u8) []u8 {
-	mut d := new224() or { panic(err) }
-	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	mut d := new_digest_unchecked(rate_224, size_224, .sha3)
+	d.write_bytes(data)
+	return d.checksum_internal()
+}
+
+// keccak256 returns the keccak 256 bit checksum of the data.
+pub fn keccak256(data []u8) []u8 {
+	mut d := new_digest_unchecked(rate_256, size_256, .keccak)
+	d.write_bytes(data)
+	return d.checksum_internal()
+}
+
+// keccak512 returns the keccak 512 bit checksum of the data.
+pub fn keccak512(data []u8) []u8 {
+	mut d := new_digest_unchecked(rate_512, size_512, .keccak)
+	d.write_bytes(data)
+	return d.checksum_internal()
 }
 
 // shake256 returns the sha3 shake256 bit extended output
 pub fn shake256(data []u8, output_len int) []u8 {
 	mut d := new256xof(output_len) or { panic(err) }
 	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	return d.checksum_internal()
 }
 
 // shake128 returns the sha3 shake128 bit extended output
 pub fn shake128(data []u8, output_len int) []u8 {
 	mut d := new128xof(output_len) or { panic(err) }
 	d.write(data) or { panic(err) }
-	return d.checksum_internal() or { panic(err) }
+	return d.checksum_internal()
 }

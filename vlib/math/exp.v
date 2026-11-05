@@ -65,8 +65,8 @@ pub fn exp(x f64) f64 {
 	if x > 0 {
 		k = int(log2e * x + 0.5)
 	}
-	hi := x - f64(k) * math.ln2hi
-	lo := f64(k) * math.ln2lo
+	hi := x - f64(k) * ln2hi
+	lo := f64(k) * ln2lo
 	// compute
 	return expmulti(hi, lo, k)
 }
@@ -99,8 +99,8 @@ pub fn exp2(x f64) f64 {
 		k = int(x - 0.5)
 	}
 	mut t := x - f64(k)
-	hi := t * math.ln2hi
-	lo := -t * math.ln2lo
+	hi := t * ln2hi
+	lo := -t * ln2lo
 	// compute
 	return expmulti(hi, lo, k)
 }
@@ -161,8 +161,9 @@ pub fn frexp(x f64) (f64, int) {
 // expm1(+inf) = +inf
 // expm1(-inf) = -1
 // expm1(nan) = nan
+// expm1(+/-0) = +/-0
 pub fn expm1(x f64) f64 {
-	if is_inf(x, 1) || is_nan(x) {
+	if x == 0 || is_inf(x, 1) || is_nan(x) {
 		return x
 	}
 	if is_inf(x, -1) {

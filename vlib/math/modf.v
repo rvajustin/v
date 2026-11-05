@@ -11,17 +11,17 @@ const modf_maxpowtwo = 4.503599627370496000e+15
 pub fn modf(f f64) (f64, f64) {
 	abs_f := abs(f)
 	mut i := 0.0
-	if abs_f >= math.modf_maxpowtwo {
+	if abs_f >= modf_maxpowtwo {
 		i = f // it must be an integer
 	} else {
-		i = abs_f + math.modf_maxpowtwo // shift fraction off right
-		i -= math.modf_maxpowtwo // shift back without fraction
+		i = abs_f + modf_maxpowtwo // shift fraction off right
+		i -= modf_maxpowtwo // shift back without fraction
 		for i > abs_f { // above arithmetic might round
 			i -= 1.0 // test again just to be sure
 		}
-		if f < 0.0 {
+		if signbit(f) {
 			i = -i
 		}
 	}
-	return i, f - i // signed fractional part
+	return i, copysign(f - i, f) // preserve the sign even when the fractional part is zero
 }

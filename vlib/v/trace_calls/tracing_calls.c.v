@@ -2,12 +2,15 @@
 module trace_calls
 
 @[markused]
-__global g_stack_base = &u8(0)
-__global g_start_time = u64(0)
+__global g_stack_base &u8
+
+// These are set before _vinit; runtime initializers would reset the trace.
+@[markused]
+__global g_start_time u64
 
 @[markused]
 pub fn on_call(fname string) {
-	mut volatile pfbase := unsafe { &u8(0) }
+	mut volatile pfbase := &u8(unsafe { nil })
 	volatile fbase := u8(0)
 	ns := current_time() - g_start_time
 	mut ssize := u64(0)
@@ -15,7 +18,9 @@ pub fn on_call(fname string) {
 	unsafe {
 		$if windows {
 			tid = C.GetCurrentThreadId()
-		} $else $if linux {
+		} $else $if no_gettid ? {
+			tid = u32(C.pthread_self())
+		} $else $if linux && !musl ? {
 			tid = C.gettid()
 		} $else {
 			tid = u32(C.pthread_self())
@@ -24,9 +29,9 @@ pub fn on_call(fname string) {
 		ssize = u64(g_stack_base) - u64(pfbase)
 	}
 	$if x64 {
-		C.fprintf(C.stderr, c'> trace %8d %8ld %8ld %s\n', tid, ns, ssize, fname.str)
+		C.fprintf(C.stderr, c'> trace %8u %8ld %8ld %s\n', tid, ns, ssize, fname.str)
 	} $else {
-		C.fprintf(C.stderr, c'> trace %8d %8lld %8lld %s\n', tid, ns, ssize, fname.str)
+		C.fprintf(C.stderr, c'> trace %8u %8lld %8lld %s\n', tid, ns, ssize, fname.str)
 	}
 	C.fflush(C.stderr)
 }

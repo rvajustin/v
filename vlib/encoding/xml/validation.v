@@ -1,6 +1,6 @@
 module xml
 
-fn (node XMLNode) validate(elements map[string]DTDElement, entities map[string]string) !XMLNode {
+fn (node XMLNode) validate(elements map[string]DTDElement) !XMLNode {
 	mut children := []XMLNodeContents{cap: node.children.len}
 
 	valid_elements := elements[node.name].definition
@@ -20,10 +20,10 @@ fn (node XMLNode) validate(elements map[string]DTDElement, entities map[string]s
 						return error('Invalid child element ${name} for ${node.name}')
 					}
 				}
-				children << child.validate(elements, entities)!
+				children << child.validate(elements)!
 			}
 			string {
-				children << unescape_text(child, entities: entities)!
+				children << child
 			}
 			else {
 				// Ignore other nodes
@@ -33,14 +33,14 @@ fn (node XMLNode) validate(elements map[string]DTDElement, entities map[string]s
 	}
 
 	return XMLNode{
-		name: node.name
+		name:       node.name
 		attributes: node.attributes
-		children: children
+		children:   children
 	}
 }
 
 // validate checks the document is well-formed and valid. It returns a new
-// document with the parsed entities expanded when validation is successful.
+// document when validation is successful. Entities are decoded during parsing.
 // Otherwise it returns an error.
 pub fn (doc XMLDocument) validate() !XMLDocument {
 	// The document is well-formed because we were able to parse it properly.
@@ -72,7 +72,7 @@ pub fn (doc XMLDocument) validate() !XMLDocument {
 			}
 
 			// Now validate the document against the elements and entities.
-			new_root := doc.root.validate(elements, entities)!
+			new_root := doc.root.validate(elements)!
 
 			// Check the DOCTYPE name matches the root name
 			if doc.doctype.name != '' && doc.doctype.name != new_root.name {
@@ -80,11 +80,11 @@ pub fn (doc XMLDocument) validate() !XMLDocument {
 			}
 
 			return XMLDocument{
-				version: doc.version
-				encoding: doc.encoding
-				doctype: doc.doctype
-				comments: doc.comments
-				root: new_root
+				version:                 doc.version
+				encoding:                doc.encoding
+				doctype:                 doc.doctype
+				comments:                doc.comments
+				root:                    new_root
 				parsed_reverse_entities: reverse_entities
 			}
 		}

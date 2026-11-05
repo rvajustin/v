@@ -10,6 +10,9 @@ pub:
 	handler ControllerHandler = unsafe { nil }
 pub mut:
 	host string
+mut:
+	// Retain metadata when the concrete controller type is erased by its handler.
+	documented_routes []RouteInfo
 }
 
 interface ControllerInterface {
@@ -29,20 +32,35 @@ pub fn (mut c Controller) register_controller[A, X](path string, mut global_app 
 // controller generates a new Controller for the main app
 pub fn controller[A, X](path string, mut global_app A) !&ControllerPath {
 	routes := generate_routes[A, X](global_app) or { panic(err.msg()) }
-	controllers_sorted := check_duplicate_routes_in_controllers[A](global_app, routes)!
+	controllers_sorted := check_duplicate_routes_in_controllers[A](global_app, routes) or {
+		panic(err.msg())
+	}
+
+	// Route metadata is only needed for `route_info` and runtime OpenAPI generation.
+	// Applications serving a pre-generated OpenAPI document can pass
+	// `-d veb_skip_route_metadata` to skip `flatten_route_info` monomorphization
+	// for every controller. Dispatch, middleware, and route matching are unaffected.
+	mut documented_routes := []RouteInfo{}
+	$if !veb_skip_route_metadata ? {
+		documented_routes = flatten_route_info[A](global_app, routes)
+	}
 
 	// generate struct with closure so the generic type is encapsulated in the closure
 	// no need to type `ControllerHandler` as generic since it's not needed for closures
 	return &ControllerPath{
-		path: path
-		handler: fn [mut global_app, path, routes, controllers_sorted] [A, X](ctx &Context, mut url urllib.URL, host string) &Context {
+		path:              path
+		documented_routes: documented_routes
+		handler:           fn [mut global_app, path, routes, controllers_sorted] [A, X](ctx &Context, mut url urllib.URL, host string) &Context {
 			// transform the url
 			url.path = url.path.all_after_first(path)
+			if url.path != '' && !url.path.starts_with('/') {
+				url.path = '/' + url.path
+			}
 
 			// match controller paths
 			$if A is ControllerInterface {
-				if completed_context := handle_controllers[X](controllers_sorted, ctx, mut
-					url, host)
+				if completed_context := handle_controllers[X](controllers_sorted, ctx, mut url,
+					host)
 				{
 					return completed_context
 				}
@@ -53,8 +71,10 @@ pub fn controller[A, X](path string, mut global_app A) !&ControllerPath {
 			user_context.Context = ctx
 
 			handle_route[A, X](mut global_app, mut user_context, url, host, &routes)
-			// we need to explicitly tell the V compiler to return a reference
-			return &user_context.Context
+			// Preserve the handled context on the heap before the stack-local user context goes away.
+			mut ctx_mut := unsafe { &Context(ctx) }
+			ctx_mut.preserve_for_response_writer(user_context.Context)
+			return ctx
 		}
 	}
 }
@@ -65,8 +85,8 @@ pub fn (mut c Controller) register_host_controller[A, X](host string, path strin
 }
 
 // controller_host generates a controller which only handles incoming requests from the `host` domain
-pub fn controller_host[A, X](host string, path string, mut global_app A) &ControllerPath {
-	mut ctrl := controller[A, X](path, mut global_app)
+pub fn controller_host[A, X](host string, path string, mut global_app A) !&ControllerPath {
+	mut ctrl := controller[A, X](path, mut global_app)!
 	ctrl.host = host
 	return ctrl
 }

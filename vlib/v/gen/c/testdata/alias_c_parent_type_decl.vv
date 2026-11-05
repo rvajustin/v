@@ -1,2 +1,4 @@
-pub struct C.atype{}
+pub struct C.atype {}
+
+@[markused]
 type BType = &C.atype

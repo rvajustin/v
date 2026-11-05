@@ -16,6 +16,11 @@ mut:
 	write_file  string
 }
 
+struct NamedBytes {
+	name  string
+	bytes []u8
+}
+
 fn (context Context) header() string {
 	mut header_s := ''
 	header_s += 'module ${context.module_name}\n'
@@ -43,7 +48,7 @@ fn (context Context) footer() string {
 	return ''
 }
 
-fn (context Context) file2v(bname string, fbytes []u8, bn_max int) string {
+fn (context Context) file2v(bname string, fbytes []u8, _bn_max int) string {
 	mut sb := strings.new_builder(1000)
 	sb.write_string('const ${bname}_len' + ' = ${fbytes.len}\n')
 	fbyte := fbytes[0]
@@ -69,12 +74,15 @@ fn (context Context) file2v(bname string, fbytes []u8, bn_max int) string {
 	return sb.str()
 }
 
-fn (context Context) bname_and_bytes(file string) !(string, []u8) {
+fn (context Context) bname_and_bytes(file string) !NamedBytes {
 	fname := os.file_name(file)
 	fname_escaped := fname.replace_each(['.', '_', '-', '_'])
 	byte_name := '${context.prefix}${fname_escaped}'.to_lower()
 	fbytes := os.read_bytes(file) or { return error('Error: ${err.msg()}') }
-	return byte_name, fbytes
+	return NamedBytes{
+		name:  byte_name
+		bytes: fbytes
+	}
 }
 
 fn (context Context) max_bname_len(bnames []string) int {
@@ -118,11 +126,11 @@ fn main() {
 	}
 	mut file_byte_map := map[string][]u8{}
 	for file in real_files {
-		bname, fbytes := context.bname_and_bytes(file) or {
+		named_bytes := context.bname_and_bytes(file) or {
 			eprintln(err.msg())
 			exit(1)
 		}
-		file_byte_map[bname] = fbytes
+		file_byte_map[named_bytes.name] = named_bytes.bytes
 	}
 	max_bname := context.max_bname_len(file_byte_map.keys())
 	if context.write_file.len > 0 {

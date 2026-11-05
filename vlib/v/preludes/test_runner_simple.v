@@ -9,13 +9,13 @@ fn vtest_init() {
 struct SimpleTestRunner {
 mut:
 	fname string
-	//
+
 	file_test_info   VTestFileMetaInfo
 	fn_test_info     VTestFnMetaInfo
 	fn_assert_passes u64
 	fn_passes        u64
 	fn_fails         u64
-	//
+
 	total_assert_passes u64
 	total_assert_fails  u64
 }
@@ -81,7 +81,6 @@ fn (mut runner SimpleTestRunner) assert_pass(i &VAssertMetaInfo) {
 
 fn (mut runner SimpleTestRunner) assert_fail(i &VAssertMetaInfo) {
 	runner.total_assert_fails++
-	eprintln('> failed assert ${runner.fn_assert_passes + 1} in ${runner.fname}, assert was in ${normalise_fname(i.fn_name)}, line: ${
-		i.line_nr + 1}')
+	eprintln('> failed assert ${runner.fn_assert_passes + 1} in ${runner.fname}, assert was in ${normalise_fname(i.fn_name)}, line: ${i.line_nr + 1}')
 	unsafe { i.free() }
 }

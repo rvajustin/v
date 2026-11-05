@@ -3,41 +3,60 @@
 // that can be found in the LICENSE file.
 module time
 
-// unix returns a Time struct calculated from a Unix timestamp (number of seconds since 1970-01-01)
+// unix returns a Time calculated from the given Unix timestamp in seconds since 1970-01-01 .
 pub fn unix(epoch i64) Time {
-	// Split into day and time
-	mut day_offset := epoch / seconds_per_day
-	if epoch % seconds_per_day < 0 {
-		// Compensate for round towards zero on integers as we want floored instead
-		day_offset--
-	}
-	year, month, day := calculate_date_from_day_offset(day_offset)
-	hr, min, sec := calculate_time_from_second_offset(epoch % seconds_per_day)
-	return Time{
-		year: year
-		month: month
-		day: day
-		hour: hr
-		minute: min
-		second: sec
-		unix: epoch
-	}
+	return unix_nanosecond(epoch, 0)
 }
 
-// unix2 returns a Time struct, given an Unix timestamp in seconds, and a microsecond value
-@[deprecated: 'use unix_microsecond(unix_ts, us) instead']
-@[deprecated_after: '2023-09-05']
-pub fn unix2(epoch i64, microsecond int) Time {
-	return unix_nanosecond(epoch, microsecond * 1000)
+// unix_milli returns a Time calculated from the given Unix timestamp in milliseconds since 1970-01-01 .
+pub fn unix_milli(ms i64) Time {
+	return ts_to_time_impl(ms, 1_000, 1_000_000)
 }
 
-// unix_microsecond returns a Time struct, given an Unix timestamp in seconds, and a microsecond value
+// unix_micro returns a Time calculated from the given Unix timestamp in microseconds since 1970-01-01 .
+pub fn unix_micro(us i64) Time {
+	return ts_to_time_impl(us, 1_000_000, 1_000)
+}
+
+// unix_nano returns a Time calculated from the given Unix timestamp in nanoseconds since 1970-01-01 .
+pub fn unix_nano(ns i64) Time {
+	return ts_to_time_impl(ns, 1_000_000_000, 1)
+}
+
+fn ts_to_time_impl(value i64, down i64, up i64) Time {
+	epoch, remainder := floor_div_mod(value, down)
+	return unix_nanosecond(epoch, int(remainder * up))
+}
+
+// floor_div_mod returns the quotient of `value / divisor` rounded down, and the remainder,
+// which is in `0 .. divisor - 1` for a positive `divisor`. The `/` and `%` operators round
+// towards zero instead, so they give a negative remainder for a negative `value`.
+fn floor_div_mod(value i64, divisor i64) (i64, i64) {
+	mut quotient := value / divisor
+	mut remainder := value % divisor
+	if remainder < 0 {
+		remainder += divisor
+		quotient--
+	}
+	return quotient, remainder
+}
+
+// unix_microsecond returns a Time struct, given an Unix timestamp in seconds, and a microsecond value.
+// A `microsecond` outside `0 .. 999_999` is carried into the seconds, as in `unix_nanosecond`.
 pub fn unix_microsecond(epoch i64, microsecond int) Time {
-	return unix_nanosecond(epoch, microsecond * 1000)
+	seconds, remainder := floor_div_mod(i64(microsecond), 1_000_000)
+	return unix_nanosecond(epoch + seconds, int(remainder * 1000))
 }
 
-// unix_nanosecond returns a Time struct given a Unix timestamp in seconds and a nanosecond value
+// unix_nanosecond returns a Time struct given a Unix timestamp in seconds and a nanosecond value.
+// A `nanosecond` outside `0 .. 999_999_999` is carried into the seconds, so the result is the
+// same instant with its `nanosecond` field in that range: `unix_nanosecond(0, -1)` is
+// 1969-12-31 23:59:59.999999999 .
 pub fn unix_nanosecond(abs_unix_timestamp i64, nanosecond int) Time {
+	if nanosecond < 0 || nanosecond >= 1_000_000_000 {
+		seconds, remainder := floor_div_mod(i64(nanosecond), 1_000_000_000)
+		return unix_nanosecond(abs_unix_timestamp + seconds, int(remainder))
+	}
 	// Split into day and time
 	mut day_offset := abs_unix_timestamp / seconds_per_day
 	if abs_unix_timestamp % seconds_per_day < 0 {
@@ -45,16 +64,17 @@ pub fn unix_nanosecond(abs_unix_timestamp i64, nanosecond int) Time {
 		day_offset--
 	}
 	year, month, day := calculate_date_from_day_offset(day_offset)
-	hour_, minute_, second_ := calculate_time_from_second_offset(abs_unix_timestamp % seconds_per_day)
+	hour_, minute_, second_ :=
+		calculate_time_from_second_offset(abs_unix_timestamp % seconds_per_day)
 	return Time{
-		year: year
-		month: month
-		day: day
-		hour: hour_
-		minute: minute_
-		second: second_
+		year:       year
+		month:      month
+		day:        day
+		hour:       hour_
+		minute:     minute_
+		second:     second_
 		nanosecond: nanosecond
-		unix: abs_unix_timestamp
+		unix:       abs_unix_timestamp
 	}
 }
 
@@ -67,11 +87,13 @@ fn calculate_date_from_day_offset(day_offset_ i64) (int, int, int) {
 	// shift from 1970-01-01 to 0000-03-01
 	day_offset += 719468 // int(days_per_400_years * 1970 / 400 - (28+31))
 
-	mut era := 0
+	// era => floor(day_offset / days_per_400_years), while `/` truncates toward zero.
+	// It is an i64, so that `era * days_per_400_years` below does not overflow a 32-bit int.
+	mut era := i64(0)
 	if day_offset >= 0 {
-		era = int(day_offset / days_per_400_years)
+		era = day_offset / days_per_400_years
 	} else {
-		era = int((day_offset - days_per_400_years - 1) / days_per_400_years)
+		era = (day_offset - (days_per_400_years - 1)) / days_per_400_years
 	}
 
 	// day_of_era => [0..146096]

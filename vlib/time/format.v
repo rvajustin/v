@@ -5,6 +5,16 @@ module time
 
 import strings
 
+fn iclamp(x int, a int, b int) int {
+	if x < a {
+		return a
+	}
+	if x > b {
+		return b
+	}
+	return x
+}
+
 // int_to_byte_array_no_pad fulfill buffer by part
 // it doesn't pad with leading zeros for performance reasons
 @[direct_array_access]
@@ -20,6 +30,28 @@ fn int_to_byte_array_no_pad(value int, mut arr []u8, size int) {
 	// Convert each digit to a character and store it in the array
 	for num > 0 && i >= 0 {
 		arr[i] = (num % 10) + `0`
+		num /= 10
+		i--
+	}
+}
+
+// int_to_byte_array_no_pad fulfill buffer by part
+// it doesn't pad with leading zeros for performance reasons
+@[direct_array_access; unsafe]
+fn int_to_ptr_byte_array_no_pad(value int, arr_prt &u8, arr_len int) {
+	mut num := value
+	if arr_len <= 0 || num < 0 {
+		return
+	}
+
+	// Start from the end of the array
+	mut i := arr_len - 1
+
+	// Convert each digit to a character and store it in the array
+	for num > 0 && i >= 0 {
+		unsafe {
+			*(arr_prt + i) = (num % 10) + `0`
+		}
 		num /= 10
 		i--
 	}
@@ -142,7 +174,7 @@ pub fn (t Time) format_ss_nano() string {
 // format_rfc3339 returns a date string in "YYYY-MM-DDTHH:mm:ss.123Z" format (24 hours, see https://www.rfc-editor.org/rfc/rfc3339.html)
 // RFC3339 is an Internet profile, based on the ISO 8601 standard for for representation of dates and times using the Gregorian calendar.
 // It is intended to improve consistency and interoperability, when representing and using date and time in Internet protocols.
-@[manualfree; markused]
+@[manualfree]
 pub fn (t Time) format_rfc3339() string {
 	mut buf := [u8(`0`), `0`, `0`, `0`, `-`, `0`, `0`, `-`, `0`, `0`, `T`, `0`, `0`, `:`, `0`,
 		`0`, `:`, `0`, `0`, `.`, `0`, `0`, `0`, `Z`]
@@ -152,7 +184,7 @@ pub fn (t Time) format_rfc3339() string {
 	}
 
 	t_ := time_with_unix(t)
-	if t_.is_local {
+	if t_.is_local || t_.location() != none {
 		utc_time := t_.local_to_utc()
 		int_to_byte_array_no_pad(utc_time.year, mut buf, 4)
 		int_to_byte_array_no_pad(utc_time.month, mut buf, 7)
@@ -174,6 +206,39 @@ pub fn (t Time) format_rfc3339() string {
 	return buf.bytestr()
 }
 
+// format_rfc3339_micro returns a date string in "YYYY-MM-DDTHH:mm:ss.123456Z" format (24 hours, see https://www.rfc-editor.org/rfc/rfc3339.html)
+@[manualfree]
+pub fn (t Time) format_rfc3339_micro() string {
+	mut buf := [u8(`0`), `0`, `0`, `0`, `-`, `0`, `0`, `-`, `0`, `0`, `T`, `0`, `0`, `:`, `0`,
+		`0`, `:`, `0`, `0`, `.`, `0`, `0`, `0`, `0`, `0`, `0`, `Z`]
+
+	defer {
+		unsafe { buf.free() }
+	}
+
+	t_ := time_with_unix(t)
+	if t_.is_local || t_.location() != none {
+		utc_time := t_.local_to_utc()
+		int_to_byte_array_no_pad(utc_time.year, mut buf, 4)
+		int_to_byte_array_no_pad(utc_time.month, mut buf, 7)
+		int_to_byte_array_no_pad(utc_time.day, mut buf, 10)
+		int_to_byte_array_no_pad(utc_time.hour, mut buf, 13)
+		int_to_byte_array_no_pad(utc_time.minute, mut buf, 16)
+		int_to_byte_array_no_pad(utc_time.second, mut buf, 19)
+		int_to_byte_array_no_pad(utc_time.nanosecond / 1000, mut buf, 26)
+	} else {
+		int_to_byte_array_no_pad(t_.year, mut buf, 4)
+		int_to_byte_array_no_pad(t_.month, mut buf, 7)
+		int_to_byte_array_no_pad(t_.day, mut buf, 10)
+		int_to_byte_array_no_pad(t_.hour, mut buf, 13)
+		int_to_byte_array_no_pad(t_.minute, mut buf, 16)
+		int_to_byte_array_no_pad(t_.second, mut buf, 19)
+		int_to_byte_array_no_pad(t_.nanosecond / 1000, mut buf, 26)
+	}
+
+	return buf.bytestr()
+}
+
 // format_rfc3339_nano returns a date string in "YYYY-MM-DDTHH:mm:ss.123456789Z" format (24 hours, see https://www.rfc-editor.org/rfc/rfc3339.html)
 @[manualfree]
 pub fn (t Time) format_rfc3339_nano() string {
@@ -185,7 +250,7 @@ pub fn (t Time) format_rfc3339_nano() string {
 	}
 
 	t_ := time_with_unix(t)
-	if t_.is_local {
+	if t_.is_local || t_.location() != none {
 		utc_time := t_.local_to_utc()
 		int_to_byte_array_no_pad(utc_time.year, mut buf, 4)
 		int_to_byte_array_no_pad(utc_time.month, mut buf, 7)
@@ -285,39 +350,41 @@ const tokens_2 = ['MM', 'Mo', 'DD', 'Do', 'YY', 'ss', 'kk', 'NN', 'mm', 'hh', 'H
 const tokens_3 = ['MMM', 'DDD', 'ZZZ', 'ddd']
 const tokens_4 = ['MMMM', 'DDDD', 'DDDo', 'dddd', 'YYYY']
 
-// custom_format returns a date with custom format
+// custom_format returns a date with custom format.
+// YYYY pads nonnegative years to at least four digits; YY pads their final two digits.
+// Negative years retain their existing token formatting.
 //
-// |                  | Token | Output                                 |
-// |-----------------:|:------|:---------------------------------------|
-// |        **Month** | M     | 1 2 ... 11 12                          |
+// | Category         | Token | Output                                 |
+// |:-----------------|:------|:---------------------------------------|
+// |          Era     | N     | BC AD                                  |
+// |                  | NN    | Before Christ, Anno Domini             |
+// |         Year     | YY    | 00 01 ... 98 99                        |
+// |                  | YYYY  | 0000 0001 ... 9999                    |
+// |      Quarter     | Q     | 1 2 3 4                                |
+// |                  | QQ    | 01 02 03 04                            |
+// |                  | Qo    | 1st 2nd 3rd 4th                        |
+// |        Month     | M     | 1 2 ... 11 12                          |
 // |                  | Mo    | 1st 2nd ... 11th 12th                  |
 // |                  | MM    | 01 02 ... 11 12                        |
 // |                  | MMM   | Jan Feb ... Nov Dec                    |
 // |                  | MMMM  | January February ... November December |
-// |      **Quarter** | Q     | 1 2 3 4                                |
-// |                  | QQ    | 01 02 03 04                            |
-// |                  | Qo    | 1st 2nd 3rd 4th                        |
-// | **Day of Month** | D     | 1 2 ... 30 31                          |
+// | Week of Year     | w     | 1 2 ... 52 53                          |
+// |                  | wo    | 1st 2nd ... 52nd 53rd                  |
+// |                  | ww    | 01 02 ... 52 53                        |
+// | Day of Month     | D     | 1 2 ... 30 31                          |
 // |                  | Do    | 1st 2nd ... 30th 31st                  |
 // |                  | DD    | 01 02 ... 30 31                        |
-// |  **Day of Year** | DDD   | 1 2 ... 364 365                        |
+// |  Day of Year     | DDD   | 1 2 ... 364 365                        |
 // |                  | DDDo  | 1st 2nd ... 364th 365th                |
 // |                  | DDDD  | 001 002 ... 364 365                    |
-// |  **Day of Week** | d     | 0 1 ... 5 6 (Sun-Sat)                  |
+// |  Day of Week     | d     | 0 1 ... 5 6 (Sun-Sat)                  |
 // |                  | c     | 1 2 ... 6 7 (Mon-Sun)                  |
 // |                  | dd    | Su Mo ... Fr Sa                        |
 // |                  | ddd   | Sun Mon ... Fri Sat                    |
 // |                  | dddd  | Sunday Monday ... Friday Saturday      |
-// | **Week of Year** | w     | 1 2 ... 52 53                          |
-// |                  | wo    | 1st 2nd ... 52nd 53rd                  |
-// |                  | ww    | 01 02 ... 52 53                        |
-// |         **Year** | YY    | 70 71 ... 29 30                        |
-// |                  | YYYY  | 1970 1971 ... 2029 2030                |
-// |          **Era** | N     | BC AD                                  |
-// |                  | NN    | Before Christ, Anno Domini             |
-// |        **AM/PM** | A     | AM PM                                  |
+// |        AM/PM     | A     | AM PM                                  |
 // |                  | a     | am pm                                  |
-// |         **Hour** | H     | 0 1 ... 22 23                          |
+// |         Hour     | H     | 0 1 ... 22 23                          |
 // |                  | HH    | 00 01 ... 22 23                        |
 // |                  | h     | 1 2 ... 11 12                          |
 // |                  | hh    | 01 02 ... 11 12                        |
@@ -325,13 +392,13 @@ const tokens_4 = ['MMMM', 'DDDD', 'DDDo', 'dddd', 'YYYY']
 // |                  | ii    | 00 01 ... 11 12 01 ... 11              |
 // |                  | k     | 1 2 ... 23 24                          |
 // |                  | kk    | 01 02 ... 23 24                        |
-// |       **Minute** | m     | 0 1 ... 58 59                          |
+// |       Minute     | m     | 0 1 ... 58 59                          |
 // |                  | mm    | 00 01 ... 58 59                        |
-// |       **Second** | s     | 0 1 ... 58 59                          |
+// |       Second     | s     | 0 1 ... 58 59                          |
 // |                  | ss    | 00 01 ... 58 59                        |
-// |       **Offset** | Z     | -7 -6 ... +5 +6                        |
-// |                  | ZZ    | -0700 -0600 ... +0500 +0600            |
-// |                  | ZZZ   | -07:00 -06:00 ... +05:00 +06:00        |
+// |       Offset     | Z     | -7 -6 ... +5 +6                        |
+// |                  | ZZ    | -0700 -0630 ... +0545 +0600            |
+// |                  | ZZZ   | -07:00 -06:30 ... +05:45 +06:00        |
 //
 // Usage:
 // ```v
@@ -344,9 +411,9 @@ pub fn (t Time) custom_format(s string) string {
 			if i > s.len - j {
 				continue
 			}
-			if j == 1 || (j == 2 && s[i..i + j] in time.tokens_2)
-				|| (j == 3 && s[i..i + j] in time.tokens_3)
-				|| (j == 4 && s[i..i + j] in time.tokens_4) {
+			if j == 1 || (j == 2 && s[i..i + j] in tokens_2)
+				|| (j == 3 && s[i..i + j] in tokens_3)
+				|| (j == 4 && s[i..i + j] in tokens_4) {
 				tokens << s[i..i + j]
 				i += (j - 1)
 				break
@@ -368,10 +435,10 @@ pub fn (t Time) custom_format(s string) string {
 				sb.write_string(ordinal_suffix(t.month))
 			}
 			'MMM' {
-				sb.write_string(long_months[t.month - 1][0..3])
+				sb.write_string(long_months[iclamp(0, t.month - 1, 11)][0..3])
 			}
 			'MMMM' {
-				sb.write_string(long_months[t.month - 1])
+				sb.write_string(long_months[iclamp(0, t.month - 1, 11)])
 			}
 			'D' {
 				sb.write_string(t.day.str())
@@ -383,32 +450,35 @@ pub fn (t Time) custom_format(s string) string {
 				sb.write_string(ordinal_suffix(t.day))
 			}
 			'DDD' {
-				sb.write_string((t.day + days_before[t.month - 1] + int(is_leap_year(t.year))).str())
+				sb.write_string((t.year_day()).str())
 			}
 			'DDDD' {
-				sb.write_string('${t.day + days_before[t.month - 1] + int(is_leap_year(t.year)):03}')
+				sb.write_string('${t.year_day():03}')
 			}
 			'DDDo' {
-				sb.write_string(ordinal_suffix(t.day + days_before[t.month - 1] +
-					int(is_leap_year(t.year))))
+				sb.write_string(ordinal_suffix(t.year_day()))
 			}
 			'd' {
-				sb.write_string(t.day_of_week().str())
+				sb.write_string('${t.day_of_week() % 7}')
 			}
 			'dd' {
-				sb.write_string(long_days[t.day_of_week() - 1][0..2])
+				sb.write_string(long_days[iclamp(0, t.day_of_week() - 1, 6)][0..2])
 			}
 			'ddd' {
-				sb.write_string(long_days[t.day_of_week() - 1][0..3])
+				sb.write_string(long_days[iclamp(0, t.day_of_week() - 1, 6)][0..3])
 			}
 			'dddd' {
-				sb.write_string(long_days[t.day_of_week() - 1])
+				sb.write_string(long_days[iclamp(0, t.day_of_week() - 1, 6)])
 			}
 			'YY' {
-				sb.write_string(t.year.str()[2..4])
+				if t.year < 0 {
+					sb.write_string(t.year.str()#[2..4])
+				} else {
+					sb.write_string('${t.year % 100:02}')
+				}
 			}
 			'YYYY' {
-				sb.write_string(t.year.str())
+				sb.write_string(if t.year < 0 { t.year.str() } else { '${t.year:04}' })
 			}
 			'H' {
 				sb.write_string(t.hour.str())
@@ -445,34 +515,33 @@ pub fn (t Time) custom_format(s string) string {
 				sb.write_string('${t.second:02}')
 			}
 			'k' {
-				sb.write_string((t.hour + 1).str())
+				h := if t.hour == 0 { 24 } else { t.hour }
+				sb.write_string(h.str())
 			}
 			'kk' {
-				sb.write_string('${(t.hour + 1):02}')
+				h := if t.hour == 0 { 24 } else { t.hour }
+				sb.write_string('${h:02}')
 			}
 			'w' {
-				sb.write_string('${mceil((t.day + days_before[t.month - 1] +
-					int(is_leap_year(t.year))) / 7):.0}')
+				sb.write_string('${t.week_of_year():.0}')
 			}
 			'ww' {
-				sb.write_string('${mceil((t.day + days_before[t.month - 1] +
-					int(is_leap_year(t.year))) / 7):02.0}')
+				sb.write_string('${t.week_of_year():02.0}')
 			}
 			'wo' {
-				sb.write_string(ordinal_suffix(int(mceil((t.day + days_before[t.month - 1] +
-					int(is_leap_year(t.year))) / 7))))
+				sb.write_string(ordinal_suffix(t.week_of_year()))
 			}
 			'Q' {
-				sb.write_string('${(t.month % 4) + 1}')
+				sb.write_string('${(t.month - 1) / 3 + 1}')
 			}
 			'QQ' {
-				sb.write_string('${(t.month % 4) + 1:02}')
+				sb.write_string('${(t.month - 1) / 3 + 1:02}')
 			}
 			'Qo' {
-				sb.write_string(ordinal_suffix((t.month % 4) + 1))
+				sb.write_string(ordinal_suffix((t.month - 1) / 3 + 1))
 			}
 			'c' {
-				sb.write_string('${t.day_of_week() + 1}')
+				sb.write_string('${t.day_of_week()}')
 			}
 			'N' {
 				// TODO: integrate BC
@@ -483,33 +552,13 @@ pub fn (t Time) custom_format(s string) string {
 				sb.write_string('Anno Domini')
 			}
 			'Z' {
-				mut hours := offset() / seconds_per_hour
-				if hours >= 0 {
-					sb.write_string('+${hours}')
-				} else {
-					hours = -hours
-					sb.write_string('-${hours}')
-				}
+				sb.write_string(t.custom_format_zone_offset(token))
 			}
 			'ZZ' {
-				// TODO: update if minute differs?
-				mut hours := offset() / seconds_per_hour
-				if hours >= 0 {
-					sb.write_string('+${hours:02}00')
-				} else {
-					hours = -hours
-					sb.write_string('-${hours:02}00')
-				}
+				sb.write_string(t.custom_format_zone_offset(token))
 			}
 			'ZZZ' {
-				// TODO: update if minute differs?
-				mut hours := offset() / seconds_per_hour
-				if hours >= 0 {
-					sb.write_string('+${hours:02}:00')
-				} else {
-					hours = -hours
-					sb.write_string('-${hours:02}:00')
-				}
+				sb.write_string(t.custom_format_zone_offset(token))
 			}
 			'a' {
 				if t.hour < 12 {
@@ -533,7 +582,23 @@ pub fn (t Time) custom_format(s string) string {
 	return sb.str()
 }
 
-// clean returns a date string in a following format:
+fn (t Time) custom_format_zone_offset(token string) string {
+	zone_offset := if t.has_location() { (t.zone() or { Zone{} }).offset } else { offset() }
+	sign := if zone_offset < 0 { '-' } else { '+' }
+	abs_offset := if zone_offset < 0 { -zone_offset } else { zone_offset }
+	hours := abs_offset / seconds_per_hour
+	if token == 'Z' {
+		return '${sign}${hours}'
+	}
+	minutes := (abs_offset % seconds_per_hour) / seconds_per_minute
+	if token == 'ZZ' {
+		return '${sign}${hours:02}${minutes:02}'
+	}
+	return '${sign}${hours:02}:${minutes:02}'
+}
+
+// clean returns a date string in a clean form.
+// It has the following format:
 // - a date string in "HH:mm" format (24h) for current day
 // - a date string in "MMM D HH:mm" format (24h) for date of current year
 // - a date string formatted with format function for other dates
@@ -550,9 +615,10 @@ pub fn (t Time) clean() string {
 	return t.format()
 }
 
-// clean12 returns a date string in a following format:
-// - a date string in "hh:mm" format (12h) for current day
-// - a date string in "MMM D hh:mm" format (12h) for date of current year
+// clean12 returns a date string in a clean form.
+// It has the following format:
+// - a date string in "h:mm a.m./p.m." format (12h) for current day
+// - a date string in "MMM D h:mm a.m./p.m." format (12h) for date of current year
 // - a date string formatted with format function for other dates
 pub fn (t Time) clean12() string {
 	znow := now()
@@ -585,8 +651,12 @@ pub fn (t Time) get_fmt_time_str(fmt_time FormatTime) string {
 		.hhmm24 { '${t.hour:02d}:${t.minute:02d}' }
 		.hhmmss12 { '${hour_}:${t.minute:02d}:${t.second:02d} ${tp}' }
 		.hhmmss24 { '${t.hour:02d}:${t.minute:02d}:${t.second:02d}' }
-		.hhmmss24_milli { '${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${(t.nanosecond / 1_000_000):03d}' }
-		.hhmmss24_micro { '${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${(t.nanosecond / 1_000):06d}' }
+		.hhmmss24_milli {
+			'${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${(t.nanosecond / 1_000_000):03d}'
+		}
+		.hhmmss24_micro {
+			'${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${(t.nanosecond / 1_000):06d}'
+		}
 		.hhmmss24_nano { '${t.hour:02d}:${t.minute:02d}:${t.second:02d}.${t.nanosecond:06d}' }
 		else { 'unknown enumeration ${fmt_time}' }
 	}
@@ -613,6 +683,7 @@ pub fn (t Time) get_fmt_date_str(fmt_dlmtr FormatDelimiter, fmt_date FormatDate)
 		.yymmdd { '${year}|${t.month:02d}|${t.day:02d}' }
 		else { 'unknown enumeration ${fmt_date}' }
 	}
+
 	del := match fmt_dlmtr {
 		.dot { '.' }
 		.hyphen { '-' }
@@ -620,12 +691,12 @@ pub fn (t Time) get_fmt_date_str(fmt_dlmtr FormatDelimiter, fmt_date FormatDate)
 		.space { ' ' }
 		.no_delimiter { '' }
 	}
+
 	res = res.replace('|', del)
 	return res
 }
 
-// get_fmt_str returns a date string with specified FormatDelimiter,
-// FormatTime type, and FormatDate type.
+// get_fmt_str returns a date string with specified FormatDelimiter, FormatTime type, and FormatDate type.
 pub fn (t Time) get_fmt_str(fmt_dlmtr FormatDelimiter, fmt_time FormatTime, fmt_date FormatDate) string {
 	if fmt_date == .no_date {
 		if fmt_time == .no_time {
@@ -646,20 +717,118 @@ pub fn (t Time) get_fmt_str(fmt_dlmtr FormatDelimiter, fmt_time FormatTime, fmt_
 	}
 }
 
-// This is just a TEMPORARY function for cookies and their expire dates
+// utc_string returns a date string in the legacy UTC cookie/header format.
+@[deprecated: 'use `http_header_string()` instead']
+@[deprecated_after: '2026-09-30']
 pub fn (t Time) utc_string() string {
-	day_str := t.weekday_str()
-	month_str := t.smonth()
-	utc_string := '${day_str}, ${t.day} ${month_str} ${t.year} ${t.hour:02d}:${t.minute:02d}:${t.second:02d} UTC'
+	t_ := if t.location() != none { t.local_to_utc() } else { t }
+	day_str := t_.weekday_str()
+	month_str := t_.smonth()
+	utc_string := '${day_str}, ${t_.day} ${month_str} ${t_.year} ${t_.hour:02d}:${t_.minute:02d}:${t_.second:02d} UTC'
 	return utc_string
 }
 
 // http_header_string returns a date string in the format used in HTTP headers, as defined in RFC 2616.
+// e.g. "Sun, 06 Nov 1994 08:49:37 GMT"
+@[manualfree]
 pub fn (t Time) http_header_string() string {
-	day_str := t.weekday_str()
-	month_str := t.smonth()
-	http_header_string := '${day_str}, ${t.day} ${month_str} ${t.year} ${t.hour:02d}:${t.minute:02d}:${t.second:02d} GMT'
-	return http_header_string
+	mut buf := []u8{cap: 29}
+	t.push_to_http_header(mut buf)
+
+	return buf.bytestr()
+}
+
+// http_date_len is the byte length of an HTTP-date value (RFC 9110 IMF-fixdate),
+// e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
+pub const http_date_len = 29
+
+// write_http_header writes the 29-byte HTTP-date ("Sun, 06 Nov 1994 08:49:37 GMT",
+// RFC 9110 IMF-fixdate) at dst, which may point into a fixed array or a dynamic
+// array's data, at any offset. dst_len is the number of writable bytes at dst;
+// an error is returned when it is less than http_date_len, so a caller cannot
+// silently overrun its buffer. No allocation on the success path.
+@[unsafe]
+pub fn (t Time) write_http_header(dst &u8, dst_len int) ! {
+	if dst_len < http_date_len {
+		return error('time.write_http_header: dst_len must be >= 29')
+	}
+	if t.location() != none {
+		unsafe { t.local_to_utc().write_http_header(dst, dst_len)! }
+		return
+	}
+	t_ := t
+	day_str := long_days[iclamp(0, t_.day_of_week() - 1, 6)] // read in place: no substr
+	// months_string is indexed in place (no smonth() substr allocation); out-of-range
+	// months keep smonth()'s historical '---' fallback.
+	mi := if t_.month >= 1 && t_.month <= 12 { (t_.month - 1) * 3 } else { -1 }
+	m0 := if mi >= 0 { months_string[mi] } else { `-` }
+	m1 := if mi >= 0 { months_string[mi + 1] } else { `-` }
+	m2 := if mi >= 0 { months_string[mi + 2] } else { `-` }
+
+	mut buf := [day_str[0], day_str[1], day_str[2], `,`, ` `, `0`, `0`, ` `, m0, m1, m2, ` `, `0`,
+		`0`, `0`, `0`, ` `, `0`, `0`, `:`, `0`, `0`, `:`, `0`, `0`, ` `, `G`, `M`, `T`]!
+	unsafe {
+		int_to_ptr_byte_array_no_pad(t_.day, &buf[5], 2)
+		int_to_ptr_byte_array_no_pad(t_.year, &buf[12], 4)
+		int_to_ptr_byte_array_no_pad(t_.hour, &buf[17], 2)
+		int_to_ptr_byte_array_no_pad(t_.minute, &buf[20], 2)
+		int_to_ptr_byte_array_no_pad(t_.second, &buf[23], 2)
+		// plain byte loop instead of vmemcpy: compiles on every backend (JS has
+		// no vmemcpy) and C compilers turn it into a memcpy at -prod anyway
+		for i in 0 .. 29 {
+			dst[i] = buf[i]
+		}
+	}
+}
+
+// update_http_header refreshes an HTTP-date previously written at dst (by
+// write_http_header) from last_unix to now_unix, rewriting ONLY the digits
+// whose value changed: within the same minute that is the 2 seconds digits;
+// minute and hour rollovers add 2 digits each; a day rollover (or
+// last_unix <= 0 / now_unix <= 0) falls back to a full write_http_header,
+// which is the only path that pays calendar math — at a 1 Hz refresh cadence,
+// once per day. The caller passes the same UTC unix seconds it will keep for
+// the next call. No allocation on the success path.
+@[unsafe]
+pub fn update_http_header(dst &u8, dst_len int, last_unix i64, now_unix i64) ! {
+	if dst_len < http_date_len {
+		return error('time.update_http_header: dst_len must be >= 29')
+	}
+	if now_unix == last_unix {
+		return
+	}
+	if last_unix <= 0 || now_unix <= 0 || now_unix / 86400 != last_unix / 86400 {
+		unsafe { unix(now_unix).write_http_header(dst, dst_len)! }
+		return
+	}
+	tod := int(now_unix % 86400)
+	unsafe {
+		write_2_digits(dst + 23, tod % 60)
+		if now_unix / 60 != last_unix / 60 {
+			write_2_digits(dst + 20, (tod / 60) % 60)
+			if now_unix / 3600 != last_unix / 3600 {
+				write_2_digits(dst + 17, tod / 3600)
+			}
+		}
+	}
+}
+
+@[inline]
+fn write_2_digits(dst &u8, v int) {
+	unsafe {
+		dst[0] = u8(`0` + v / 10)
+		dst[1] = u8(`0` + v % 10)
+	}
+}
+
+// push_to_http_header appends the 29-byte HTTP-date to buffer, as defined in RFC 2616.
+// e.g. "Sun, 06 Nov 1994 08:49:37 GMT"
+pub fn (t Time) push_to_http_header(mut buffer []u8) {
+	mut buf := [29]u8{}
+	unsafe {
+		t.write_http_header(&buf[0], 29) or {} // 29 >= http_date_len: cannot fail
+		buffer.push_many(&buf[0], 29)
+	}
 }
 
 // mceil returns the least integer value greater than or equal to x.

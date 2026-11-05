@@ -1,22 +1,215 @@
 CC ?= cc
+VEXE ?= ./v
 VFLAGS ?=
 CFLAGS ?=
 LDFLAGS ?=
 
-.PHONY: all check download_vc v
+# Portable VC snapshots do not embed V3. Keep their v1 executable on the full
+# compatibility compiler path even when the generated C is built on a V3 host.
+VC_BOOTSTRAP_DEFINE = -DCUSTOM_DEFINE_v1_fallback
 
 all: download_vc v
 
+.PHONY: all check download_vc install v v1
+
 download_vc:
-	if [ -f vc/v.c ] ; then git -C vc/ pull; else git clone --filter=blob:none https://github.com/vlang/vc vc/; fi
+	@set -e; \
+	if [ -f vc/v.c ]; then \
+		if command -v git >/dev/null 2>&1; then \
+			git -C vc/ pull --rebase; \
+		else \
+			echo "git not found; using existing vc/v.c"; \
+		fi; \
+	else \
+		if command -v git >/dev/null 2>&1; then \
+			git clone --filter=blob:none https://github.com/vlang/vc vc/; \
+		else \
+			echo "git is required to download vc/. Please install git or provide vc/v.c."; \
+			exit 1; \
+		fi; \
+	fi
 
 v:
-	$(CC) $(CFLAGS) -std=gnu11 -w -o v1 vc/v.c -lm -lexecinfo -lpthread $(LDFLAGS)
-	./v1 -no-parallel -o v2 $(VFLAGS) cmd/v
-	./v2 -o v $(VFLAGS) cmd/v
-	rm -rf v1 v2
-	@echo "V has been successfully built"
-	./v run ./cmd/tools/detect_tcc.v
+	@set -e; \
+	sys=`uname -s 2>/dev/null || echo unknown`; \
+	arch=`uname -m 2>/dev/null || echo unknown`; \
+	if [ "`getconf LONG_BIT 2>/dev/null`" = 32 ]; then \
+		case "$$arch" in \
+			aarch64|arm64|armv8*) arch=armv7l;; \
+			x86_64|amd64) arch=i686;; \
+		esac; \
+	fi; \
+	set -- $(CFLAGS); \
+	ccflags=; \
+	unsafe_o=0; \
+	for arg do \
+		case "$$arg" in \
+			-O|-O0|-O1) \
+				ccflags="$$ccflags $$arg"; \
+				;; \
+			-O*) \
+				ccflags="$$ccflags $$arg"; \
+				unsafe_o=1; \
+				;; \
+			*) \
+				ccflags="$$ccflags $$arg"; \
+				;; \
+		esac; \
+	done; \
+	ccflags=$${ccflags# }; \
+	bootstrap_ccflags=$$ccflags; \
+	set -- $(LDFLAGS); \
+	ldflags=; \
+	for arg do \
+		ldflags="$$ldflags $$arg"; \
+	done; \
+	ldflags=$${ldflags# }; \
+	case "$$sys" in \
+		Linux) \
+			case "$$arch" in \
+				arm*) \
+					ldflags="$$ldflags -latomic"; \
+					;; \
+			esac; \
+			;; \
+		FreeBSD|NetBSD|OpenBSD) \
+			ldflags="$$ldflags -lexecinfo"; \
+			;; \
+	esac; \
+	ccflags=$${ccflags# }; \
+	ldflags=$${ldflags# }; \
+	if [ "$$sys" = Linux ]; then \
+		case "$$arch" in \
+			arm64|aarch64) \
+				if [ $$unsafe_o -eq 1 ]; then \
+					set -- $$ccflags; \
+					bootstrap_ccflags=; \
+					for arg do \
+						case "$$arg" in \
+							-O|-O0|-O1) \
+								bootstrap_ccflags="$$bootstrap_ccflags $$arg"; \
+								;; \
+							-O*) \
+								bootstrap_ccflags="$$bootstrap_ccflags -O1"; \
+								;; \
+							*) \
+								bootstrap_ccflags="$$bootstrap_ccflags $$arg"; \
+								;; \
+						esac; \
+					done; \
+					bootstrap_ccflags=$${bootstrap_ccflags# }; \
+				fi; \
+				;; \
+		esac; \
+	fi; \
+	bootstrap_gcflags="-gc none"; \
+	case " $(VFLAGS) " in \
+		*" -gc "*|*" -gc="*) bootstrap_gcflags="";; \
+	esac; \
+	bootstrap_ccompiler=; \
+	case " $(VFLAGS) " in \
+		*" -cc "*|*" -cc="*) ;; \
+		*) \
+			case "$$sys" in \
+				Linux|FreeBSD|NetBSD|OpenBSD|DragonFly) \
+					case "$$arch" in \
+						arm*|aarch64) bootstrap_ccompiler="$(CC)";; \
+					esac; \
+					;; \
+			esac; \
+			;; \
+	esac; \
+	sh cmd/tools/vc_compat.sh vc/v.c $(CC) $$bootstrap_ccflags $(VC_BOOTSTRAP_DEFINE) -std=gnu11 -w -o v1 -- -lm -lpthread $$ldflags || sh cmd/tools/cc_compilation_failed_non_windows.sh; \
+	set -- ./v1 -no-parallel -o v2 $$bootstrap_gcflags $(VFLAGS); \
+	if [ -n "$$bootstrap_ccompiler" ]; then \
+		set -- "$$@" -cc "$$bootstrap_ccompiler"; \
+	fi; \
+	if [ -n "$$bootstrap_ccflags" ]; then \
+		set -- "$$@" -cflags "$$bootstrap_ccflags"; \
+	fi; \
+	if [ -n "$$ldflags" ]; then \
+		set -- "$$@" -ldflags "$$ldflags"; \
+	fi; \
+	set -- "$$@" cmd/v; \
+	"$$@"; \
+	set -- ./v2 -o v $$bootstrap_gcflags $(VFLAGS); \
+	if [ -n "$$bootstrap_ccompiler" ]; then \
+		set -- "$$@" -cc "$$bootstrap_ccompiler"; \
+	fi; \
+	if [ -n "$$ccflags" ]; then \
+		set -- "$$@" -cflags "$$ccflags"; \
+	fi; \
+	if [ -n "$$ldflags" ]; then \
+		set -- "$$@" -ldflags "$$ldflags"; \
+	fi; \
+	set -- "$$@" cmd/v; \
+	"$$@"; \
+	rm -rf v1 v2; \
+	./v -new-compiler run ./cmd/tools/detect_tcc.v; \
+	echo "V has been successfully built"; \
+	./v version; \
+	./v -new-compiler run .github/problem-matchers/register_all.vsh; \
+	cache_gcflags=; \
+	if [ ! -f thirdparty/tcc/lib/libgc.a ] && [ ! -f thirdparty/tcc/lib/libgc.dylib ]; then \
+		cache_gcflags='-gc none'; \
+	fi; \
+	./v $$cache_gcflags $(VFLAGS) -new-compiler run cmd/tools/cache_basic_modules.v; \
+	./v $$cache_gcflags $(VFLAGS) -new-compiler cmd/tools/cache_basic_modules_test.v
+
+v1:
+	@set -e; \
+	sys=`uname -s 2>/dev/null || echo unknown`; \
+	arch=`uname -m 2>/dev/null || echo unknown`; \
+	if [ "`getconf LONG_BIT 2>/dev/null`" = 32 ]; then \
+		case "$$arch" in \
+			aarch64|arm64|armv8*) arch=armv7l;; \
+			x86_64|amd64) arch=i686;; \
+		esac; \
+	fi; \
+	set -- $(CFLAGS); \
+	bootstrap_ccflags=; \
+	unsafe_o=0; \
+	for arg do \
+		case "$$arg" in \
+			-O|-O0|-O1) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+			-O*) bootstrap_ccflags="$$bootstrap_ccflags $$arg"; unsafe_o=1;; \
+			*) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+		esac; \
+	done; \
+	bootstrap_ccflags=$${bootstrap_ccflags# }; \
+	set -- $(LDFLAGS); \
+	ldflags=; \
+	for arg do ldflags="$$ldflags $$arg"; done; \
+	ldflags=$${ldflags# }; \
+	case "$$sys" in \
+		Linux) case "$$arch" in arm*) ldflags="$$ldflags -latomic";; esac;; \
+		FreeBSD|NetBSD|OpenBSD) ldflags="$$ldflags -lexecinfo";; \
+	esac; \
+	ldflags=$${ldflags# }; \
+	if [ "$$sys" = Linux ]; then \
+		case "$$arch" in \
+			arm64|aarch64) \
+				if [ $$unsafe_o -eq 1 ]; then \
+					set -- $$bootstrap_ccflags; \
+					bootstrap_ccflags=; \
+					for arg do \
+						case "$$arg" in \
+							-O|-O0|-O1) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+							-O*) bootstrap_ccflags="$$bootstrap_ccflags -O1";; \
+							*) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+						esac; \
+					done; \
+					bootstrap_ccflags=$${bootstrap_ccflags# }; \
+				fi;; \
+		esac; \
+	fi; \
+	CC='$(CC)' OLDV_CCOPTIONS='$(CPPFLAGS) '"$$bootstrap_ccflags" \
+		OLDV_LDFLAGS="$$ldflags" \
+		cmd/tools/install_v1_fallback.sh '$(VEXE)' './v1_fallback'; \
+	echo "Built V1 compatibility compiler: ./v1_fallback"
 
 check:
 	./v test-all
+
+install:
+	@echo 'Please use `sudo ./v symlink` instead, or manually add the current directory to your PATH.'

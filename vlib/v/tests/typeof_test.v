@@ -120,6 +120,23 @@ fn test_typeof_on_sumtypes_of_structs() {
 	assert d.type_name() == 'UnaryExpr'
 }
 
+fn test_raw_typeof_on_sumtypes_is_printable() {
+	a := fexpr(1)
+	b := fexpr(2)
+	c := fexpr(3)
+	raw_a_type := unsafe { typeof(a) }
+	raw_b_type := unsafe { typeof(b) }
+	raw_c_type := unsafe { typeof(c) }
+	// Regresses issue #26704: raw typeof(sumtype) should be usable
+	// when returned from a helper and printable via the stored result.
+	println(raw_a_type)
+	println(raw_b_type)
+	println(raw_c_type)
+	assert raw_a_type == 'UnaryExpr'
+	assert raw_b_type == 'BinExpr'
+	assert raw_c_type == 'BoolExpr'
+}
+
 fn myfn(i int) int {
 	return i
 }
@@ -140,11 +157,11 @@ fn test_typeof_on_fn() {
 	assert unsafe { typeof(myfn2) } == 'fn ()'
 	assert unsafe { typeof(myfn3) } == 'fn (int, string) u8'
 	assert unsafe { typeof(myfn4) } == 'fn () i8'
-	assert typeof(myfn).name == typeof(myfn)
+	assert typeof(myfn).name == unsafe { typeof(myfn) }
 	assert typeof(&myfn).name == '&fn (int) int'
-	assert typeof(myfn2).name == typeof(myfn2)
-	assert typeof(myfn3).name == typeof(myfn3)
-	assert typeof(myfn4).name == typeof(myfn4)
+	assert typeof(myfn2).name == unsafe { typeof(myfn2) }
+	assert typeof(myfn3).name == unsafe { typeof(myfn3) }
+	assert typeof(myfn4).name == unsafe { typeof(myfn4) }
 }
 
 fn type_name[T](v T) string {
@@ -169,19 +186,28 @@ fn test_generic_type() {
 }
 
 fn variadic_int(x ...int) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn variadic_bool(x ...bool) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn variadic_f64(x ...f64) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn test_variadic_type() {
 	assert variadic_int(1, 2, 3) == '...int'
 	assert variadic_bool(true, false) == '...bool'
 	assert variadic_f64(3.1, 3.2) == '...f64'
+}
+
+fn test_typeof_typ_field() {
+	a := 123
+	b := &a
+	assert typeof(a).typ == typeof(a).idx
+	assert typeof(a).typ == typeof[int]().idx
+	assert typeof(b).typ == typeof(b).idx
+	assert typeof[FooBar]().typ == typeof[FooBar]().idx
 }

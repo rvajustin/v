@@ -13,7 +13,8 @@ pub fn aprox_sin(a f64) f64 {
 	a5 := 2.08026600266304389e-2
 	a6 := -3.03996055049204407e-3
 	a7 := 1.38235642404333740e-4
-	return a0 + a * (a1 + a * (a2 + a * (a3 + a * (a4 + a * (a5 + a * (a6 + a * a7))))))
+	tmp := a4 + a * (a5 + a * (a6 + a * a7))
+	return a0 + a * (a1 + a * (a2 + a * (a3 + a * tmp)))
 }
 
 // aprox_cos returns an approximation of cos(a) made using lolremez
@@ -27,7 +28,8 @@ pub fn aprox_cos(a f64) f64 {
 	a6 := -3.8510875386947414e-3
 	a7 := 4.7196604604366623e-4
 	a8 := -1.8776444013090451e-5
-	return a0 + a * (a1 + a * (a2 + a * (a3 + a * (a4 + a * (a5 + a * (a6 + a * (a7 + a * a8)))))))
+	tmp := a4 + a * (a5 + a * (a6 + a * (a7 + a * a8)))
+	return a0 + a * (a1 + a * (a2 + a * (a3 + a * tmp)))
 }
 
 // copysign returns a value with the magnitude of x and the sign of y
@@ -40,6 +42,12 @@ pub fn copysign(x f64, y f64) f64 {
 @[inline]
 pub fn degrees(radians f64) f64 {
 	return radians * (180.0 / pi)
+}
+
+// radians converts an angle in degrees to a corresponding angle in radians.
+@[inline]
+pub fn radians(degrees f64) f64 {
+	return degrees * (pi / 180.0)
 }
 
 // angle_diff calculates the difference between angles in radians
@@ -59,7 +67,7 @@ pub:
 }
 
 // digits returns an array of the digits of `num` in the given optional `base`.
-// The `num` argument accepts any integer type (i8|i16|int|isize|i64), and will be cast to i64
+// The `num` argument accepts any integer type (i8|i16|int|int|i64), and will be cast to i64
 // The `base:` argument is optional, it will default to base: 10.
 // This function returns an array of the digits in reverse order i.e.:
 // Example: assert math.digits(12345, base: 10) == [5,4,3,2,1]
@@ -70,12 +78,12 @@ pub fn digits(num i64, params DigitParams) []int {
 	// set base to 10 initially and change only if base is explicitly set.
 	mut b := params.base
 	if b < 2 {
-		panic('digits: Cannot find digits of n with base ${b}')
+		panic_n('digits: Cannot find digits of n with base:', b)
 	}
 	mut n := num
-	mut sign := 1
+	mut sgn := 1
 	if n < 0 {
-		sign = -1
+		sgn = -1
 		n = -n
 	}
 
@@ -91,8 +99,8 @@ pub fn digits(num i64, params DigitParams) []int {
 		n = next_n
 	}
 
-	if sign == -1 {
-		res[res.len - 1] *= sign
+	if sgn == -1 {
+		res[res.len - 1] *= sgn
 	}
 
 	if params.reverse {
@@ -103,7 +111,7 @@ pub fn digits(num i64, params DigitParams) []int {
 }
 
 // count_digits return the number of digits in the number passed.
-// Number argument accepts any integer type (i8|i16|int|isize|i64) and will be cast to i64
+// Number argument accepts any integer type (i8|i16|int|int|i64) and will be cast to i64
 pub fn count_digits(number i64) int {
 	mut n := number
 	if n == 0 {
@@ -154,35 +162,29 @@ pub fn signi(n f64) int {
 	return int(copysign(1.0, n))
 }
 
-// radians converts an angle in degrees to a corresponding angle in radians.
-@[inline]
-pub fn radians(degrees f64) f64 {
-	return degrees * (pi / 180.0)
-}
-
 // signbit returns a value with the boolean representation of the sign for x
 @[inline]
 pub fn signbit(x f64) bool {
 	return f64_bits(x) & sign_mask != 0
 }
 
-// tolerance checks if a and b difference are less than or equal to the tolerance value
-pub fn tolerance(a f64, b f64, tol f64) bool {
-	mut ee := tol
-	// Multiplying by ee here can underflow denormal values to zero.
-	// Check a==b so that at least if a and b are small and identical
-	// we say they match.
-	if a == b {
+// tolerance checks if the difference between `actual` and `expected` numbers, is less than or equal to the tolerance value `tol`.
+// Note: the `actual` and `expected` parameters are NOT symmetrical.
+// If you compare against a known expected number, put it in the *second* argument, especially if it is 0.
+pub fn tolerance(actual f64, expected f64, tol f64) bool {
+	// Check actual==expected so that at least if they both are small and identical we say they match.
+	if actual == expected {
 		return true
 	}
-	mut d := a - b
+	mut d := actual - expected
 	if d < 0 {
 		d = -d
 	}
-	// note: b is correct (expected) value, a is actual value.
-	// make error tolerance a fraction of b, not a.
-	if b != 0 {
-		ee = ee * b
+	mut ee := tol
+	// make error tolerance a fraction of expected, not actual.
+	if expected != 0 {
+		// Multiplying by ee here can underflow denormal values to zero.
+		ee *= expected
 		if ee < 0 {
 			ee = -ee
 		}
@@ -190,14 +192,18 @@ pub fn tolerance(a f64, b f64, tol f64) bool {
 	return d < ee
 }
 
-// close checks if a and b are within 1e-14 of each other
-pub fn close(a f64, b f64) bool {
-	return tolerance(a, b, 1e-14)
+// close checks if `actual` and `expected` are within 1e-14 of each other
+// Note: the `actual` and `expected` parameters are NOT symmetrical.
+// If you compare against a known expected number, put it in the *second* argument, especially if it is 0.
+pub fn close(actual f64, expected f64) bool {
+	return tolerance(actual, expected, 1e-14)
 }
 
 // veryclose checks if a and b are within 4e-16 of each other
-pub fn veryclose(a f64, b f64) bool {
-	return tolerance(a, b, 4e-16)
+// Note: the `actual` and `expected` parameters are NOT symmetrical.
+// If you compare against a known expected number, put it in the *second* argument, especially if it is 0.
+pub fn veryclose(actual f64, expected f64) bool {
+	return tolerance(actual, expected, 4e-16)
 }
 
 // alike checks if a and b are equal
@@ -218,19 +224,6 @@ pub fn alike(a f64, b f64) bool {
 	}
 	if a == b {
 		return signbit(a) == signbit(b)
-	}
-	return false
-}
-
-fn is_odd_int(x f64) bool {
-	xi, xf := modf(x)
-	return xf == 0 && (i64(xi) & 1) == 1
-}
-
-fn is_neg_int(x f64) bool {
-	if x < 0 {
-		_, xf := modf(x)
-		return xf == 0
 	}
 	return false
 }

@@ -4,29 +4,28 @@ import time
 
 fn man_flag() Flag {
 	return Flag{
-		flag: .bool
-		name: 'man'
-		description: 'Prints the auto-generated manpage.'
+		flag:        .bool
+		name:        'man'
+		description: 'Print the auto-generated manpage'
 	}
 }
 
 fn man_cmd() Command {
 	return Command{
-		name: 'man'
-		usage: '<subcommand>'
-		description: 'Prints the auto-generated manpage.'
-		execute: print_manpage_for_command
+		name:        'man'
+		usage:       '<subcommand>'
+		description: 'Print the auto-generated manpage'
+		execute:     print_manpage_for_command
 	}
 }
 
-// print_manpage_for_command prints the manpage for the
-// command or subcommand in `man_cmd` to stdout
+// print_manpage_for_command prints the manpage for the command or subcommand in `man_cmd` to stdout.
 pub fn print_manpage_for_command(cmd Command) ! {
 	if cmd.args.len > 0 {
 		for sub_cmd in cmd.commands {
-			if sub_cmd.name == cmd.args[0] {
-				man_cmd := unsafe { &sub_cmd }
-				print(man_cmd.manpage())
+			if sub_cmd.matches(cmd.args[0]) {
+				target := unsafe { &sub_cmd }
+				print(target.manpage())
 				return
 			}
 		}
@@ -36,9 +35,8 @@ pub fn print_manpage_for_command(cmd Command) ! {
 	}
 }
 
-// manpage returns a `string` containing the mdoc(7) manpage for
-// this `Command`
-pub fn (cmd Command) manpage() string {
+// manpage returns a `string` containing the mdoc(7) manpage for this `Command`.
+pub fn (cmd &Command) manpage() string {
 	mut mdoc := '.Dd ${time.now().strftime('%B %d, %Y')}\n'
 	mdoc += '.Dt ${cmd.full_name().replace(' ', '-').to_upper()} 1\n'
 	mdoc += '.Os\n.Sh NAME\n.Nm ${cmd.full_name().replace(' ', '-')}\n.Nd ${cmd.description}\n'
@@ -78,6 +76,7 @@ pub fn (cmd Command) manpage() string {
 			.string, .string_array { mdoc += ' Ar string' }
 			else {}
 		}
+
 		mdoc += '\n'
 	}
 	for i in 0 .. cmd.required_args {
@@ -112,10 +111,31 @@ pub fn (cmd Command) manpage() string {
 	} else if cmd.description != '' {
 		mdoc += '${cmd.description}\n'
 	}
-	if cmd.flags.len > 0 {
+	local_flags, inherited_flags := cmd.partition_flags()
+	if local_flags.len > 0 {
 		mdoc += '.Pp\nThe options are as follows:\n'
 		mdoc += '.Bl -tag -width indent\n'
-		for flag in cmd.flags {
+		for flag in local_flags {
+			mdoc += '.It'
+			if flag.abbrev != '' {
+				mdoc += ' Fl ${flag.abbrev}'
+			}
+			if cmd.posix_mode {
+				mdoc += ' Fl -${flag.name}'
+			} else {
+				mdoc += ' Fl ${flag.name}'
+			}
+			mdoc += '\n'
+			if flag.description != '' {
+				mdoc += '${flag.description}\n'
+			}
+		}
+		mdoc += '.El\n'
+	}
+	if inherited_flags.len > 0 {
+		mdoc += '.Pp\nThe inherited options are as follows:\n'
+		mdoc += '.Bl -tag -width indent\n'
+		for flag in inherited_flags {
 			mdoc += '.It'
 			if flag.abbrev != '' {
 				mdoc += ' Fl ${flag.abbrev}'
@@ -133,15 +153,23 @@ pub fn (cmd Command) manpage() string {
 		mdoc += '.El\n'
 	}
 	if cmd.commands.len > 0 {
-		mdoc += '.Pp\nThe subcommands are as follows:\n'
-		mdoc += '.Bl -tag -width indent\n'
-		for c in cmd.commands {
-			mdoc += '.It Cm ${c.name}\n'
-			if c.description != '' {
-				mdoc += '${c.description}\n'
+		groups, order := group_commands(cmd.commands)
+		for idx, key in order {
+			title := if key == '' { 'The subcommands are as follows:' } else { '${key}:' }
+			mdoc += '.Pp\n${title}\n'
+			mdoc += '.Bl -tag -width indent\n'
+			for c in groups[idx] {
+				mdoc += '.It Cm ${c.name}'
+				if c.alias != '' {
+					mdoc += ' Pq Cm ${c.alias}'
+				}
+				mdoc += '\n'
+				if c.description != '' {
+					mdoc += '${c.description}\n'
+				}
 			}
+			mdoc += '.El\n'
 		}
-		mdoc += '.El\n'
 	}
 
 	if cmd.commands.len > 0 {
@@ -163,6 +191,21 @@ pub fn (cmd Command) manpage() string {
 				mdoc += ' ,\n'
 			}
 			i++
+		}
+	}
+
+	if cmd.examples.len > 0 {
+		mdoc += '.Pp\nExamples:\n'
+		base_indent := '  '
+		for line in cmd.examples {
+			mdoc += '${base_indent}${line}\n'
+		}
+	}
+	if cmd.learn_more != '' {
+		mdoc += '.Pp\nLearn more:\n'
+		base_indent := '  '
+		for line in cmd.learn_more.split_into_lines() {
+			mdoc += '${base_indent}${line}\n'
 		}
 	}
 

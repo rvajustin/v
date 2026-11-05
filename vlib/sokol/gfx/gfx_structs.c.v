@@ -36,6 +36,7 @@ pub type ColorTargetState = C.sg_color_target_state
 
 pub struct C.sg_pipeline_desc {
 pub mut:
+	_start_canary             u32
 	shader                    Shader
 	layout                    VertexLayoutState
 	depth                     DepthState
@@ -49,7 +50,8 @@ pub mut:
 	sample_count              int
 	blend_color               Color
 	alpha_to_coverage_enabled bool
-	label                     &char = &char(0)
+	label                     &char = &char(unsafe { nil })
+	_end_canary               u32
 }
 
 pub type PipelineDesc = C.sg_pipeline_desc
@@ -139,40 +141,41 @@ pub fn (mut b Bindings) set_frag_image(index int, img Image) {
 
 pub fn (b &Bindings) update_vert_buffer(index int, data voidptr, element_size int, element_count int) {
 	range := Range{
-		ptr: data
-		size: usize(element_size * element_count)
+		ptr:  data
+		size: uint(element_size * element_count)
 	}
 	C.sg_update_buffer(b.vertex_buffers[index], &range)
 }
 
 pub fn (b &Bindings) append_vert_buffer(index int, data voidptr, element_size int, element_count int) int {
 	range := Range{
-		ptr: data
-		size: usize(element_size * element_count)
+		ptr:  data
+		size: uint(element_size * element_count)
 	}
 	return C.sg_append_buffer(b.vertex_buffers[index], &range)
 }
 
 pub fn (b &Bindings) update_index_buffer(data voidptr, element_size int, element_count int) {
 	range := Range{
-		ptr: data
-		size: usize(element_size * element_count)
+		ptr:  data
+		size: uint(element_size * element_count)
 	}
 	C.sg_update_buffer(b.index_buffer, &range)
 }
 
 pub fn (b &Bindings) append_index_buffer(data voidptr, element_size int, element_count int) int {
 	range := Range{
-		ptr: data
-		size: usize(element_size * element_count)
+		ptr:  data
+		size: uint(element_size * element_count)
 	}
 	return C.sg_append_buffer(b.index_buffer, &range)
 }
 
 pub struct C.sg_stage_bindings {
 pub mut:
-	images   [12]Image
-	samplers [8]Sampler
+	images          [12]Image
+	samplers        [8]Sampler
+	storage_buffers [8]Buffer
 }
 
 pub type StageBindings = C.sg_stage_bindings
@@ -180,10 +183,12 @@ pub type StageBindings = C.sg_stage_bindings
 @[heap]
 pub struct C.sg_shader_desc {
 pub mut:
-	attrs [16]ShaderAttrDesc
-	vs    ShaderStageDesc
-	fs    ShaderStageDesc
-	label &char
+	_start_canary u32
+	attrs         [16]ShaderAttrDesc
+	vs            ShaderStageDesc
+	fs            ShaderStageDesc
+	label         &char
+	_end_canary   u32
 }
 
 pub type ShaderDesc = C.sg_shader_desc
@@ -210,25 +215,31 @@ pub fn (mut desc C.sg_shader_desc) set_frag_image(index int, name string) &Shade
 	return desc
 }
 
-pub fn (mut desc C.sg_shader_desc) set_vert_uniform_block_size(block_index int, size usize) &ShaderDesc {
+// set_vert_uniform_block_size sets the byte size of a vertex uniform block.
+pub fn (mut desc C.sg_shader_desc) set_vert_uniform_block_size(block_index int, size uint) &ShaderDesc {
 	desc.vs.uniform_blocks[block_index].size = size
 	return desc
 }
 
-pub fn (mut desc C.sg_shader_desc) set_frag_uniform_block_size(block_index int, size usize) &ShaderDesc {
+// set_frag_uniform_block_size sets the byte size of a fragment uniform block.
+pub fn (mut desc C.sg_shader_desc) set_frag_uniform_block_size(block_index int, size uint) &ShaderDesc {
 	desc.fs.uniform_blocks[block_index].size = size
 	return desc
 }
 
-pub fn (mut desc C.sg_shader_desc) set_vert_uniform(block_index int, uniform_index int, name string, @type UniformType, array_count int) &ShaderDesc {
+pub fn (mut desc C.sg_shader_desc) set_vert_uniform(block_index int, uniform_index int, name string, typ UniformType,
+	array_count int) &ShaderDesc {
 	desc.vs.uniform_blocks[block_index].uniforms[uniform_index].name = &char(name.str)
-	desc.vs.uniform_blocks[block_index].uniforms[uniform_index].@type = @type
+	desc.vs.uniform_blocks[block_index].uniforms[uniform_index].type = typ
+	desc.vs.uniform_blocks[block_index].uniforms[uniform_index].array_count = array_count
 	return desc
 }
 
-pub fn (mut desc C.sg_shader_desc) set_frag_uniform(block_index int, uniform_index int, name string, @type UniformType, array_count int) &ShaderDesc {
+pub fn (mut desc C.sg_shader_desc) set_frag_uniform(block_index int, uniform_index int, name string, typ UniformType,
+	array_count int) &ShaderDesc {
 	desc.fs.uniform_blocks[block_index].uniforms[uniform_index].name = &char(name.str)
-	desc.fs.uniform_blocks[block_index].uniforms[uniform_index].@type = @type
+	desc.fs.uniform_blocks[block_index].uniforms[uniform_index].type = typ
+	desc.fs.uniform_blocks[block_index].uniforms[uniform_index].array_count = array_count
 	return desc
 }
 
@@ -252,6 +263,7 @@ pub mut:
 	entry               &char
 	d3d11_target        &char
 	uniform_blocks      [4]ShaderUniformBlockDesc
+	storage_buffers     [8]ShaderStorageBufferDesc
 	images              [12]ShaderImageDesc
 	samplers            [8]ShaderSamplerDesc
 	image_sampler_pairs [12]ShaderImageSamplerPairDesc
@@ -267,7 +279,7 @@ pub fn (mut desc ShaderStageDesc) set_image(index int, name string) ShaderStageD
 
 pub struct C.sg_shader_uniform_block_desc {
 pub mut:
-	size     usize
+	size     uint
 	layout   UniformLayout
 	uniforms [16]ShaderUniformDesc
 }
@@ -277,7 +289,7 @@ pub type ShaderUniformBlockDesc = C.sg_shader_uniform_block_desc
 pub struct C.sg_shader_uniform_desc {
 pub mut:
 	name        &char
-	@type       UniformType
+	type        UniformType
 	array_count int
 }
 
@@ -293,6 +305,14 @@ pub mut:
 }
 
 pub type ShaderImageDesc = C.sg_shader_image_desc
+
+pub struct C.sg_shader_storage_buffer_desc {
+pub mut:
+	used     bool
+	readonly bool
+}
+
+pub type ShaderStorageBufferDesc = C.sg_shader_storage_buffer_desc
 
 pub struct C.sg_shader_sampler_desc {
 pub mut:
@@ -322,7 +342,7 @@ pub type ShaderInfo = C.sg_shader_info
 pub struct C.sg_range {
 pub mut:
 	ptr  voidptr
-	size usize
+	size uint
 }
 
 pub type Range = C.sg_range
@@ -459,6 +479,7 @@ pub struct C.sg_frame_stats_metal_bindings {
 	num_set_vertex_buffer          u32
 	num_set_vertex_texture         u32
 	num_set_vertex_sampler_state   u32
+	num_set_fragment_buffer        u32
 	num_set_fragment_texture       u32
 	num_set_fragment_sampler_state u32
 }
@@ -520,7 +541,7 @@ pub type FrameStatsWGPU = C.sg_frame_stats_wgpu
 @[typedef]
 pub struct C.sg_frame_stats {
 	frame_index u32 // current frame counter, starts at 0
-	//
+
 	num_passes             u32
 	num_apply_viewport     u32
 	num_apply_scissor_rect u32
@@ -531,12 +552,12 @@ pub struct C.sg_frame_stats {
 	num_update_buffer      u32
 	num_append_buffer      u32
 	num_update_image       u32
-	//
+
 	size_apply_uniforms u32
 	size_update_buffer  u32
 	size_append_buffer  u32
 	size_update_image   u32
-	//
+
 	gl    FrameStatsGL
 	d3d11 FrameStatsD3D11
 	metal FrameStatsMetal
@@ -623,24 +644,26 @@ pub type Pass = C.sg_pass
 
 pub struct C.sg_buffer_desc {
 pub mut:
-	size  usize
-	@type BufferType
-	usage Usage
-	data  Range
-	label &char
+	_start_canary u32
+	size          uint
+	type          BufferType
+	usage         Usage
+	data          Range
+	label         &char
 	// backend-specific resources
 	gl_buffers   [2]u32
 	mtl_buffers  [2]voidptr
 	d3d11_buffer voidptr
 	wgpu_buffer  voidptr
+	_end_canary  u32
 }
 
 pub type BufferDesc = C.sg_buffer_desc
 
 pub struct C.sg_slot_info {
+pub:
 	state  ResourceState
 	res_id u32
-	ctx_id u32
 }
 
 pub type SlotInfo = C.sg_slot_info
@@ -670,7 +693,8 @@ pub fn (mut b Buffer) free() {
 
 pub struct C.sg_image_desc {
 pub mut:
-	@type         ImageType
+	_start_canary u32
+	type          ImageType
 	render_target bool
 	width         int
 	height        int
@@ -697,11 +721,15 @@ pub mut:
 	d3d11_texture              voidptr
 	d3d11_shader_resource_view voidptr
 	wgpu_texture               voidptr
+	wgpu_texture_view          voidptr
+	_end_canary                u32
 }
 
 pub type ImageDesc = C.sg_image_desc
 
 pub struct C.sg_sampler_desc {
+pub mut:
+	_start_canary  u32
 	min_filter     Filter
 	mag_filter     Filter
 	mipmap_filter  Filter
@@ -719,6 +747,7 @@ pub struct C.sg_sampler_desc {
 	mtl_sampler   voidptr
 	d3d11_sampler voidptr
 	wgpu_sampler  voidptr
+	_end_canary   u32
 }
 
 pub type SamplerDesc = C.sg_sampler_desc
@@ -768,11 +797,7 @@ pub:
 	image_clamp_to_border       bool // border color and clamp-to-border UV-wrap mode is supported
 	mrt_independent_blend_state bool // multiple-render-target rendering can use per-render-target blend state
 	mrt_independent_write_mask  bool // multiple-render-target rendering can use per-render-target color write masks
-	//	instancing                  bool // hardware instancing supported
-	//	multiple_render_targets     bool // offscreen render passes can have multiple render targets attached
-	//	msaa_render_targets         bool // offscreen render passes support MSAA antialiasing
-	//	imagetype_3d                bool // creation of SG_IMAGETYPE_3D images is supported
-	//	imagetype_array             bool // creation of SG_IMAGETYPE_ARRAY images is supported
+	storage_buffer              bool // storage buffers are supported
 }
 
 pub type Features = C.sg_features
@@ -898,12 +923,14 @@ pub type StencilAttachmentAction = C.sg_stencil_attachment_action
 
 pub struct C.sg_pixelformat_info {
 pub:
-	sample bool // pixel format can be sampled in shaders
-	filter bool // pixel format can be sampled with filtering
-	render bool // pixel format can be used as render target
-	blend  bool // alpha-blending is supported
-	msaa   bool // pixel format can be used as MSAA render target
-	depth  bool // pixel format is a depth format
+	sample          bool // pixel format can be sampled in shaders
+	filter          bool // pixel format can be sampled with filtering
+	render          bool // pixel format can be used as render target
+	blend           bool // alpha-blending is supported
+	msaa            bool // pixel format can be used as MSAA render target
+	depth           bool // pixel format is a depth format
+	compressed      bool // true if this is a hardware-compressed format
+	bytes_per_pixel i32
 }
 
 pub type PixelFormatInfo = C.sg_pixelformat_info
@@ -969,4 +996,9 @@ pub type CommitListener = C.sg_commit_listener
 pub struct C.sg_trace_hooks {}
 
 // pub struct C.sg_resource_state {} enum
-pub struct C.sg_sampler_info {}
+pub struct C.sg_sampler_info {
+pub:
+	slot SlotInfo
+}
+
+pub type SamplerInfo = C.sg_sampler_info

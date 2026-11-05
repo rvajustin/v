@@ -79,21 +79,34 @@ fn is_data_frame(opcode OPCode) bool {
 	return opcode in [.text_frame, .binary_frame]
 }
 
+// read_exact fills a frame field without consuming bytes from the next field.
+// TCP/TLS reads may return fewer bytes than requested; EOF and timeout errors
+// propagate instead of returning a partially initialized frame or payload.
+fn (mut ws Client) read_exact(buffer &u8, length int) ! {
+	mut offset := 0
+	for offset < length {
+		// Callers supply length writable bytes; offset stays within that region.
+		read_bytes := ws.socket_read_ptr(unsafe { buffer + offset }, length - offset)!
+		if read_bytes <= 0 {
+			return error('websocket peer closed connection during frame')
+		}
+		offset += read_bytes
+	}
+}
+
 // read_payload reads the message payload from the socket
 fn (mut ws Client) read_payload(frame &Frame) ![]u8 {
 	if frame.payload_len == 0 {
 		return []u8{}
 	}
-	mut buffer := []u8{cap: frame.payload_len}
-	mut read_buf := [1]u8{}
+	mut buffer := []u8{len: frame.payload_len}
 	mut bytes_read := 0
 	for bytes_read < frame.payload_len {
-		len := ws.socket_read_ptr(&read_buf[0], 1)!
-		if len != 1 {
+		n := ws.socket_read_ptr(unsafe { &buffer[bytes_read] }, frame.payload_len - bytes_read)!
+		if n <= 0 {
 			return error('expected read all message, got zero')
 		}
-		bytes_read += len
-		buffer << read_buf[0]
+		bytes_read += n
 	}
 	if bytes_read != frame.payload_len {
 		return error('failed to read payload')
@@ -127,37 +140,38 @@ pub fn (mut ws Client) read_next_message() !Message {
 			// Control frames can interject other frames
 			// and need to be returned immediately
 			msg := Message{
-				opcode: OPCode(frame.opcode)
-				payload: frame_payload.clone()
+				opcode:  OPCode(frame.opcode)
+				payload: frame_payload
 			}
-			unsafe { frame_payload.free() }
 			return msg
 		}
 		// if the message is fragmented we just put it on fragments
 		// a fragment is allowed to have zero size payload
 		if !frame.fin {
 			ws.fragments << &Fragment{
-				data: frame_payload.clone()
+				data:   frame_payload
 				opcode: frame.opcode
 			}
-			unsafe { frame_payload.free() }
 			continue
 		}
 		if ws.fragments.len == 0 {
 			ws.validate_utf_8(frame.opcode, frame_payload) or {
 				ws.logger.error('UTF8 validation error: ${err}, len of payload(${frame_payload.len})')
 				ws.send_error_event('UTF8 validation error: ${err}, len of payload(${frame_payload.len})')
+				unsafe { frame_payload.free() }
 				return err
 			}
 			msg := Message{
-				opcode: OPCode(frame.opcode)
-				payload: frame_payload.clone()
+				opcode:  OPCode(frame.opcode)
+				payload: frame_payload
 			}
-			unsafe { frame_payload.free() }
 			return msg
 		}
 		defer {
-			ws.fragments = []
+			for fragment in ws.fragments {
+				unsafe { fragment.data.free() }
+			}
+			ws.fragments.clear()
 		}
 		if is_data_frame(frame.opcode) {
 			ws.close(0, '')!
@@ -167,20 +181,19 @@ pub fn (mut ws Client) read_next_message() !Message {
 		opcode := ws.opcode_from_fragments()
 		ws.validate_utf_8(opcode, payload)!
 		msg := Message{
-			opcode: opcode
-			payload: payload.clone()
+			opcode:  opcode
+			payload: payload
 		}
 		unsafe {
 			frame_payload.free()
-			payload.free()
 		}
 		return msg
 	}
 	return error('none')
 }
 
-// payload_from_fragments returns the whole paylaod from fragmented message
-fn (ws Client) payload_from_fragments(fin_payload []u8) ![]u8 {
+// payload_from_fragments returns the whole payload from fragmented message
+fn (ws &Client) payload_from_fragments(fin_payload []u8) ![]u8 {
 	mut total_size := 0
 	for f in ws.fragments {
 		if f.data.len > 0 {
@@ -202,7 +215,7 @@ fn (ws Client) payload_from_fragments(fin_payload []u8) ![]u8 {
 }
 
 // opcode_from_fragments returns the opcode for message from the first fragment sent
-fn (ws Client) opcode_from_fragments() OPCode {
+fn (ws &Client) opcode_from_fragments() OPCode {
 	return OPCode(ws.fragments[0].opcode)
 }
 
@@ -210,19 +223,14 @@ fn (ws Client) opcode_from_fragments() OPCode {
 pub fn (mut ws Client) parse_frame_header() !Frame {
 	mut buffer := [256]u8{}
 	mut bytes_read := 0
+	mut read_until := header_len_offset
 	mut frame := Frame{}
-	mut rbuff := [1]u8{}
 	mut mask_end_byte := 0
 	for ws.get_state() == .open {
-		read_bytes := ws.socket_read_ptr(&rbuff[0], 1)!
-		if read_bytes == 0 {
-			// this is probably a timeout or close
-			continue
-		}
-		buffer[bytes_read] = rbuff[0]
-		bytes_read++
+		ws.read_exact(&buffer[bytes_read], read_until - bytes_read)!
+		bytes_read = read_until
 		// parses the first two header bytes to get basic frame information
-		if bytes_read == websocket.header_len_offset {
+		if bytes_read == header_len_offset {
 			frame.fin = (buffer[0] & 0x80) == 0x80
 			frame.rsv1 = (buffer[0] & 0x40) == 0x40
 			frame.rsv2 = (buffer[0] & 0x20) == 0x20
@@ -233,11 +241,11 @@ pub fn (mut ws Client) parse_frame_header() !Frame {
 			// if the frame has a mask, set the byte position where the mask ends
 			if frame.has_mask {
 				mask_end_byte = if frame.payload_len < 126 {
-					websocket.header_len_offset + 4
+					header_len_offset + 4
 				} else if frame.payload_len == 126 {
-					websocket.header_len_offset + 6
+					header_len_offset + 6
 				} else if frame.payload_len == 127 {
-					websocket.header_len_offset + 12
+					header_len_offset + 12
 				} else {
 					0
 				} // impossible
@@ -247,8 +255,15 @@ pub fn (mut ws Client) parse_frame_header() !Frame {
 			if !frame.has_mask && frame.payload_len < 126 {
 				break
 			}
+			read_until = if frame.payload_len == 126 {
+				extended_payload16_end_byte
+			} else if frame.payload_len == 127 {
+				extended_payload64_end_byte
+			} else {
+				mask_end_byte
+			}
 		}
-		if frame.payload_len == 126 && bytes_read == websocket.extended_payload16_end_byte {
+		if frame.payload_len == 126 && bytes_read == extended_payload16_end_byte {
 			frame.header_len += 2
 			frame.payload_len = 0
 			frame.payload_len |= int(u32(buffer[2]) << 8)
@@ -257,8 +272,9 @@ pub fn (mut ws Client) parse_frame_header() !Frame {
 			if !frame.has_mask {
 				break
 			}
+			read_until = mask_end_byte
 		}
-		if frame.payload_len == 127 && bytes_read == websocket.extended_payload64_end_byte {
+		if frame.payload_len == 127 && bytes_read == extended_payload64_end_byte {
 			frame.header_len += 8
 			// these shift operators needs 64 bit on clang with -prod flag
 			mut payload_len := u64(0)
@@ -270,10 +286,20 @@ pub fn (mut ws Client) parse_frame_header() !Frame {
 			payload_len |= u64(buffer[7]) << 16
 			payload_len |= u64(buffer[8]) << 8
 			payload_len |= u64(buffer[9])
+			// RFC 6455 requires the most significant bit of a 64-bit length
+			// to be 0; with it set, int(payload_len) goes negative below
+			if payload_len >> 63 != 0 {
+				return error('websocket: noncanonical 64-bit frame length')
+			}
+			// any remainder past the int range cannot be allocated either
+			if payload_len > u64(max_int) {
+				return error('websocket: 64-bit frame length exceeds int range')
+			}
 			frame.payload_len = int(payload_len)
 			if !frame.has_mask {
 				break
 			}
+			read_until = mask_end_byte
 		}
 		if frame.has_mask && bytes_read == mask_end_byte {
 			frame.masking_key[0] = buffer[mask_end_byte - 4]
@@ -287,7 +313,7 @@ pub fn (mut ws Client) parse_frame_header() !Frame {
 }
 
 // unmask_sequence unmask any given sequence
-fn (f Frame) unmask_sequence(mut buffer []u8) {
+fn (f &Frame) unmask_sequence(mut buffer []u8) {
 	for i in 0 .. buffer.len {
 		buffer[i] ^= f.masking_key[i % 4] & 0xff
 	}

@@ -1,9 +1,11 @@
+// vtest build: !(windows && tinyc|| msvc) // TODO
 module main
 
 #flag @VMODROOT/implementation.o
 #include "@VMODROOT/implementation.h"
 
-fn C.sizeof_char() int
+fn C.sizeof_char() i32
+fn C.cplusplus_17_feature() i32
 
 fn test_the_implementation_object_file_was_compiled_with_a_c_plus_plus_compiler() {
 	res := C.sizeof_char()
@@ -16,4 +18,8 @@ fn test_the_implementation_object_file_was_compiled_with_a_c_plus_plus_compiler(
 		eprintln('¯\\_(ツ)_/¯ ... unknown C/C++ compiler')
 	}
 	assert res == sizeof(char)
+}
+
+fn test_the_implementation_object_file_was_compiled_as_cplusplus_17() {
+	assert C.cplusplus_17_feature() == 17
 }

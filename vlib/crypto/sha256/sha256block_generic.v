@@ -76,10 +76,12 @@ const _k = [
 	0xc67178f2,
 ]
 
+@[direct_array_access]
 fn block_generic(mut dig Digest, p_ []u8) {
 	unsafe {
 		mut p := p_
-		mut w := []u32{len: (64)}
+		// Keep the message schedule on the stack.
+		mut w := [64]u32{}
 		mut h0 := dig.h[0]
 		mut h1 := dig.h[1]
 		mut h2 := dig.h[2]
@@ -113,10 +115,10 @@ fn block_generic(mut dig Digest, p_ []u8) {
 			for i in 0 .. 64 {
 				t1 := h +
 					((bits.rotate_left_32(e, -6)) ^ (bits.rotate_left_32(e, -11)) ^ (bits.rotate_left_32(e, -25))) +
-					((e & f) ^ (~e & g)) + u32(sha256._k[i]) + w[i]
+					((e & f) ^ (~e & g)) + u32(_k[i]) + w[i]
 				t2 :=
 					((bits.rotate_left_32(a, -2)) ^ (bits.rotate_left_32(a, -13)) ^ (bits.rotate_left_32(a, -22))) +
-					((a & b) ^ (a & c) ^ (b & c))
+						((a & b) ^ (a & c) ^ (b & c))
 				h = g
 				g = f
 				f = e

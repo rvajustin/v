@@ -1,5 +1,4 @@
-// vtest flaky: true
-// vtest retry: 15
+// vtest retry: 5
 
 // This test case runs concurrent 3 instances of `do_select` that
 // communicate with 6 other threads doing send and receive operations.
@@ -13,14 +12,16 @@ fn do_select(ch1 chan int, ch2 chan int, chf1 chan f64, chf2 chan f64, sumch1 ch
 	f2 := 7.0
 	for _ in 0 .. 20000 + chf1.cap / 3 {
 		select {
-			chf1 <- f1 {}
+			chf1 <- f1 {
+			}
 			i := <-ch1 {
 				sum1 += i
 			}
 			j := <-ch2 {
 				sum2 += j
 			}
-			chf2 <- f2 {}
+			chf2 <- f2 {
+			}
 		}
 	}
 	sumch1 <- sum1

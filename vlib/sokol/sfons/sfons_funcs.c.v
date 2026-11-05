@@ -14,12 +14,12 @@ pub:
 @[typedef]
 pub struct C.sfons_desc_t {
 pub:
-	width     int // initial width of font atlas texture (default: 512, must be power of 2)
-	height    int // initial height of font atlas texture (default: 512, must be power of 2)
+	width     int                 // initial width of font atlas texture (default: 512, must be power of 2)
+	height    int                 // initial height of font atlas texture (default: 512, must be power of 2)
 	allocator C.sfons_allocator_t // optional memory allocation overrides
 }
 
-fn C.sfons_create(desc &C.sfons_desc_t) &fontstash.Context
+fn C.sfons_create(const_desc &C.sfons_desc_t) &fontstash.Context
 fn C.sfons_destroy(ctx &fontstash.Context)
 fn C.sfons_flush(ctx &fontstash.Context)
 

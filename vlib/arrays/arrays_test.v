@@ -71,6 +71,17 @@ fn test_merge() {
 	assert merge[int](d, b) == b
 }
 
+fn test_merge_desc() {
+	a := [7, 5, 5, 3, 1]
+	b := [8, 6, 5, 4, 2]
+	c := []int{}
+	d := []int{}
+	assert merge_desc[int](a, b) == [8, 7, 6, 5, 5, 5, 4, 3, 2, 1]
+	assert merge_desc[int](c, d) == []
+	assert merge_desc[int](a, c) == a
+	assert merge_desc[int](d, b) == b
+}
+
 fn test_append() {
 	a := [1, 3, 5, 5, 7]
 	b := [2, 4, 4, 5, 6, 8]
@@ -145,25 +156,77 @@ fn test_chunk() {
 	z2 := chunk[string](y, 3)
 	assert z2 == [['a', 'b', 'c'], ['d', 'e', 'f']]
 	assert chunk[int]([]int{}, 2) == [][]int{}
+	// a non positive size cannot produce a chunk, like window's attributes
+	assert chunk[int](x, 0) == [][]int{}
+	assert chunk[int](x, -1) == [][]int{}
+	assert chunk[int]([]int{}, 0) == [][]int{}
+}
+
+fn test_chunk_while() {
+	assert chunk_while([0, 9, 2, 2, 3, 2, 7, 5, 9, 5], fn (x int, y int) bool {
+		return x == y
+	}) == [[0], [9], [2, 2], [3], [2], [7], [5], [9], [5]]
+
+	assert chunk_while([0, 9, 2, 2, 3, 2, 7, 5, 9, 5], fn (x int, y int) bool {
+		return x <= y
+	}) == [[0, 9], [2, 2, 3], [2, 7], [5, 9], [5]]
+
+	assert chunk_while('aaaabbbcca'.runes(), fn (x rune, y rune) bool {
+		return x == y
+	}).map({
+		it[0]: it.len
+	}).str() == '[{`a`: 4}, {`b`: 3}, {`c`: 2}, {`a`: 1}]'
 }
 
 fn test_window() {
 	x := [1, 2, 3, 4, 5, 6]
 
-	assert window[int](x, size: 3) == [[1, 2, 3], [2, 3, 4], [3, 4, 5],
-		[4, 5, 6]]
+	assert window[int](x, size: 3) == [[1, 2, 3], [2, 3, 4], [3, 4, 5], [4, 5, 6]]
 	assert window[int](x, size: 3, step: 2) == [[1, 2, 3], [3, 4, 5]]
 	assert window[int]([]int{}, size: 2) == [][]int{}
+	assert window([1, 2, 3], size: 2, step: 0) == [][]int{}
+	assert window([1, 2, 3], size: 2, step: -1) == [][]int{}
+	assert window([1, 2, 3], size: 0) == [][]int{}
+	assert window([1, 2, 3], size: 4) == [][]int{}
+}
+
+/////////////////////////////
+type MyAlias = i64
+
+fn (a MyAlias) + (b MyAlias) MyAlias {
+	return MyAlias(i64(a) * 10 + i64(b) * 10)
+}
+
+struct MyStruct {
+	x int = 5
+}
+
+fn (a MyStruct) + (b MyStruct) MyStruct {
+	return MyStruct{
+		x: a.x + b.x
+	}
 }
 
 fn test_sum() {
-	x := [1, 2, 3, 4, 5]
-
-	assert sum[int](x) or { 0 } == 15
-	assert sum[f64]([1.0, 2.5, 3.5, 4.0]) or { 0 } == 11.0
-	assert sum[int]([]int{}) or { 0 } == 0
+	assert sum([1, 2, 3, 4, 5]) or { 0 } == 15
+	assert sum([1.0, 2.5, 3.5, 4.0]) or { 0.0 } == 11.0
+	assert sum([]int{}) or { 0 } == 0
+	// test summing of a struct, with an overloaded + operator:
+	s := [MyStruct{
+		x: 30
+	}, MyStruct{
+		x: 20
+	}, MyStruct{
+		x: 10
+	}]
+	assert sum(s)! == MyStruct{
+		x: 60
+	}
+	// test summing of a number type alias with an overloaded + operator:
+	assert sum([MyAlias(5), MyAlias(7), MyAlias(3)])! == MyAlias((5 * 10 + 7 * 10) * 10 + 3 * 10)
 }
 
+/////////////////////////////
 fn test_reduce() {
 	x := [1, 2, 3, 4, 5]
 
@@ -253,7 +316,12 @@ fn test_concat_string() {
 fn test_binary_search() {
 	a := [1, 3, 3, 4, 5, 6, 7, 8, 10]
 	assert binary_search(a, 3)! == 1
-	assert (binary_search(a, 0) or { -1 }) == -1
+	if _ := binary_search(a, 0) {
+		assert false, '0 is not in the array, binary_search should have failed'
+	} else {
+		// the message must not be empty, so `or { panic(err.msg()) }` is useful
+		assert err.msg() == '.binary_search: target 0 not found'
+	}
 }
 
 fn test_lower_bound() {
@@ -261,8 +329,17 @@ fn test_lower_bound() {
 	b := []int{}
 	c := [1, 2, 3]
 	assert lower_bound(a, 2)! == 3
-	assert (lower_bound(b, 4) or { -1 }) == -1
 	assert lower_bound(c, 3)! == 3
+	if _ := lower_bound(b, 4) {
+		assert false, 'lower_bound on an empty array should have failed'
+	} else {
+		assert err.msg() == '.lower_bound called on an empty array'
+	}
+	if _ := lower_bound(c, 4) {
+		assert false, 'no element is >= 4 in [1, 2, 3], lower_bound should have failed'
+	} else {
+		assert err.msg() == '.lower_bound: no element >= 4'
+	}
 }
 
 fn test_upper_bound() {
@@ -270,7 +347,16 @@ fn test_upper_bound() {
 	b := []int{}
 	c := [1, 2, 3]
 	assert upper_bound(a, 9)! == 8
-	assert (upper_bound(b, 4) or { -1 }) == -1
+	if _ := upper_bound(b, 4) {
+		assert false, 'upper_bound on an empty array should have failed'
+	} else {
+		assert err.msg() == '.upper_bound called on an empty array'
+	}
+	if _ := upper_bound(c, 0) {
+		assert false, 'no element is <= 0 in [1, 2, 3], upper_bound should have failed'
+	} else {
+		assert err.msg() == '.upper_bound: no element <= 0'
+	}
 	assert upper_bound(c, 2)! == 2
 }
 
@@ -278,6 +364,24 @@ fn test_rotate_right() {
 	mut x := [1, 2, 3, 4, 5, 6]
 	rotate_right(mut x, 2)
 	assert x == [5, 6, 1, 2, 3, 4]
+}
+
+fn test_rotate_right_long() {
+	mut x := []u64{len: 128, init: 255}
+	x[0] = 0
+	x[1] = 0
+	x[2] = 0
+	rotate_right(mut x, 64)
+	assert x.len == 128
+	idx := index_of_first(x, fn (idx int, x u64) bool {
+		return x == 0
+	})
+	assert idx == 64
+	assert x[idx - 1] == 255
+	assert x[idx] == 0
+	assert x[idx + 1] == 0
+	assert x[idx + 2] == 0
+	assert x[idx + 3] == 255
 }
 
 fn test_rotate_left() {
@@ -293,19 +397,15 @@ struct Abc {
 }
 
 fn test_rotate_right_struct() {
-	mut x := [Abc{1, 0, 1}, Abc{2, 0, 1}, Abc{3, 0, 1}, Abc{4, 0, 1},
-		Abc{5, 0, 1}, Abc{6, 0, 1}]
+	mut x := [Abc{1, 0, 1}, Abc{2, 0, 1}, Abc{3, 0, 1}, Abc{4, 0, 1}, Abc{5, 0, 1}, Abc{6, 0, 1}]
 	rotate_right(mut x, 2)
-	assert x == [Abc{5, 0, 1}, Abc{6, 0, 1}, Abc{1, 0, 1}, Abc{2, 0, 1},
-		Abc{3, 0, 1}, Abc{4, 0, 1}]
+	assert x == [Abc{5, 0, 1}, Abc{6, 0, 1}, Abc{1, 0, 1}, Abc{2, 0, 1}, Abc{3, 0, 1}, Abc{4, 0, 1}]
 }
 
 fn test_rotate_left_struct() {
-	mut x := [Abc{1, 0, 1}, Abc{2, 0, 1}, Abc{3, 0, 1}, Abc{4, 0, 1},
-		Abc{5, 0, 1}, Abc{6, 0, 1}]
+	mut x := [Abc{1, 0, 1}, Abc{2, 0, 1}, Abc{3, 0, 1}, Abc{4, 0, 1}, Abc{5, 0, 1}, Abc{6, 0, 1}]
 	rotate_left(mut x, 2)
-	assert x == [Abc{3, 0, 1}, Abc{4, 0, 1}, Abc{5, 0, 1}, Abc{6, 0, 1},
-		Abc{1, 0, 1}, Abc{2, 0, 1}]
+	assert x == [Abc{3, 0, 1}, Abc{4, 0, 1}, Abc{5, 0, 1}, Abc{6, 0, 1}, Abc{1, 0, 1}, Abc{2, 0, 1}]
 }
 
 fn test_rotate_right_string() {
@@ -337,6 +437,16 @@ fn test_copy() {
 	assert b == [8, 9, 3, 7]
 }
 
+fn test_copy_overlapping_managed_elements() {
+	mut right := ['a', 'b', 'c', 'd']
+	assert copy(mut right[1..], right[..3]) == 3
+	assert right == ['a', 'a', 'b', 'c']
+
+	mut left := ['a', 'b', 'c', 'd']
+	assert copy(mut left[..3], left[1..]) == 3
+	assert left == ['b', 'c', 'd', 'd']
+}
+
 fn test_can_copy_bits() {
 	assert can_copy_bits[u8]()
 	assert can_copy_bits[int]()
@@ -365,7 +475,7 @@ fn test_array_append_empty_struct() {
 
 	// test fixed array
 	array := [XYZ{}]!
-	assert (XYZ{} in names) == true
+	assert (XYZ{} in array) == true
 }
 
 fn test_index_of_first() {
@@ -391,7 +501,7 @@ fn test_map_of_indexes() {
 	assert arrays.map_of_indexes([1, 2, 3, 999]) == {1: [0], 2: [1], 3: [2], 999: [3]}
 	assert arrays.map_of_indexes([999, 1, 2, 3]) == {1: [1], 2: [2], 3: [3], 999: [0]}
 	assert arrays.map_of_indexes([1, 2, 3, 4, 4, 2, 1, 4, 4, 999]) == {1: [0, 6], 2: [1, 5], 3: [2], 4: [3, 4, 7, 8], 999: [9]}
-	//
+
 	assert arrays.map_of_indexes([]string{}) == {}
 	assert arrays.map_of_indexes(['abc']) == {'abc': [0]}
 	assert arrays.map_of_indexes(['abc', 'abc']) == {'abc': [0, 1]}
@@ -406,7 +516,7 @@ fn test_map_of_counts() {
 	assert map_of_counts([1, 2, 3, 999]) == {1: 1, 2: 1, 3: 1, 999: 1}
 	assert map_of_counts([999, 1, 2, 3]) == {1: 1, 2: 1, 3: 1, 999: 1}
 	assert map_of_counts([1, 2, 3, 4, 4, 2, 1, 4, 4, 999]) == {1: 2, 2: 2, 3: 1, 4: 4, 999: 1}
-	//
+
 	assert map_of_counts([]string{}) == {}
 	assert map_of_counts(['abc']) == {'abc': 1}
 	assert map_of_counts(['abc', 'abc']) == {'abc': 2}
@@ -419,8 +529,7 @@ struct FindTest {
 	age  int
 }
 
-const test_structs = [FindTest{'one', 1}, FindTest{'two', 2},
-	FindTest{'three', 3}, FindTest{'one', 4}]
+const test_structs = [FindTest{'one', 1}, FindTest{'two', 2}, FindTest{'three', 3}, FindTest{'one', 4}]
 
 fn test_find_first() {
 	// element in array
@@ -430,13 +539,13 @@ fn test_find_first() {
 	})? == 3, 'find element couldnt find the right element'
 
 	// find struct
-	find_by_name := find_first(arrays.test_structs, fn (arr FindTest) bool {
+	find_by_name := find_first(test_structs, fn (arr FindTest) bool {
 		return arr.name == 'one'
 	})?
 	assert find_by_name == FindTest{'one', 1}
 
 	// not found
-	if _ := find_first(arrays.test_structs, fn (arr FindTest) bool {
+	if _ := find_first(test_structs, fn (arr FindTest) bool {
 		return arr.name == 'nothing'
 	})
 	{
@@ -454,13 +563,13 @@ fn test_find_last() {
 	})? == 3, 'find element couldnt find the right element'
 
 	// find struct
-	find_by_name := find_last(arrays.test_structs, fn (arr FindTest) bool {
+	find_by_name := find_last(test_structs, fn (arr FindTest) bool {
 		return arr.name == 'one'
 	})?
 	assert find_by_name == FindTest{'one', 4}
 
 	// not found
-	if _ := find_last(arrays.test_structs, fn (arr FindTest) bool {
+	if _ := find_last(test_structs, fn (arr FindTest) bool {
 		return arr.name == 'nothing'
 	})
 	{
@@ -471,10 +580,10 @@ fn test_find_last() {
 }
 
 fn test_join_to_string() {
-	assert join_to_string[FindTest](arrays.test_structs, ':', fn (it FindTest) string {
+	assert join_to_string[FindTest](test_structs, ':', fn (it FindTest) string {
 		return it.name
 	}) == 'one:two:three:one'
-	assert join_to_string[FindTest](arrays.test_structs, '', fn (it FindTest) string {
+	assert join_to_string[FindTest](test_structs, '', fn (it FindTest) string {
 		return it.name
 	}) == 'onetwothreeone'
 	assert join_to_string[int]([]int{}, ':', fn (it int) string {
@@ -505,7 +614,7 @@ fn test_each() {
 	for x in a {
 		control_sum += x
 	}
-	//
+
 	each(a, fn (x int) {
 		println(x)
 	})
@@ -528,7 +637,7 @@ fn test_each_indexed() {
 	for idx, x in a {
 		control_sum += f(idx, x)
 	}
-	//
+
 	each_indexed(a, fn (idx int, x int) {
 		println('idx: ${idx}, x: ${x}')
 	})
